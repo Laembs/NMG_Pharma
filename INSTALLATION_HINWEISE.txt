@@ -1,0 +1,9 @@
+NMG Analyse 2.4.0 - Installationsroutine
+
+1. ZIP entpacken.
+2. setup_dev.bat ausführen.
+3. build_exe.bat ausführen.
+4. Die erzeugte EXE liegt unter dist\NMG_Analyse\NMG_Analyse.exe.
+
+Hinweis:
+Diese Version liefert eine Build-Routine. Eine echte Setup.exe mit Desktop-Verknüpfung kann danach mit Inno Setup oder NSIS erstellt werden.

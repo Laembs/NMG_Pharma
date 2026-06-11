@@ -1,0 +1,51 @@
+# === SENSIBLE DATEN — niemals committen ===
+data/
+ausgaben/
+backups/
+*.xlsx
+*.xlsm
+*.csv
+*.sqlite
+*.sqlite-journal
+*.db
+*.zip
+
+# === Lokale Claude-Code-State-Files ===
+.claude/
+
+# === Stray empty file ===
+/python
+
+# === Alter Backup-Code-Ordner ===
+app -vor Schulbankpatch/
+
+# === Build-Artefakte ===
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+dist_setup/
+*.spec
+*.exe
+
+# === Update-Pakete (Binär-Blobs) ===
+updates_alt/
+*.nmgupdate
+
+# === Virtualenv ===
+.venv/
+venv/
+env/
+
+# === IDE / OS ===
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# === Geheimnisse ===
+.env
+.env.local
+.env.*.local

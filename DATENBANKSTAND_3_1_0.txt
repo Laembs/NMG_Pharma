@@ -1,0 +1,9 @@
+tbl_pzn_basisdaten: 68340
+tbl_nmg_stamm: 101
+tbl_hersteller_lern: 68322
+tbl_austauschartikel: 177
+tbl_lieferfaehigkeit: 50
+tbl_lernhistorie: 261
+tbl_auswertungen: 10
+tbl_auswertungspositionen: 2770
+tbl_referenz_h_o: 720

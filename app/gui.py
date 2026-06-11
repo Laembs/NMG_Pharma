@@ -1,0 +1,7990 @@
+import os
+import re
+import getpass
+import shutil
+import sys
+import sqlite3
+import threading
+import tkinter as tk
+from tkinter import filedialog, messagebox, simpledialog, ttk
+from pathlib import Path
+from datetime import datetime
+from copy import copy as copy_cell_style
+from openpyxl import load_workbook, Workbook
+from openpyxl.utils import get_column_letter
+
+from .db import init_db
+from .importer import import_excel
+from .learning_db import import_learning_list, import_checked_auswertung
+from .manual_analysis_import import import_manual_analysis_files
+from .exporter import create_linden_export, UnknownInputFormatError
+from .market import export_marktanalyse_nicht_nmg, export_marktanalyse_produktchancen, datenbankstatus
+from .compare import export_abweichungsanalyse
+from .historical_import import import_historical_market_folder, import_historical_market_file
+from .austausch_db import import_austausch_excel, count_austauschdatenbank, add_austausch_entry
+from .artikel_db import import_artikelstamm_excel, count_artikelstamm
+from .file_loader import SUPPORTED_DATA_FILETYPES
+from .db_overview import get_database_overview, format_size
+from .update_manager import (
+    validate_update_package, install_update_package, open_updates_folder, write_version_file,
+    list_rollback_snapshots, restore_rollback_snapshot, find_newest_update,
+    find_update_packages, restart_application
+)
+from .roadmap_db import (
+    ensure_roadmap_table,
+    seed_default_roadmap_items,
+    add_roadmap_item,
+    list_roadmap_items,
+    update_roadmap_status,
+)
+from .migrations import run_migrations
+from .config import DB_PATH, DATA_DIR, ASSETS_DIR, SAVED_ANALYSES_DIR, UPDATE_DIR, OUTPUT_DIR
+from .backup import backup_erstellen, backup_wiederherstellen, backup_pruefen, versionsinfo, APP_VERSION, backup_auto_taeglich, DB_SCHEMA_VERSION
+from .protocol_manager import (
+    ensure_protocol_dirs, log_event, log_exception, list_protocol_files, read_protocol_file,
+    delete_protocol_file, create_support_package, open_mail_with_attachment, PROTOCOL_ROOT, DEFAULT_RECIPIENT
+)
+
+
+ADMIN_DB_PASSWORD = "Marc&Tino20"
+ADMIN_CLEAR_TABLES = [
+    ("tbl_austauschdatenbank", "Austauschdatenbank"),
+    ("tbl_lernvorschlaege", "Schulbank / Lernvorschläge"),
+    ("schulbank_mapping", "Schulbank-Mapping"),
+    ("tbl_nmg_stamm", "NMG Stammdaten"),
+    ("nmg_rabatte", "PK Rabatte"),
+    ("tbl_pzn_basisdaten", "Artikelstamm / PZN-Basis"),
+    ("tbl_auswertungen", "Gespeicherte Auswertungen"),
+    ("tbl_auswertungspositionen", "Auswertungspositionen"),
+    ("tbl_kunden_center", "Kunden-Center"),
+    ("tbl_todo_center", "ToDo-Center"),
+    ("tbl_mitarbeiter", "Mitarbeiter"),
+    ("tbl_mitarbeiterprofil", "Mitarbeiterprofile"),
+    ("tbl_import_log", "Import-Protokoll"),
+    ("tbl_rohdaten_mapping", "Rohdaten-Mapping"),
+]
+
+
+def _safe_name(name: str) -> str:
+    name = re.sub(r"[\\/:*?\"<>|]+", "_", name.strip())
+    name = re.sub(r"\s+", " ", name).strip()
+    return name or "Analyse"
+
+
+def _open_folder(path: Path):
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            os.system(f'open "{path}"')
+        else:
+            os.system(f'xdg-open "{path}"')
+    except Exception:
+        messagebox.showinfo("Ordner", f"Ordner:\n{path}")
+
+
+def _open_file(path: Path):
+    path = Path(path)
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            os.system(f'open "{path}"')
+        else:
+            os.system(f'xdg-open "{path}"')
+    except Exception:
+        messagebox.showinfo("Datei", f"Datei:\n{path}")
+
+
+def _show_output_actions(title: str, path):
+    path = Path(path)
+    text = f"{title} wurde erstellt:\n{path}\n\nDatei jetzt öffnen?"
+    if messagebox.askyesno(title, text):
+        _open_file(path)
+    elif messagebox.askyesno(title, "Stattdessen den Ordner öffnen?"):
+        _open_folder(path.parent)
+
+
+def datetime_from_mtime(path: Path) -> str:
+    try:
+        from datetime import datetime
+        return datetime.fromtimestamp(path.stat().st_mtime).strftime("%d.%m.%Y %H:%M:%S")
+    except Exception:
+        return ""
+
+
+class NMGApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title(f"NMG Analyse {APP_VERSION}")
+        self.geometry("1040x640")
+        self.minsize(980, 600)
+        try:
+            self.state("zoomed")
+        except Exception:
+            try:
+                self.attributes("-zoomed", True)
+            except Exception:
+                pass
+        self.input_file = tk.StringVar()
+        self.apotheke = tk.StringVar()
+        self.status = tk.StringVar(value="Bereit.")
+        self.bearbeiter = getpass.getuser()
+        try:
+            ensure_protocol_dirs()
+            log_event("programm", "Programmstart", f"Version: {APP_VERSION} | Datenbank: {DB_PATH}", user=self.bearbeiter)
+        except Exception:
+            pass
+        init_db(DB_PATH)
+        try:
+            run_migrations(DB_PATH)
+            write_version_file()
+        except Exception:
+            pass
+
+        try:
+            ensure_roadmap_table()
+            seed_default_roadmap_items()
+        except Exception:
+            pass
+        SAVED_ANALYSES_DIR.mkdir(parents=True, exist_ok=True)
+        UPDATE_DIR.mkdir(parents=True, exist_ok=True)
+        self.auto_backup_result = backup_auto_taeglich(7)
+        self.pending_update = None
+        try:
+            self.pending_update = find_newest_update()
+        except Exception:
+            self.pending_update = None
+        self._build()
+        self._roadmap_mark_v11_erledigt()
+        self._roadmap_mark_status_ui_v15_erledigt()
+        self._check_mitarbeiterprofil_pflicht()
+        self._check_daten_benachrichtigungen()
+        self.after(1000, self._check_apotheken_analyse_faellig)
+
+    def _build(self):
+        self.configure(bg="#f5f7fb")
+        self.columnconfigure(1, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        # Linke Navigation
+        left = tk.Frame(self, bg="#ffffff", width=285)
+        left.grid(row=0, column=0, sticky="ns")
+        left.grid_propagate(False)
+        left.rowconfigure(1, weight=1)
+
+        logo_path = ASSETS_DIR / "nmg_logo.png"
+        logo_box = tk.Frame(left, bg="#ffffff", width=285, height=92)
+        logo_box.grid(row=0, column=0, sticky="ew", padx=8, pady=(12, 8))
+        logo_box.grid_propagate(False)
+        if logo_path.exists():
+            try:
+                raw_logo = tk.PhotoImage(file=str(logo_path))
+                # Logo proportional verkleinern, damit es nicht abgeschnitten wird.
+                factor = max(1, int(max(raw_logo.width() / 245, raw_logo.height() / 72) + 0.999))
+                self.logo_img = raw_logo.subsample(factor, factor)
+                tk.Label(logo_box, image=self.logo_img, bg="#ffffff").pack(expand=True)
+            except Exception:
+                tk.Label(logo_box, text="NMG PHARMA", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#ffffff").pack(expand=True)
+        else:
+            tk.Label(logo_box, text="NMG PHARMA", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#ffffff").pack(expand=True)
+
+        nav_frame = tk.Frame(left, bg="#ffffff")
+        nav_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        nav_frame.rowconfigure(0, weight=1)
+        nav_frame.columnconfigure(0, weight=1)
+
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        style.configure(
+            "NMG.Treeview",
+            background="#ffffff",
+            fieldbackground="#ffffff",
+            foreground="#123",
+            borderwidth=0,
+            rowheight=30,
+            font=("Arial", 10),
+        )
+        style.configure("NMG.Treeview.Heading", font=("Arial", 10, "bold"))
+        style.map("NMG.Treeview", background=[("selected", "#e8f1fb")], foreground=[("selected", "#0b4a86")])
+
+        self.nav_tree = ttk.Treeview(
+            nav_frame,
+            show="tree",
+            selectmode="browse",
+            style="NMG.Treeview",
+        )
+        self.nav_tree.grid(row=0, column=0, sticky="nsew")
+        self._build_nav_tree()
+        self.nav_tree.bind("<<TreeviewSelect>>", self._on_nav_select)
+
+        tk.Label(
+            left,
+            text=f"Datenbank:\n{DB_PATH.name}",
+            justify="left",
+            bg="#ffffff",
+            fg="#666",
+            font=("Arial", 9)
+        ).grid(row=2, column=0, sticky="w", padx=18, pady=18)
+
+        # Hauptbereich
+        main = tk.Frame(self, bg="#f5f7fb")
+        main.grid(row=0, column=1, sticky="nsew")
+        main.columnconfigure(0, weight=1)
+        main.columnconfigure(1, weight=0)
+        main.rowconfigure(1, weight=1)
+
+        # Oberer Programmkopf entfernt: Startseite soll direkt mit dem Arbeitsbereich beginnen.
+        header = tk.Frame(main, bg="#f5f7fb")
+        header.grid(row=0, column=0, columnspan=2, sticky="ew", padx=0, pady=0)
+
+        self.page = tk.Frame(main, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        self.page.grid(row=1, column=0, sticky="nsew", padx=(22, 12), pady=10)
+        self.page.columnconfigure(0, weight=1)
+        self.page.rowconfigure(0, weight=0)
+        self.page.rowconfigure(1, weight=1)
+
+        self._main_frame = main
+
+        self._right_panel = tk.Frame(main, bg="#f5f7fb", width=280)
+        self._right_panel_visible = self._get_meta_value("sidebar_visible", "1") != "0"
+        if self._right_panel_visible:
+            self._right_panel.grid(row=1, column=1, sticky="ns", padx=(0, 22), pady=10)
+            self._status_card(self._right_panel)
+
+        footer = tk.Frame(main, bg="#f5f7fb")
+        footer.grid(row=2, column=0, columnspan=2, sticky="ew", padx=22, pady=(0, 10))
+        tk.Label(footer, textvariable=self.status, bg="#f5f7fb", fg="#0a7d2c", anchor="w", justify="left").pack(side="left", fill="x", expand=True)
+        self._sidebar_btn_text = tk.StringVar(value=("◀ Info ausblenden" if self._right_panel_visible else "▶ Info einblenden"))
+        tk.Button(
+            footer,
+            textvariable=self._sidebar_btn_text,
+            command=self._toggle_sidebar,
+            bg="#d8e2ee",
+            fg="#0b4a86",
+            relief="flat",
+            font=("Arial", 9, "bold"),
+            padx=10,
+            pady=3,
+        ).pack(side="right", padx=(0, 4))
+
+        if self.pending_update:
+            self.status.set(f"Update verfügbar: Version {self.pending_update.get('target_version')} ({self.pending_update.get('name')}). Links auf 'Update installieren' klicken.")
+
+        self.nav_tree.selection_set("startseite")
+        self.nav_tree.focus("startseite")
+        self.show_startseite()
+
+    def _make_window(self, title, geometry="800x600", minsize=None, maximized=False, parent=None):
+        """Erstellt ein Toplevel-Fenster mit Windows-Stil (Minimieren/Maximieren/Schließen)."""
+        win = tk.Toplevel(parent or self)
+        win.resizable(True, True)
+        win.title(title)
+        win.geometry(geometry)
+        if minsize:
+            win.minsize(*minsize)
+        win.configure(bg="#f5f7fb")
+        # Windows-Fensterrahmen mit allen drei Schaltflächen
+        win.resizable(True, True)
+        if parent:
+            win.transient(parent)
+        win.grab_set()
+        if maximized:
+            try:
+                win.state("zoomed")
+            except Exception:
+                pass
+        return win
+
+    def _toggle_sidebar(self):
+        """Rechte Seitenleiste ein- oder ausblenden. Zustand wird persistiert."""
+        if self._right_panel_visible:
+            self._right_panel.grid_remove()
+            self._right_panel_visible = False
+            self._sidebar_btn_text.set("▶ Info einblenden")
+            self._set_meta_value("sidebar_visible", "0")
+        else:
+            for w in self._right_panel.winfo_children():
+                w.destroy()
+            self._status_card(self._right_panel)
+            self._right_panel.grid(row=1, column=1, sticky="ns", padx=(0, 22), pady=10)
+            self._right_panel_visible = True
+            self._sidebar_btn_text.set("◀ Info ausblenden")
+            self._set_meta_value("sidebar_visible", "1")
+
+    # ── ADMIN-LOGINS (kein Pflichtprofil, kein Pflichtdialog) ──────────────────
+    ADMIN_LOGINS = {"laemb", "jagdeal"}
+
+    def _is_admin_login(self):
+        return (self.bearbeiter or "").strip().lower() in self.ADMIN_LOGINS
+
+    # ── MITARBEITERPROFIL ────────────────────────────────────────────────────────
+    def _ensure_mitarbeiterprofil_table(self):
+        with sqlite3.connect(DB_PATH) as con:
+            con.execute("""\nCREATE TABLE IF NOT EXISTS tbl_mitarbeiterprofil (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,\nlogin TEXT NOT NULL UNIQUE,
+                    vorname TEXT NOT NULL DEFAULT '',\nnachname TEXT NOT NULL DEFAULT '',
+                    telefon TEXT,\nmobil TEXT,
+                    email TEXT,\nabteilung TEXT,
+                    position TEXT,\nnotizen TEXT,
+                    erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,\ngeaendert_am TEXT
+                )\n""")
+            con.commit()
+
+    def _get_mitarbeiterprofil(self, login=None):
+        login = (login or self.bearbeiter or "").strip()
+        self._ensure_mitarbeiterprofil_table()
+        with sqlite3.connect(DB_PATH) as con:
+            con.row_factory = sqlite3.Row
+            return con.execute("SELECT * FROM tbl_mitarbeiterprofil WHERE login=?", (login,)).fetchone()
+
+    def _check_mitarbeiterprofil_pflicht(self):
+        """Beim Start: Wenn kein Admin und kein Profil vorhanden → Pflicht-Dialog."""
+        if self._is_admin_login():
+            return
+        self._ensure_mitarbeiterprofil_table()
+        profil = self._get_mitarbeiterprofil()
+        if not profil or not str(profil["vorname"]).strip() or not str(profil["nachname"]).strip():
+            self.after(300, self._open_mitarbeiterprofil_pflicht_dialog)
+
+    def _open_mitarbeiterprofil_pflicht_dialog(self):
+        win = tk.Toplevel(self)
+        win.title("Bitte Mitarbeiterprofil ausfüllen")
+        win.geometry("480x300")
+        win.resizable(False, False)
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+        win.protocol("WM_DELETE_WINDOW", lambda: None)  # nicht schließbar
+
+        tk.Label(win, text="👤  Mitarbeiterprofil", font=("Arial", 16, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 4))
+        tk.Label(win, text=(
+            f"Hallo {self.bearbeiter}!\n"
+            "Bitte Vorname und Nachname einmalig eintragen.\n"
+            "Ohne Profil kann das Programm nicht genutzt werden."
+        ), font=("Arial", 10), fg="#444", bg="#f5f7fb", justify="left").pack(anchor="w", padx=22, pady=(0, 12))
+
+        form = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        form.pack(fill="x", padx=22, pady=(0, 12))
+        form.columnconfigure(1, weight=1)
+
+        vorname_var = tk.StringVar()
+        nachname_var = tk.StringVar()
+        existing = self._get_mitarbeiterprofil()
+        if existing:
+            vorname_var.set(str(existing["vorname"] or ""))
+            nachname_var.set(str(existing["nachname"] or ""))
+
+        for r, (label, var) in enumerate([("Vorname *", vorname_var), ("Nachname *", nachname_var)]):
+            tk.Label(form, text=label, bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=r, column=0, sticky="w", padx=14, pady=10)
+            tk.Entry(form, textvariable=var, font=("Arial", 12)).grid(row=r, column=1, sticky="ew", padx=14, pady=10)
+
+        err_var = tk.StringVar()
+        tk.Label(win, textvariable=err_var, fg="#c00", bg="#f5f7fb", font=("Arial", 9)).pack(anchor="w", padx=22)
+
+        def save():
+            vn = vorname_var.get().strip()
+            nn = nachname_var.get().strip()
+            if not vn or not nn:
+                err_var.set("Vorname und Nachname sind Pflichtfelder.")
+                return
+            login = (self.bearbeiter or "").strip()
+            with sqlite3.connect(DB_PATH) as con:
+                con.execute("""\nINSERT INTO tbl_mitarbeiterprofil(login, vorname, nachname)
+                    VALUES(?,?,?)\nON CONFLICT(login) DO UPDATE SET
+                        vorname=excluded.vorname,\nnachname=excluded.nachname,
+                        geaendert_am=CURRENT_TIMESTAMP\n""", (login, vn, nn))
+                con.commit()
+            win.destroy()
+
+        tk.Button(win, text="✔  Speichern", command=save, bg="#0b4a86", fg="white",
+                  relief="flat", font=("Arial", 12, "bold"), padx=20, pady=8).pack(pady=(4, 18))
+
+    def show_mitarbeiterprofil_dialog(self, login=None, readonly=False):
+        """Profil anzeigen/bearbeiten. readonly=True → nur ansehen."""
+        self._ensure_mitarbeiterprofil_table()
+        ziel_login = (login or self.bearbeiter or "").strip()
+        is_own = ziel_login.lower() == (self.bearbeiter or "").strip().lower()
+        can_edit = is_own or self._is_admin_login()
+        title = f"Mitarbeiterprofil: {ziel_login}"
+
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title(title)
+        win.geometry("520x420")
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+
+        tk.Label(win, text=f"👤  {title}", font=("Arial", 15, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 4))
+        if not can_edit:
+            tk.Label(win, text="Nur ansehen — du kannst nur dein eigenes Profil bearbeiten.", font=("Arial", 9), fg="#888", bg="#f5f7fb").pack(anchor="w", padx=22)
+
+        form = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        form.pack(fill="both", expand=True, padx=22, pady=(8, 10))
+        form.columnconfigure(1, weight=1)
+
+        profil = self._get_mitarbeiterprofil(ziel_login) or {}
+        fields_def = [
+            ("vorname", "Vorname *"), ("nachname", "Nachname *"),
+            ("telefon", "Telefon"), ("mobil", "Mobil"), ("email", "E-Mail"),
+            ("abteilung", "Abteilung"), ("position", "Position"),
+        ]
+        vars_ = {}
+        for r, (key, label) in enumerate(fields_def):
+            tk.Label(form, text=label, bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=r, column=0, sticky="w", padx=14, pady=6)
+            var = tk.StringVar(value=str(profil[key] if profil and key in profil.keys() and profil[key] else ""))
+            vars_[key] = var
+            state = "normal" if can_edit else "readonly"
+            tk.Entry(form, textvariable=var, state=state).grid(row=r, column=1, sticky="ew", padx=14, pady=6)
+
+        bar = tk.Frame(win, bg="#f5f7fb")
+        bar.pack(fill="x", padx=22, pady=(0, 14))
+        tk.Button(bar, text="Schließen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8, 0))
+        if can_edit:
+            def save_profil():
+                vn = vars_["vorname"].get().strip()
+                nn = vars_["nachname"].get().strip()
+                if not vn or not nn:
+                    messagebox.showinfo(title, "Vorname und Nachname sind Pflichtfelder.")
+                    return
+                with sqlite3.connect(DB_PATH) as con:
+                    data = {k: v.get().strip() for k, v in vars_.items()}
+                    data["login"] = ziel_login
+                    con.execute("""\nINSERT INTO tbl_mitarbeiterprofil(login,vorname,nachname,telefon,mobil,email,abteilung,position)
+                        VALUES(:login,:vorname,:nachname,:telefon,:mobil,:email,:abteilung,:position)\nON CONFLICT(login) DO UPDATE SET
+                            vorname=excluded.vorname, nachname=excluded.nachname,\ntelefon=excluded.telefon, mobil=excluded.mobil,
+                            email=excluded.email, abteilung=excluded.abteilung,\nposition=excluded.position,
+                            geaendert_am=CURRENT_TIMESTAMP\n""", data)
+                    con.commit()
+                messagebox.showinfo(title, "Profil gespeichert.")
+                win.destroy()
+            tk.Button(bar, text="✔  Speichern", command=save_profil, bg="#0b4a86", fg="white",
+                      relief="flat", font=("Arial", 11, "bold"), padx=16, pady=7).pack(side="right")
+
+    # ── BENACHRICHTIGUNGEN / DATEN-AMPEL ────────────────────────────────────────
+    def _check_daten_benachrichtigungen(self):
+        """Beim Start: Benachrichtigungen für veraltete Daten prüfen (snooze-fähig)."""
+        snooze_key = "benachrichtigung_snooze_bis"
+        snooze_until = self._get_meta_value(snooze_key, "")
+        if snooze_until:
+            try:
+                from datetime import date
+                if date.today().isoformat() <= snooze_until:
+                    return
+            except Exception:
+                pass
+
+        items = self._get_data_update_status_items()
+        rote = [name for name, val in items if self._status_ampel(val) in ("🔴", "⚪")]
+        if not rote:
+            return
+
+        self.after(600, lambda: self._show_benachrichtigungs_dialog(rote, snooze_key))
+
+    def _show_benachrichtigungs_dialog(self, rote_items, snooze_key):
+        from datetime import date, timedelta
+        win = tk.Toplevel(self)
+        win.title("Daten-Benachrichtigung")
+        win.geometry("460x320")
+        win.resizable(False, False)
+        win.configure(bg="#fff8e1")
+        win.transient(self)
+        win.grab_set()
+
+        tk.Label(win, text="⚠️  Daten-Aktualität", font=("Arial", 15, "bold"), fg="#8b4513", bg="#fff8e1").pack(anchor="w", padx=20, pady=(16, 4))
+        tk.Label(win, text="Folgende Datenquellen sind veraltet (>60 Tage) oder fehlen:", font=("Arial", 10), fg="#555", bg="#fff8e1").pack(anchor="w", padx=20)
+        for name in rote_items:
+            tk.Label(win, text=f"  🔴  {name}", font=("Arial", 11, "bold"), fg="#c00", bg="#fff8e1").pack(anchor="w", padx=20, pady=2)
+
+        tk.Label(win, text="Wann soll diese Meldung erneut erscheinen?", font=("Arial", 10), fg="#444", bg="#fff8e1").pack(anchor="w", padx=20, pady=(14, 6))
+
+        btn_row = tk.Frame(win, bg="#fff8e1")
+        btn_row.pack(anchor="w", padx=20)
+
+        def snooze(tage):
+            bis = (date.today() + timedelta(days=tage)).isoformat()
+            self._set_meta_value(snooze_key, bis)
+            win.destroy()
+
+        def oeffne_daten():
+            win.destroy()
+            self.show_daten_aktualisieren_page()
+
+        tk.Button(btn_row, text="In 7 Tagen", command=lambda: snooze(7), padx=12, pady=6).pack(side="left", padx=(0, 6))
+        tk.Button(btn_row, text="In 15 Tagen", command=lambda: snooze(15), padx=12, pady=6).pack(side="left", padx=(0, 6))
+        tk.Button(btn_row, text="In 30 Tagen", command=lambda: snooze(30), padx=12, pady=6).pack(side="left")
+
+        bar = tk.Frame(win, bg="#fff8e1")
+        bar.pack(fill="x", padx=20, pady=(16, 14))
+        tk.Button(bar, text="Jetzt Daten aktualisieren →", command=oeffne_daten,
+                  bg="#0b4a86", fg="white", relief="flat", font=("Arial", 11, "bold"), padx=16, pady=7).pack(side="left")
+        tk.Button(bar, text="Schließen", command=win.destroy, padx=14, pady=7).pack(side="right")
+
+    # ── OUTLOOK-KALENDER-WIDGET ──────────────────────────────────────────────────
+    def _get_outlook_termine(self, tage=14):
+        """Liest Termine aus Outlook – mehrere Fallback-Methoden."""
+        from datetime import datetime, timedelta
+        termine = []
+
+        # Methode 1: win32com (bevorzugt)
+        try:
+            import win32com.client
+            outlook = win32com.client.Dispatch("Outlook.Application")
+            ns = outlook.GetNamespace("MAPI")
+            kalender = ns.GetDefaultFolder(9)
+            items = kalender.Items
+            items.IncludeRecurrences = True
+            items.Sort("[Start]")
+            start = datetime.now()
+            end = start + timedelta(days=tage)
+            restricted = items.Restrict(
+                f"[Start] >= '{start.strftime('%d/%m/%Y')}' AND [Start] <= '{end.strftime('%d/%m/%Y')}'"
+            )
+            for item in restricted:
+                try:
+                    termine.append({
+                        "betreff": str(item.Subject or ""),
+                        "start": str(item.Start)[:16],
+                        "ort": str(item.Location or ""),
+                    })
+                except Exception:
+                    pass
+            if termine:
+                return termine[:15]
+        except Exception:
+            pass
+
+        # Methode 2: win32com mit EarlyBind
+        try:
+            import win32com.client
+            outlook = win32com.client.gencache.EnsureDispatch("Outlook.Application")
+            ns = outlook.GetNamespace("MAPI")
+            kalender = ns.GetDefaultFolder(9)
+            items = kalender.Items
+            items.IncludeRecurrences = True
+            items.Sort("[Start]")
+            start = datetime.now()
+            end = start + timedelta(days=tage)
+            for item in items:
+                try:
+                    item_start = str(item.Start)[:10]
+                    if str(start)[:10] <= item_start <= str(end)[:10]:
+                        termine.append({
+                            "betreff": str(item.Subject or ""),
+                            "start": str(item.Start)[:16],
+                            "ort": str(item.Location or ""),
+                        })
+                    if len(termine) >= 15:
+                        break
+                except Exception:
+                    continue
+            if termine:
+                return sorted(termine, key=lambda x: x["start"])[:15]
+        except Exception:
+            pass
+
+        # Methode 3: Outlook via subprocess (prüfen ob Outlook läuft)
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["powershell", "-Command",
+                 "$ol = New-Object -ComObject Outlook.Application; "
+                 "$ns = $ol.GetNamespace('MAPI'); "
+                 "$cal = $ns.GetDefaultFolder(9); "
+                 "$items = $cal.Items; "
+                 "$items.IncludeRecurrences = $true; "
+                 "$items.Sort('[Start]'); "
+                 f"$start = Get-Date; $end = $start.AddDays({tage}); "
+                 "$items | Where-Object {$_.Start -ge $start -and $_.Start -le $end} | "
+                 "Select-Object -First 15 Subject, Start, Location | "
+                 "ConvertTo-Json"],
+                capture_output=True, text=True, timeout=8
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                import json
+                data = json.loads(result.stdout)
+                if isinstance(data, dict):
+                    data = [data]
+                for item in data:
+                    termine.append({
+                        "betreff": str(item.get("Subject") or ""),
+                        "start": str(item.get("Start") or "")[:16],
+                        "ort": str(item.get("Location") or ""),
+                    })
+                return termine[:15]
+        except Exception:
+            pass
+
+        return termine
+
+    def _dashboard_widget_kalender(self, parent):
+        """Outlook-Kalender-Widget für das Dashboard."""
+        box = tk.Frame(parent, bg="#faf4ff", highlightbackground="#c9b8e8", highlightthickness=1)
+        tk.Label(box, text="📅 Termine (Outlook)", font=("Arial", 11, "bold"), fg="#6b4fb3", bg="#faf4ff").pack(anchor="w", padx=10, pady=(10, 4))
+        termine = self._get_outlook_termine(14)
+        if termine:
+            for t in termine:
+                start_short = t["start"][5:16].replace("T", "  ").replace("-", ".")
+                text = f"📌 {start_short}  –  {t['betreff'][:38]}"
+                tk.Label(box, text=text, font=("Arial", 9), fg="#3a2060", bg="#faf4ff", anchor="w").pack(anchor="w", padx=10, pady=1)
+        else:
+            tk.Label(box, text="Keine Termine gefunden\n(Outlook nicht verfügbar oder keine Termine)", font=("Arial", 9), fg="#888", bg="#faf4ff", justify="left").pack(anchor="w", padx=10, pady=4)
+        tk.Label(box, text="Nur-Lese-Ansicht · Termine aus Outlook", font=("Arial", 8), fg="#999", bg="#faf4ff").pack(anchor="w", padx=10, pady=(0, 8))
+        return box
+
+    def _check_apotheken_analyse_faellig(self):
+        """Erstellt ToDos für Apotheken deren letzte Analyse > 5 Monate her ist (außer inaktiven)."""
+        try:
+            from datetime import datetime, timedelta
+            cutoff = (datetime.now() - timedelta(days=150)).strftime("%Y-%m-%d")
+            with sqlite3.connect(DB_PATH) as con:
+                con.row_factory = sqlite3.Row
+                kunden = con.execute(
+                    "SELECT kundennummer, kundenname FROM tbl_kunden_center WHERE lower(status)='aktiv'"
+                ).fetchall()
+                for k in kunden:
+                    knr = k["kundennummer"] or ""
+                    kname = k["kundenname"] or ""
+                    row = con.execute("""\nSELECT MAX(datum) as letzte FROM tbl_auswertungen
+                        WHERE (kundennummer=? AND kundennummer<>'') OR (kundenname=? AND kundenname<>'')\n""", (knr, kname)).fetchone()
+                    letzte = row["letzte"] if row else None
+                    if letzte and str(letzte)[:10] >= cutoff:
+                        continue  # aktuell genug
+                    # Prüfen ob ToDo schon vorhanden
+                    todo_titel = f"Neue Analyse anfordern: {kname or knr}"
+                    existing_todo = con.execute(
+                        "SELECT id FROM tbl_todo_center WHERE titel=? AND lower(status) NOT IN ('erledigt','done','abgeschlossen')",
+                        (todo_titel,)
+                    ).fetchone()
+                    if existing_todo:
+                        continue
+                    con.execute("""\nINSERT INTO tbl_todo_center(titel,bereich,status,prioritaet,bearbeiter)
+                        VALUES(?,?,?,?,?)\n""", (todo_titel, "Kunden", "offen", "Normal", self.bearbeiter))
+                con.commit()
+        except Exception:
+            pass
+
+    def _build_nav_tree(self):
+        """Ausklappbarer Menübaum. Beschlossene Punkte bleiben sichtbar."""
+        tree = self.nav_tree
+
+        tree.insert("", "end", "startseite", text="🏠  Startseite")
+        tree.insert("", "end", "neue_auswertung", text="📊  Neue Auswertung")
+
+        tree.insert("", "end", "apps", text="🚀  Apps")
+        tree.insert("", "end", "analysen", text="📁  Analysen")
+        tree.insert("", "end", "schulbank", text="🎓  Schulbank")
+        tree.insert("", "end", "daten_aktualisieren", text="🗄  Daten aktualisieren")
+        tree.insert("", "end", "update_backup", text="🔄  Update / Backup")
+        
+        tree.insert("", "end", "datenbankuebersicht", text="🗄  Datenbankübersicht")
+
+        tree.insert("", "end", "report", text="📋  Report")
+        tree.insert("", "end", "roadmap", text="📌  Roadmap")
+
+        tree.insert("", "end", "datenbankpfad", text="☁️  Cloud / DB-Pfad")
+        tree.insert("", "end", "hilfe", text="❓  Hilfe")
+
+    def _on_nav_select(self, event=None):
+        selected = self.nav_tree.selection()
+        if not selected:
+            return
+        item_id = selected[0]
+
+        handlers = {
+            "startseite": self.show_startseite,
+            "neue_auswertung": self.show_neue_auswertung_page,
+
+            "analysen": self.show_analysen_page,
+            "produktanalyse": self.show_produktanalyse_page,
+            "marktanalyse": self.show_marktanalyse_page,
+            "gespeicherte_analysen": self.open_saved_analyses,
+            "abweichungsanalyse": self.show_abweichungsanalyse_page,
+
+            "schulbank": lambda: self.show_schulbank_page("Schulbank"),
+            "lern_neu": lambda: self.show_schulbank_page("Neue Lernvorschläge"),
+            "lern_uebernommen": lambda: self.show_schulbank_page("Übernommen"),
+            "lern_abgelehnt": lambda: self.show_schulbank_page("Abgelehnt"),
+            "lern_historie": lambda: self.show_schulbank_page("Historie"),
+            "lern_manuelle_pruefung": self.show_schulbank_manuelle_pruefung,
+
+            "daten_aktualisieren": self.show_daten_aktualisieren_page,
+            "daten_manuelle_analysen_zf": lambda: self.show_import_page("Manuelle Analysen / Zukunftswerk", self.import_zf_data),
+            "daten_partnerkonditionen": lambda: self.show_import_page("Partnerkonditionen", self.import_pk_data),
+            "daten_apu_hap": lambda: self.show_import_page("APU/HAP Daten", self.import_apu_data),
+            "daten_nmg_artikel": lambda: self.show_import_page("NMG Artikel", self.import_nmg_articles),
+            "daten_pk_rabatte": lambda: self.show_import_page("Partnerkonditionen Rabatte", self.import_pk_rabatte),
+            "daten_austauschdatenbank": self.show_austauschdatenbank_page,
+            "daten_manuelle_analysen": self.import_manuelle_analysen,
+            "daten_artikelstamm": self.show_artikelstamm_page,
+            "daten_auswertungsvorlage": self.show_auswertungsvorlage_page,
+
+            "update_backup": self.show_update_backup_page,
+            "versionsinfo": self.show_version,
+            "update_suchen": self.check_online_update,
+            "update_installieren": self.install_update_dialog,
+            "backup_erstellen": self.create_backup,
+            "backup_wiederherstellen": self.restore_backup,
+
+            "datenbankuebersicht": self.show_datenbankuebersicht_page,
+
+            "apps": self.show_apps_page,
+            "kunden_center": self.show_kunden_center,
+            "mitarbeiter_center": self.show_mitarbeiter_center,
+            "todo_center": self.show_todo_center,
+            "bestell_center": self.show_bestell_center,
+            "report": self.show_report_page,
+            "roadmap": self.show_roadmap_page,
+            "datenbankpfad": self.show_datenbankpfad_page,
+
+            "hilfe": self.show_help_center,
+        }
+        handler = handlers.get(item_id)
+        if handler:
+            try:
+                log_event("programm", "Navigation", f"Menüpunkt geöffnet: {item_id}", user=self.bearbeiter)
+            except Exception:
+                pass
+            handler()
+
+    def _tile(self, parent, col, icon, title, desc, button, command, color):
+        f = tk.Frame(parent, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1)
+        f.grid(row=2, column=col, sticky="nsew", padx=10, pady=8)
+        tk.Label(f, text=icon, font=("Arial", 34), bg="#f8fbff", fg=color).pack(pady=(22, 6))
+        tk.Label(f, text=title, font=("Arial", 14, "bold"), bg="#f8fbff").pack()
+        tk.Label(f, text=desc, wraplength=180, justify="center", bg="#f8fbff", fg="#333").pack(padx=14, pady=12)
+        tk.Button(f, text=button + "  →", command=command, bg=color, fg="white", activebackground=color, relief="flat", font=("Arial", 12, "bold"), padx=18, pady=8).pack(fill="x", padx=18, pady=(8, 18))
+
+    def _parse_status_datetime(self, value):
+        """Wandelt verschiedene DB-Datumsformate inkl. Excel-Serienzahl in datetime um."""
+        if value in (None, ""):
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+
+        # Excel-Serienzahl, z. B. 45234 statt Datum.
+        try:
+            if re.fullmatch(r"\d+(\.\d+)?", text):
+                number = float(text)
+                if 20000 <= number <= 90000:
+                    base = datetime(1899, 12, 30)
+                    from datetime import timedelta
+                    return base + timedelta(days=number)
+        except Exception:
+            pass
+
+        for fmt in (
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M",
+            "%d.%m.%Y %H:%M:%S",
+            "%d.%m.%Y %H:%M",
+            "%Y-%m-%d",
+            "%d.%m.%Y",
+        ):
+            try:
+                return datetime.strptime(text[:19], fmt)
+            except Exception:
+                pass
+        return None
+
+    def _format_status_datetime(self, value):
+        """Formatiert Datenbank-Zeitstempel kurz für den rechten Statusbereich."""
+        dt = self._parse_status_datetime(value)
+        if not dt:
+            return "noch nie"
+        return dt.strftime("%d.%m.%Y %H:%M")
+
+    def _status_ampel(self, value):
+        """Ampel nach Datenalter: grün <30, gelb ab 30, rot ab 60, schwarz ab 90 Tage."""
+        dt = self._parse_status_datetime(value)
+        if not dt:
+            return ""
+        try:
+            age_days = (datetime.now() - dt).days
+        except Exception:
+            return ""
+        if age_days >= 90:
+            return "⚫"
+        if age_days >= 60:
+            return "🔴"
+        if age_days >= 30:
+            return "🟡"
+        return "🟢"
+
+    def _status_ampel_color(self, value):
+        """Textfarbe passend zur Datenampel."""
+        dt = self._parse_status_datetime(value)
+        if not dt:
+            return "#555555"
+        try:
+            age_days = (datetime.now() - dt).days
+        except Exception:
+            return "#555555"
+        if age_days >= 90:
+            return "#000000"
+        if age_days >= 60:
+            return "#b00020"
+        if age_days >= 30:
+            return "#b8860b"
+        return "#11823b"
+
+    def _get_last_data_update(self, con, queries):
+        """Liest das jüngste Datum aus mehreren möglichen Tabellen/Spalten, robust gegen fehlende Tabellen."""
+        best_dt = None
+        best_raw = ""
+        for sql, params in queries:
+            try:
+                row = con.execute(sql, params).fetchone()
+                if row and row[0] not in (None, ""):
+                    raw = str(row[0]).strip()
+                    dt = self._parse_status_datetime(raw)
+                    if dt:
+                        if best_dt is None or dt > best_dt:
+                            best_dt = dt
+                            best_raw = raw
+                    elif not best_raw:
+                        best_raw = raw
+            except Exception:
+                continue
+        return best_raw
+
+    def _get_data_update_status_items(self):
+        """Rechter Statusbereich: letzte Aktualisierung wichtiger Datenquellen."""
+        try:
+            with sqlite3.connect(DB_PATH) as con:
+                return [
+                    (
+                        "APU/HAP Daten",
+                        self._get_last_data_update(con, [
+                            ("SELECT MAX(importdatum) FROM tbl_nmg_stamm WHERE apu IS NOT NULL OR taxe_ek IS NOT NULL OR taxe_vk IS NOT NULL", ()),
+                            ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(typ) IN ('apu_hap','apu','hap')", ()),
+                            ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(datei) LIKE '%apu%' OR lower(datei) LIKE '%hap%'", ()),
+                        ])
+                    ),
+                    (
+                        "NMG Artikel",
+                        self._get_last_data_update(con, [
+                            ("SELECT MAX(importdatum) FROM tbl_nmg_stamm", ()),
+                            ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(typ) IN ('nmg_stamm','nmg_artikel','nmg_articles')", ()),
+                            ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(datei) LIKE '%nmg%' AND lower(datei) LIKE '%artikel%'", ()),
+                        ])
+                    ),
+                    (
+                        "PK Rabatte",
+                        self._get_last_data_update(con, [
+                            ("SELECT MAX(letzte_aktualisierung) FROM nmg_rabatte", ()),
+                            ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(typ) IN ('pk_rabatte','partnerkonditionen_rabatte','rabatte')", ()),
+                            ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(datei) LIKE '%rabatt%'", ()),
+                        ])
+                    ),
+                    (
+                        "Artikelstamm",
+                        self._get_last_data_update(con, [
+                            ("SELECT MAX(letzte_aktualisierung) FROM tbl_pzn_basisdaten", ()),
+                            ("SELECT MAX(importdatum) FROM tbl_pzn_basisdaten", ()),
+                            ("SELECT MAX(aktualisiert_am) FROM tbl_artikelstamm", ()),
+                            ("SELECT MAX(erstellt_am) FROM tbl_artikelstamm", ()),
+                            ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(typ) IN ('artikelstamm','pzn_basis','artikel_basis')", ()),
+                            ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(datei) LIKE '%artikelstamm%'", ()),
+                        ])
+                    ),
+                ]
+        except Exception:
+            return []
+
+    def _get_data_update_status_text(self):
+        items = self._get_data_update_status_items()
+        if not items:
+            return "Status nicht verfügbar"
+        lines = []
+        for name, value in items:
+            lines.append(f"{name} {self._status_ampel(value)}")
+            lines.append(self._format_status_datetime(value))
+            lines.append("")
+        lines.append("Legende")
+        lines.append("🟢 < 30 Tage")
+        lines.append("🟡 30–60 Tage")
+        lines.append("🔴 > 60 Tage")
+        lines.append("⚪ keine Daten")
+        return "\n".join(lines).rstrip()
+
+    def _status_card(self, parent):
+        auto = self.auto_backup_result
+
+        box_bearbeiter = tk.Frame(parent, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        box_bearbeiter.pack(fill="x", pady=(0, 12))
+        tk.Label(
+            box_bearbeiter,
+            text="👤 Aktiver Bearbeiter",
+            font=("Arial", 13, "bold"),
+            fg="#0b4a86",
+            bg="#ffffff"
+        ).pack(anchor="w", padx=14, pady=(14, 6))
+        tk.Label(
+            box_bearbeiter,
+            text=(
+                f"Windows-Login:\n{self.bearbeiter or 'unbekannt'}\n\n"
+                f"Version:\n{APP_VERSION}\n\n"
+                f"Datenbank:\n{DB_PATH.name}"
+            ),
+            justify="left",
+            bg="#ffffff",
+            fg="#222"
+        ).pack(anchor="w", padx=14, pady=(0, 14))
+
+        box_db = tk.Frame(parent, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        box_db.pack(fill="x", pady=(0, 12))
+        tk.Label(box_db, text="🗄 Datenbankstatus", font=("Arial", 13, "bold"), fg="#0b4a86", bg="#ffffff").pack(anchor="w", padx=14, pady=(14, 6))
+        try:
+            st = datenbankstatus()
+            text = f"Auswertungen: {st.get('auswertungen',0)}\nPK-Analysen: {st.get('pk_auswertungen', st.get('nmg_auswertungen',0))}\nZF-Analysen: {st.get('zf_auswertungen',0)}\nPositionen: {st.get('positionen',0)}\nNicht-PK: {st.get('nicht_nmg_positionen',0)}"
+        except Exception:
+            text = "Status nicht verfügbar"
+        tk.Label(box_db, text=text, justify="left", bg="#ffffff").pack(anchor="w", padx=14, pady=(0, 14))
+
+        box_updates = tk.Frame(parent, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        box_updates.pack(fill="x", pady=(0, 12))
+        tk.Label(
+            box_updates,
+            text="🕘 Letzte Datenaktualisierung",
+            font=("Arial", 13, "bold"),
+            fg="#0b4a86",
+            bg="#ffffff"
+        ).pack(anchor="w", padx=14, pady=(14, 6))
+        try:
+            for item_name, item_value in self._get_data_update_status_items():
+                color = self._status_ampel_color(item_value)
+                amp = self._status_ampel(item_value)
+                date_text = self._format_status_datetime(item_value)
+                tk.Label(
+                    box_updates,
+                    text=f"{amp} {item_name}\n{date_text}",
+                    justify="left",
+                    bg="#ffffff",
+                    fg=color,
+                    font=("Arial", 10, "bold")
+                ).pack(anchor="w", padx=14, pady=(0, 8))
+            tk.Label(
+                box_updates,
+                text="Legende: Grün <30 Tage | Gelb ab 30 | Rot ab 60 | Schwarz ab 90",
+                justify="left",
+                bg="#ffffff",
+                fg="#555",
+                font=("Arial", 8)
+            ).pack(anchor="w", padx=14, pady=(0, 14))
+        except Exception:
+            tk.Label(
+                box_updates,
+                text=self._get_data_update_status_text(),
+                justify="left",
+                bg="#ffffff",
+                fg="#222"
+            ).pack(anchor="w", padx=14, pady=(0, 14))
+
+        filler = tk.Frame(parent, bg="#f5f7fb")
+        filler.pack(fill="both", expand=True)
+
+        box_backup = tk.Frame(parent, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        box_backup.pack(fill="x", side="bottom")
+        txt = "Backup heute erstellt" if auto.get("created") else "Backup heute vorhanden"
+        tk.Label(box_backup, text="✅ Backup-Status", font=("Arial", 13, "bold"), fg="#0b4a86", bg="#ffffff").pack(anchor="w", padx=14, pady=(14, 6))
+        tk.Label(box_backup, text=f"{txt}\nAufbewahrung: 7 Tage\nÄltestes Auto-Backup wird zuerst gelöscht.", justify="left", bg="#ffffff", fg="#222").pack(anchor="w", padx=14, pady=(0, 12))
+        tk.Button(box_backup, text="Backup-Verwaltung", command=self.show_backup_dialog).pack(fill="x", padx=14, pady=(0, 6))
+        tk.Button(box_backup, text="📋 Protokolle", command=self.show_protocol_center).pack(fill="x", padx=14, pady=(0, 14))
+
+    def _get_saved_analysis_rows(self, limit=300):
+        try:
+            with sqlite3.connect(DB_PATH) as con:
+                con.row_factory = sqlite3.Row
+                return con.execute("""\nSELECT id, datum, apotheke, quelldatei, ausgabedatei, anzahl_positionen,
+                           nmg_treffer, nicht_nmg, COALESCE(datenquelle,'NMG') AS datenquelle\nFROM tbl_auswertungen
+                    ORDER BY datetime(datum) DESC, id DESC\nLIMIT ?
+                """, (int(limit),)).fetchall()
+        except Exception:
+            return []
+
+    def _find_output_file_for_analysis_row(self, row):
+        val = row["ausgabedatei"] or ""
+        candidates = []
+        if val:
+            candidates.append(Path(val))
+            candidates.append(Path(__file__).resolve().parent.parent / val)
+        try:
+            for f in SAVED_ANALYSES_DIR.rglob("*.xlsx"):
+                if row["apotheke"] and _safe_name(str(row["apotheke"])).lower() in str(f).lower():
+                    candidates.append(f)
+                if row["ausgabedatei"] and Path(str(row["ausgabedatei"])).name == f.name:
+                    candidates.append(f)
+        except Exception:
+            pass
+        for c in candidates:
+            if c and c.exists():
+                return c
+        return None
+
+    def _roadmap_mark_abweichung_schulbank_v9_erledigt(self):
+        try:
+            ensure_roadmap_table()
+            titel = "Abweichungsanalyse öffnen und Schulbank-Spalte-H-Logik"
+            for row in list_roadmap_items():
+                if row["titel"] == titel:
+                    update_roadmap_status(int(row["id"]), "Erledigt")
+                    return
+            add_roadmap_item(
+                bereich="Analyse",
+                titel=titel,
+                beschreibung=(
+                    "Abweichungsanalyse-Ergebnis kann nach Erstellung direkt geöffnet oder der Ordner geöffnet werden. "
+                    "Lernvorschläge werden aus der manuellen Anpassung erzeugt, sobald Spalte H / im Sortiment gefüllt ist; "
+                    "bereits aktiv gelernte PZN alt werden ignoriert."
+                ),
+                status="Erledigt",
+                prioritaet="Hoch"
+            )
+        except Exception:
+            pass
+
+    def _roadmap_mark_abweichung_in_neue_auswertung_erledigt(self):
+        try:
+            ensure_roadmap_table()
+            titel = "Abweichungsanalyse in Neue Auswertung integriert"
+            for row in list_roadmap_items():
+                if row["titel"] == titel:
+                    update_roadmap_status(int(row["id"]), "Erledigt")
+                    return
+            add_roadmap_item(
+                bereich="Analyse",
+                titel=titel,
+                beschreibung=(
+                    "Unter Neue Auswertung wurde ein eigener, getrennter Block für die Abweichungsanalyse ergänzt: "
+                    "Programm-Auswertung kann aus gespeicherten Analysen oder als Datei gewählt werden, "
+                    "manuelle Anpassung wird separat gewählt und danach die Abweichungsanalyse gestartet."
+                ),
+                status="Erledigt",
+                prioritaet="Hoch"
+            )
+        except Exception:
+            pass
+
+    def neue_auswertung_routine(self):
+        self._log_action("neue_auswertung", "Neue Auswertung geöffnet")
+        file = filedialog.askopenfilename(title="Rohdaten / Excel-Datei auswählen", filetypes=SUPPORTED_DATA_FILETYPES
+        )
+        if not file:
+            return
+        default_name = Path(file).stem.replace("_", " ")
+        name = simpledialog.askstring("Analyse-Name", "Bitte Auswertungsname eingeben:", initialvalue=default_name)
+        if not name:
+            return
+        analyse_name = _safe_name(name)
+        apotheke = analyse_name
+        try:
+            self._run_neue_auswertung_export(file, analyse_name)
+        except UnknownInputFormatError as exc:
+            self.status.set(str(exc))
+            if messagebox.askyesno("Format nicht erkannt", f"{exc}\n\nSoll der Rohdaten-Formatassistent geöffnet werden?"):
+                mapping = self._open_rohdaten_format_assistent(file, str(exc))
+                if mapping:
+                    try:
+                        self._run_auswertung_after_mapping(file, mapping, analyse_name)
+                    except Exception as mapped_exc:
+                        self.status.set(f"Auswertung nach Mapping fehlgeschlagen: {mapped_exc}")
+                        messagebox.showerror("Auswertungsfehler nach Mapping", str(mapped_exc))
+            else:
+                messagebox.showwarning("Format nicht erkannt", str(exc))
+        except Exception as exc:
+            messagebox.showerror("Auswertungsfehler", str(exc))
+
+    def open_saved_analyses(self, start_action=None):
+        """Zeigt gespeicherte Analysen direkt im mittleren Arbeitsbereich.
+
+        start_action:
+        - None: normale Übersicht
+        - "produktanalyse": Nutzer soll zuerst eine Auswertung auswählen
+        - "marktanalyse": Nutzer soll zuerst eine Auswertung auswählen
+        """
+        self.clear_page()
+        if start_action == "produktanalyse":
+            self._page_header("Produktanalyse – Auswertung auswählen", "Bitte erst eine gespeicherte Auswertung auswählen. Danach wird die Produktanalyse genau für diese Auswertung erstellt.")
+        elif start_action == "marktanalyse":
+            self._page_header("Marktanalyse – Auswertung auswählen", "Bitte erst eine gespeicherte Auswertung auswählen. Danach wird die Marktanalyse genau für diese Auswertung erstellt.")
+        else:
+            self._page_header("Gespeicherte Analysen", "Analyse auswählen und direkt weiter auswerten.")
+
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure(0, weight=1)
+        body.columnconfigure(1, weight=0)
+        body.rowconfigure(1, weight=1)
+
+        # Suchzeile
+        search_bar = tk.Frame(body, bg="#ffffff")
+        search_bar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        tk.Label(search_bar, text="Suche:", bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).pack(side="left")
+        _sa_search_var = tk.StringVar()
+        tk.Entry(search_bar, textvariable=_sa_search_var, width=32).pack(side="left", padx=(6, 0))
+        tk.Label(search_bar, text="  Doppelklick = Kunden zuordnen", bg="#ffffff", fg="#888", font=("Arial", 9)).pack(side="left", padx=16)
+
+        filter_bar = tk.Frame(body, bg="#ffffff")
+        filter_bar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        filter_mode = tk.StringVar(value="ALLE")
+        tk.Label(filter_bar, text="Anzeigen:", bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).pack(side="left", padx=(0, 6))
+        def set_filter_mode(value):
+            filter_mode.set(value)
+            _sa_reload(_sa_search_var.get().strip())
+        for label, value in (("Alle", "ALLE"), ("PK", "NMG"), ("ZF", "ZF"), ("Neue Auswertungen", "NEU"), ("mit Datei", "DATEI")):
+            tk.Button(filter_bar, text=label, command=lambda v=value: set_filter_mode(v), padx=10, pady=4).pack(side="left", padx=(0, 5))
+
+        # Treeview mit Kundenspalten
+        _sa_cols = ("id", "datum", "typ", "apotheke", "kundennummer", "kundenname", "positionen", "treffer")
+        _sa_heads = {"id": "ID", "datum": "Datum", "typ": "Typ", "apotheke": "Auswertungsname",
+                     "kundennummer": "Kundennr.", "kundenname": "Apothekenname (Kunde)",
+                     "positionen": "Pos.", "treffer": "Treffer"}
+        _sa_widths = {"id": 50, "datum": 130, "typ": 40, "apotheke": 200,
+                      "kundennummer": 90, "kundenname": 180, "positionen": 55, "treffer": 55}
+        tree_frame = tk.Frame(body, bg="#ffffff")
+        tree_frame.grid(row=2, column=0, sticky="nsew", pady=(0, 16))
+        tree_frame.columnconfigure(0, weight=1)
+        tree_frame.rowconfigure(0, weight=1)
+        listbox = ttk.Treeview(tree_frame, columns=_sa_cols, show="headings", selectmode="browse")
+        for _c in _sa_cols:
+            listbox.heading(_c, text=_sa_heads[_c])
+            listbox.column(_c, width=_sa_widths.get(_c, 100), anchor="w")
+        listbox.grid(row=0, column=0, sticky="nsew")
+        scrollbar = tk.Scrollbar(tree_frame, orient="vertical", command=listbox.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        listbox.configure(yscrollcommand=scrollbar.set)
+        _sb_h = tk.Scrollbar(tree_frame, orient="horizontal", command=listbox.xview)
+        _sb_h.grid(row=1, column=0, sticky="ew")
+        listbox.configure(xscrollcommand=_sb_h.set)
+
+        side = tk.Frame(body, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1, width=270)
+        side.grid(row=2, column=1, sticky="ns", padx=(16, 0), pady=(0, 16))
+        side.grid_propagate(False)
+        detail = tk.StringVar(value="Bitte Analyse auswählen.")
+        tk.Label(side, text="Aktionen", font=("Arial", 14, "bold"), fg="#0b4a86", bg="#f8fbff").pack(anchor="w", padx=16, pady=(16, 8))
+        tk.Label(side, textvariable=detail, justify="left", wraplength=230, bg="#f8fbff", fg="#333").pack(anchor="w", padx=16, pady=(0, 14))
+
+        rows = []
+        try:
+            with sqlite3.connect(DB_PATH) as con:
+                con.row_factory = sqlite3.Row
+                rows = con.execute("""\nSELECT id, datum, apotheke, quelldatei, ausgabedatei, anzahl_positionen,
+                           nmg_treffer, nicht_nmg, COALESCE(datenquelle,'NMG') AS datenquelle\nFROM tbl_auswertungen
+                    ORDER BY datetime(datum) DESC, id DESC\nLIMIT 500
+                """).fetchall()
+        except Exception as exc:
+            messagebox.showerror("Gespeicherte Analysen", f"Datenbank konnte nicht gelesen werden:\n{exc}")
+
+        # Spalten kundennummer/kundenname ggf. nachrüsten
+        _sa_row_map = {}
+        try:
+            with sqlite3.connect(DB_PATH) as _con:
+                _ec = {r[1] for r in _con.execute("PRAGMA table_info(tbl_auswertungen)").fetchall()}
+                for _col in ("kundennummer", "kundenname"):
+                    if _col not in _ec:
+                        _con.execute(f"ALTER TABLE tbl_auswertungen ADD COLUMN {_col} TEXT")
+                _con.commit()
+        except Exception:
+            pass
+
+        def _sa_reload(ft=""):
+            for item in listbox.get_children(): listbox.delete(item)
+            _sa_row_map.clear()
+            for row in rows:
+                dq = "PK" if row["datenquelle"] == "NMG" else row["datenquelle"]
+                vals = (row["id"], str(row["datum"] or "")[:16], dq,
+                        str(row["apotheke"] or ""),
+                        str(row["kundennummer"] if "kundennummer" in row.keys() else ""),
+                        str(row["kundenname"] if "kundenname" in row.keys() else ""),
+                        row["anzahl_positionen"] or 0, row["nmg_treffer"] or 0)
+                mode = filter_mode.get()
+                if mode in ("NMG", "ZF") and str(row["datenquelle"] or "NMG") != mode:
+                    continue
+                if mode == "DATEI" and not find_output_file(row):
+                    continue
+                if mode == "NEU" and str(row["apotheke"] or "").lower().startswith(("manuell", "zf import", "zf daten")):
+                    continue
+                combined = " ".join(str(v) for v in vals).lower()
+                if ft and ft.lower() not in combined: continue
+                iid = listbox.insert("", "end", values=vals)
+                _sa_row_map[iid] = dict(row)
+        _sa_reload()
+        _sa_search_var.trace_add("write", lambda *_: _sa_reload(_sa_search_var.get().strip()))
+
+        def selected_row_silent():
+            sel = listbox.selection()
+            return _sa_row_map.get(sel[0]) if sel else None
+
+        def selected_row():
+            row = selected_row_silent()
+            if not row:
+                messagebox.showinfo("Auswahl", "Bitte zuerst eine Analyse auswählen.")
+            return row
+
+        def update_detail(event=None):
+            row = selected_row_silent()
+            if not row:
+                detail.set("Bitte Analyse auswählen.")
+                return
+            dq = "PK" if row["datenquelle"] == "NMG" else row["datenquelle"]
+            detail.set(
+                f"Analyse-ID: {row['id']}\n"
+                f"Name: {row['apotheke']}\n"
+                f"Typ: {dq}\n"
+                f"Kundennr.: {row.get('kundennummer') or '–'}\n"
+                f"Kunde: {row.get('kundenname') or '–'}\n"
+                f"Positionen: {row['anzahl_positionen'] or 0}\n"
+                f"Treffer: {row['nmg_treffer'] or 0}"
+            )
+
+        def _on_dbl_click(event=None):
+            row = selected_row_silent()
+            if not row:
+                return
+            def _refresh():
+                try:
+                    with sqlite3.connect(DB_PATH) as _c:
+                        _c.row_factory = __import__("sqlite3").Row
+                        updated = _c.execute("SELECT * FROM tbl_auswertungen WHERE id=?", (row["id"],)).fetchone()
+                    if updated:
+                        for i, r in enumerate(rows):
+                            if r["id"] == row["id"]:
+                                rows[i] = updated
+                                break
+                except Exception:
+                    pass
+                _sa_reload(_sa_search_var.get().strip())
+            self._kunden_zuordnen_dialog(row["id"], apotheke_name=str(row["apotheke"] or ""), callback=_refresh)
+
+        listbox.bind("<<TreeviewSelect>>", update_detail)
+        listbox.bind("<Double-1>", _on_dbl_click)
+
+        def find_output_file(row):
+            val = row["ausgabedatei"] or ""
+            candidates = []
+            if val:
+                candidates.append(Path(val))
+                candidates.append(Path(__file__).resolve().parent.parent / val)
+            try:
+                for f in SAVED_ANALYSES_DIR.rglob("*.xlsx"):
+                    if row["apotheke"] and _safe_name(str(row["apotheke"])).lower() in str(f).lower():
+                        candidates.append(f)
+                    if row["ausgabedatei"] and Path(str(row["ausgabedatei"])).name == f.name:
+                        candidates.append(f)
+            except Exception:
+                pass
+            for c in candidates:
+                if c and c.exists():
+                    return c
+            return None
+
+        def open_selected_output():
+            row = selected_row()
+            if not row:
+                return
+            f = find_output_file(row)
+            if f:
+                _open_folder(f.parent)
+            else:
+                messagebox.showinfo("Auswertung", "Zu dieser Analyse wurde keine Ausgabedatei im Analyseordner gefunden. Der Ordner wird geöffnet.")
+                _open_folder(SAVED_ANALYSES_DIR)
+
+        def product_selected():
+            row = selected_row()
+            if not row:
+                return
+            dq = row["datenquelle"] or "NMG"
+            try:
+                out = export_marktanalyse_produktchancen(limit=500, min_apotheken=1, datenquelle=dq, auswertung_id=int(row["id"]))
+                self.status.set(f"Produktanalyse für Analyse {row['id']} erzeugt: {out}")
+                messagebox.showinfo("Produktanalyse", f"Produktanalyse erstellt:\n{out}")
+            except Exception as exc:
+                messagebox.showerror("Produktanalyse", str(exc))
+
+        def market_selected():
+            row = selected_row()
+            if not row:
+                return
+            dq = row["datenquelle"] or "NMG"
+            try:
+                out = export_marktanalyse_nicht_nmg(limit=200, min_apotheken=1, datenquelle=dq, auswertung_id=int(row["id"]))
+                self.status.set(f"Marktanalyse für Analyse {row['id']} erzeugt: {out}")
+                messagebox.showinfo("Marktanalyse", f"Marktanalyse erstellt:\n{out}")
+            except Exception as exc:
+                messagebox.showerror("Marktanalyse", str(exc))
+
+        def deviation_selected():
+            row = selected_row()
+            if not row:
+                return
+            programm = find_output_file(row)
+            if not programm:
+                messagebox.showinfo("Abweichungsanalyse", "Keine Programm-Auswertung gefunden. Bitte über die normale Abweichungsanalyse beide Dateien auswählen.")
+                self.deviation_analysis()
+                return
+            manuell = filedialog.askopenfilename(title="Manuelle Vergleichsauswertung auswählen", filetypes=SUPPORTED_DATA_FILETYPES)
+            if not manuell:
+                return
+            try:
+                out = export_abweichungsanalyse(manuell, str(programm))
+                self.status.set(f"Abweichungsanalyse erzeugt: {out}")
+                self._roadmap_mark_abweichung_schulbank_v9_erledigt()
+                self.show_abweichungs_editor(out)
+            except Exception as exc:
+                messagebox.showerror("Abweichungsanalyse", str(exc))
+
+        def add_btn(text, cmd, color="#0b4a86"):
+            tk.Button(side, text=text, command=cmd, bg=color, fg="white", activebackground=color, relief="flat", font=("Arial", 11, "bold"), padx=10, pady=8).pack(fill="x", padx=16, pady=5)
+
+        add_btn("📄 Auswertung öffnen", open_selected_output, "#0b4a86")
+        add_btn("📈 Produktanalyse", product_selected, "#11823b")
+        add_btn("🌍 Marktanalyse", market_selected, "#3867b7")
+        add_btn("🔍 Abweichungsanalyse", deviation_selected, "#8b5a00")
+        tk.Button(side, text="Ordner gespeicherte Analysen", command=lambda: _open_folder(SAVED_ANALYSES_DIR), padx=10, pady=7).pack(fill="x", padx=16, pady=(14, 5))
+        tk.Button(side, text="🔐 Admin: Auswertungen löschen", command=self.open_admin_auswertungen_loeschen, bg="#9b1c1c", fg="white", relief="flat", font=("Arial", 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(8, 5))
+
+        if not rows:
+            listbox.insert("end", "Keine gespeicherten Analysen in der Datenbank gefunden.")
+
+    # Bestehende Funktionen / Werkzeuge
+    def choose_file(self):
+        file = filedialog.askopenfilename(filetypes=SUPPORTED_DATA_FILETYPES)
+        if file:
+            self.input_file.set(file)
+            self.status.set(f"Datei ausgewählt: {Path(file).name}")
+
+
+    def _ask_data_source(self, title="Datenquelle auswählen"):
+        """Schönes Auswahlfenster im Stil der Hauptseite.\n
+        Rückgabe bleibt kompatibel: PK wird intern als NMG gefiltert, weil alte Datenbankeinträge\nnoch als NMG gespeichert sind.
+        """
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title(title)
+        win.geometry("560x360")
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+        win.columnconfigure((0, 1, 2), weight=1)
+
+        tk.Label(win, text=title, font=("Arial", 20, "bold"), fg="#0b4a86", bg="#f5f7fb").grid(row=0, column=0, columnspan=3, sticky="w", padx=24, pady=(22, 4))
+        tk.Label(win, text="Welche Daten sollen berücksichtigt werden?", font=("Arial", 11), fg="#333", bg="#f5f7fb").grid(row=1, column=0, columnspan=3, sticky="w", padx=24, pady=(0, 16))
+
+        choice = tk.StringVar(value="ALLE")
+        cards = [
+            ("PK-Daten", "Partnerkonditionskunden\nAuswertungen, Lernstände, PK-/NMG-Zuordnung", "NMG"),
+            ("ZF-Daten", "Zukunftswerk-Kundendaten\nMarkt- und Produktpotenzial ohne Lernstand", "ZF"),
+            ("PK + ZF", "Beide Datenwelten gemeinsam\nfür Gesamtmarkt und Produktchancen", "ALLE"),
+        ]
+
+        def select(val):
+            choice.set(val)
+            for frame, value in card_frames:
+                selected = choice.get() == value
+                frame.configure(bg="#e8f1fb" if selected else "#ffffff", highlightbackground="#0b4a86" if selected else "#d8e2ee")
+                for child in frame.winfo_children():
+                    child.configure(bg="#e8f1fb" if selected else "#ffffff")
+
+        card_frames = []
+        for col, (head, desc, val) in enumerate(cards):
+            f = tk.Frame(win, bg="#ffffff", highlightthickness=2, highlightbackground="#d8e2ee", cursor="hand2")
+            f.grid(row=2, column=col, sticky="nsew", padx=(24 if col == 0 else 8, 24 if col == 2 else 8), pady=8, ipady=8)
+            tk.Label(f, text=head, font=("Arial", 13, "bold"), fg="#0b4a86", bg="#ffffff").pack(pady=(14, 6), padx=10)
+            tk.Label(f, text=desc, font=("Arial", 9), fg="#333", bg="#ffffff", justify="center", wraplength=145).pack(padx=10, pady=(0, 12))
+            f.bind("<Button-1>", lambda e, v=val: select(v))
+            for child in f.winfo_children():
+                child.bind("<Button-1>", lambda e, v=val: select(v))
+            card_frames.append((f, val))
+
+        result = {"value": None}
+        def ok():
+            result["value"] = choice.get()
+            win.destroy()
+        def cancel():
+            win.destroy()
+
+        buttonbar = tk.Frame(win, bg="#f5f7fb")
+        buttonbar.grid(row=3, column=0, columnspan=3, sticky="e", padx=24, pady=18)
+        tk.Button(buttonbar, text="Abbrechen", command=cancel, padx=18, pady=8).pack(side="right", padx=(8, 0))
+        tk.Button(buttonbar, text="Analyse starten  →", command=ok, bg="#0b4a86", fg="white", activebackground="#0b4a86", relief="flat", font=("Arial", 11, "bold"), padx=22, pady=9).pack(side="right")
+        select("ALLE")
+        self.wait_window(win)
+        return result["value"]
+
+    def import_zf_data(self):
+        files = filedialog.askopenfilenames(title="ZF-Dateien auswählen", filetypes=SUPPORTED_DATA_FILETYPES)
+        if not files:
+            return
+        name = simpledialog.askstring("ZF-Import", "Name/Kommentar für den ZF-Import:", initialvalue="ZF Daten") or "ZF Daten"
+        ok = messagebox.askyesno("ZF-Daten importieren", f"{len(files)} Datei(en) als ZF-Daten importieren?\n\nDiese Daten werden NICHT als PK-Lernstand übernommen.")
+        if not ok:
+            return
+        imported = 0; rows = 0; errors = []
+        for file in files:
+            try:
+                r = import_historical_market_file(file, datenquelle="ZF", analyse_name=name)
+                imported += 1
+                rows += int(r.get("rows", 0))
+            except Exception as exc:
+                errors.append(f"{Path(file).name}: {exc}")
+        msg = f"ZF-Import fertig.\nAusgewählte Dateien: {len(files)}\nErfolgreich importiert: {imported}\nPositionen: {rows}"
+        if errors:
+            msg += "\n\nFehler:\n" + "\n".join(errors[:10])
+        self.status.set(msg)
+        messagebox.showinfo("ZF-Import", msg)
+
+    def market_analysis(self):
+        self._log_action("marktanalyse", "Marktanalyse gestartet")
+        dq = self._ask_data_source("Marktanalyse")
+        if not dq:
+            return
+        try:
+            out = export_marktanalyse_nicht_nmg(limit=200, min_apotheken=1, datenquelle=dq)
+            self._log_action("marktanalyse", "Marktanalyse erzeugt", f"Datenquelle: {dq} | Datei: {out}")
+            self.status.set(f"Marktanalyse erzeugt: {out}")
+            messagebox.showinfo("Fertig", f"Marktanalyse erstellt:\n{out}")
+        except Exception as exc:
+            self._log_error("marktanalyse", "Marktanalyse", exc)
+            messagebox.showerror("Marktanalyse-Fehler", str(exc))
+
+    def market_opportunities(self):
+        self._log_action("produktanalyse", "Produktanalyse gestartet")
+        dq = self._ask_data_source("Produktanalyse")
+        if not dq:
+            return
+        try:
+            out = export_marktanalyse_produktchancen(limit=500, min_apotheken=1, datenquelle=dq)
+            self._log_action("produktanalyse", "Produktanalyse erzeugt", f"Datenquelle: {dq} | Datei: {out}")
+            self.status.set(f"Produktchancen-Marktanalyse erzeugt: {out}")
+            messagebox.showinfo("Fertig", f"Produktchancen-Marktanalyse erstellt:\n{out}")
+        except Exception as exc:
+            self._log_error("produktanalyse", "Produktanalyse", exc)
+            messagebox.showerror("Produktanalyse-Fehler", str(exc))
+
+    def deviation_analysis(self):
+        self._log_action("abweichungsanalyse", "Abweichungsanalyse geöffnet")
+        manuell = filedialog.askopenfilename(title="Manuelle Auswertung auswählen", filetypes=SUPPORTED_DATA_FILETYPES)
+        if not manuell:
+            return
+        programm = filedialog.askopenfilename(title="Programm-Auswertung auswählen", filetypes=SUPPORTED_DATA_FILETYPES)
+        if not programm:
+            return
+        try:
+            out = export_abweichungsanalyse(manuell, programm)
+            self._log_action("abweichungsanalyse", "Abweichungsanalyse erzeugt", f"Manuell: {manuell} | Programm: {programm} | Ausgabe: {out}")
+            self.status.set(f"Abweichungsanalyse erzeugt: {out}")
+            self._roadmap_mark_abweichung_schulbank_v9_erledigt()
+            self.show_abweichungs_editor(out)
+        except Exception as exc:
+            self._log_error("abweichungsanalyse", "Abweichungsanalyse", exc)
+            messagebox.showerror("Abweichungsanalyse-Fehler", str(exc))
+
+    def _ensure_abweichungs_editor_table(self):
+        """Speichert den Bearbeitungsstand der Abweichungsanalyse, ohne die Excel-Datei zu verändern."""
+        with sqlite3.connect(DB_PATH) as con:
+            con.execute("""\nCREATE TABLE IF NOT EXISTS tbl_abweichungs_editor (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,\nquelle_datei TEXT,
+                    pzn TEXT,\nartikel TEXT,
+                    feld TEXT,\nmanuell TEXT,
+                    programm TEXT,\nstatus TEXT DEFAULT 'offen',
+                    kommentar TEXT,\nbearbeiter TEXT,
+                    erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,\nbearbeitet_am TEXT,
+                    UNIQUE(quelle_datei, pzn, feld, manuell, programm)\n)
+            """)
+            con.commit()
+
+    def _abweichungs_editor_text_clean(self, value):
+        """Normiert Freitext für robuste Vergleiche im Abweichungseditor."""
+        return re.sub(r"\s+", " ", str(value or "")).strip()
+
+    def _abweichungs_editor_text_equal(self, left, right):
+        return self._abweichungs_editor_text_clean(left).lower() == self._abweichungs_editor_text_clean(right).lower()
+
+    def _abweichungs_editor_is_already_learned(self, pzn_alt, pzn_nmg="", austauschtext=""):
+        """Prüft, ob genau diese manuelle Korrektur bereits aktiv gelernt ist.\n
+        Wichtig: Ein abweichender bereits gelernter Wert darf nicht unterdrückt werden,\nweil das ein echter Konflikt für die manuelle Prüfung sein kann. Unterdrückt
+        wird nur, wenn die aktive Austauschdatenbank bereits dieselbe NMG-PZN oder\ndenselben Austauschtext zur Alt-PZN enthält.
+        """
+        pzn_alt = self._normalize_pzn_input(pzn_alt)
+        pzn_nmg = self._normalize_pzn_input(pzn_nmg)
+        austauschtext = self._abweichungs_editor_text_clean(austauschtext)
+        if not pzn_alt or (not pzn_nmg and not austauschtext):
+            return False
+        try:
+            with sqlite3.connect(DB_PATH) as con:
+                con.row_factory = sqlite3.Row
+                rows = con.execute("""\nSELECT pzn_alt, pzn_nmg, freitext_austausch
+                    FROM tbl_austauschdatenbank\nWHERE COALESCE(status, 'aktiv') = 'aktiv'
+                      AND (pzn_alt = ? OR printf('%08d', CAST(pzn_alt AS INTEGER)) = ?)\n""", (pzn_alt, pzn_alt)).fetchall()
+            for item in rows:
+                learned_nmg = self._normalize_pzn_input(item["pzn_nmg"] or "")
+                learned_text = self._abweichungs_editor_text_clean(item["freitext_austausch"] or "")
+                if pzn_nmg and learned_nmg and learned_nmg == pzn_nmg:
+                    return True
+                if austauschtext and learned_text and self._abweichungs_editor_text_equal(learned_text, austauschtext):
+                    return True
+        except Exception:
+            return False
+        return False
+
+    def _import_abweichungs_editor_file(self, output_file):
+        """Liest nur die echten fachlichen Abweichungsblätter ein.\n
+        Der Editor rekonstruiert Abweichungen nicht mehr selbst aus Programm- und\nmanueller Auswertung. Quelle sind ausschließlich die vom Vergleich erzeugten
+        Blätter NMG_ZUORDNUNG und AUSTAUSCH. Dadurch erscheinen keine Fälle mehr,\ndie nur gefüllt sind, aber fachlich nicht abweichen.
+        """
+        self._ensure_abweichungs_editor_table()
+        path = Path(output_file)
+        if not path.exists():
+            raise FileNotFoundError(f"Abweichungsanalyse nicht gefunden: {path}")
+        wb = load_workbook(path, read_only=True, data_only=True)
+        wanted_sheets = [name for name in ("NMG_ZUORDNUNG", "AUSTAUSCH") if name in wb.sheetnames]
+        if not wanted_sheets:
+            raise ValueError("Die Datei enthält keine verwertbaren Blätter 'NMG_ZUORDNUNG' oder 'AUSTAUSCH'.")
+
+        def read_sheet(sheet_name):
+            ws = wb[sheet_name]
+            rows = []
+            headers = [str(v or "").strip().lower() for v in next(ws.iter_rows(min_row=1, max_row=1, values_only=True))]
+
+            def find_col(*needles):
+                for idx, header in enumerate(headers):
+                    normalized = header.replace("-", " ").replace("_", " ")
+                    if all(str(n).lower() in normalized for n in needles):
+                        return idx
+                return None
+
+            pzn_idx = find_col("pzn")
+            artikel_idx = find_col("artikel")
+            diff_idx = find_col("abweichende")
+            if sheet_name == "NMG_ZUORDNUNG":
+                man_idx = find_col("manuell", "pzn", "nmg")
+                prog_idx = find_col("programm", "pzn", "nmg")
+                feld = "PZN NMG"
+            else:
+                man_idx = find_col("manuell", "austausch")
+                prog_idx = find_col("programm", "austausch")
+                feld = "austauschbar gegen"
+
+            if pzn_idx is None or man_idx is None or prog_idx is None:
+                return rows
+            for raw in ws.iter_rows(min_row=2, values_only=True):
+                values = list(raw)
+                pzn = self._normalize_pzn_input(values[pzn_idx] if pzn_idx < len(values) else "")
+                if not pzn:
+                    continue
+                artikel = self._abweichungs_editor_text_clean(values[artikel_idx] if artikel_idx is not None and artikel_idx < len(values) else "")
+                manuell = self._abweichungs_editor_text_clean(values[man_idx] if man_idx < len(values) else "")
+                programm = self._abweichungs_editor_text_clean(values[prog_idx] if prog_idx < len(values) else "")
+
+                if sheet_name == "NMG_ZUORDNUNG":
+                    man_norm = self._normalize_pzn_input(manuell)
+                    prog_norm = self._normalize_pzn_input(programm)
+                    if not man_norm and not prog_norm:
+                        continue
+                    if man_norm == prog_norm:
+                        continue
+                    manuell = man_norm
+                    programm = prog_norm
+                    already_learned = self._abweichungs_editor_is_already_learned(pzn, pzn_nmg=manuell)
+                else:
+                    if not manuell and not programm:
+                        continue
+                    if self._abweichungs_editor_text_equal(manuell, programm):
+                        continue
+                    already_learned = self._abweichungs_editor_is_already_learned(pzn, austauschtext=manuell)
+
+                status = "bereits_gelernt" if already_learned else "offen"
+                abw = self._abweichungs_editor_text_clean(values[diff_idx] if diff_idx is not None and diff_idx < len(values) else feld)
+                rows.append((pzn, artikel, feld, manuell, programm, status, abw))
+            return rows
+
+        imported_rows = []
+        for sheet_name in wanted_sheets:
+            imported_rows.extend(read_sheet(sheet_name))
+
+        inserted = 0
+        with sqlite3.connect(DB_PATH) as con:
+            # Alte, noch offene automatisch eingelesene Zeilen dieser Quelle entfernen, damit
+            # frühere fehlerhafte Editor-Importe nicht weiter angezeigt werden. Bewusst
+            # bearbeitete Status bleiben erhalten.
+            con.execute("""\nDELETE FROM tbl_abweichungs_editor
+                WHERE quelle_datei = ?\nAND COALESCE(status, 'offen') IN ('offen', 'bereits_gelernt')
+            """, (str(path),))
+            for pzn, artikel, feld, manuell, programm, status, abw in imported_rows:
+                cur = con.execute("""\nINSERT OR IGNORE INTO tbl_abweichungs_editor (
+                        quelle_datei, pzn, artikel, feld, manuell, programm, status, kommentar, bearbeiter\n) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    str(path), pzn, artikel, feld, manuell, programm, status,
+                    f"Abweichende Felder: {abw}" if abw else "", self.bearbeiter
+                ))
+                if cur.rowcount:
+                    inserted += 1
+            con.commit()
+        return inserted
+
+    def _abweichungs_editor_group_values(self, row):
+        """Sammelt alle Abweichungsfelder derselben PZN, damit NMG-PZN und Austauschtext zusammen angezeigt/geprüft werden."""
+        source = str(row["quelle_datei"] or "")
+        pzn = self._normalize_pzn_input(row["pzn"])
+        result = {
+            "nmg_manuell": "",
+            "nmg_programm": "",
+            "austausch_manuell": "",
+            "austausch_programm": "",
+        }
+        if not source or not pzn:
+            return result
+        try:
+            with sqlite3.connect(DB_PATH) as con:
+                con.row_factory = sqlite3.Row
+                rows = con.execute("""\nSELECT feld, manuell, programm
+                    FROM tbl_abweichungs_editor\nWHERE quelle_datei = ? AND pzn = ?
+                """, (source, pzn)).fetchall()
+            for item in rows:
+                feld = str(item["feld"] or "").strip().lower()
+                manuell = str(item["manuell"] or "").strip()
+                programm = str(item["programm"] or "").strip()
+                if "pzn" in feld and "nmg" in feld:
+                    if manuell and not result["nmg_manuell"]:
+                        result["nmg_manuell"] = self._normalize_pzn_input(manuell)
+                    if programm and not result["nmg_programm"]:
+                        result["nmg_programm"] = self._normalize_pzn_input(programm)
+                elif "austausch" in feld:
+                    if manuell and not result["austausch_manuell"]:
+                        result["austausch_manuell"] = manuell
+                    if programm and not result["austausch_programm"]:
+                        result["austausch_programm"] = programm
+        except Exception:
+            pass
+        return result
+
+    def _abweichungs_editor_row_is_already_learned(self, row):
+        """Prüft eine gruppierte Editor-Zeile gegen den aktuellen Lernstand.\n
+        Diese Prüfung läuft zusätzlich beim Anzeigen, damit Fälle verschwinden,\ndie nach dem Öffnen/Import der Abweichungsdatei gelernt wurden.
+        """
+        try:
+            pzn_alt = self._normalize_pzn_input(row["pzn"])
+            values = self._abweichungs_editor_group_values(row)
+            pzn_nmg = self._normalize_pzn_input(values.get("nmg_manuell")) or self._normalize_pzn_input(values.get("nmg_programm"))
+            austauschtext = str(values.get("austausch_manuell") or values.get("austausch_programm") or "").strip()
+            return self._abweichungs_editor_is_already_learned(pzn_alt, pzn_nmg=pzn_nmg, austauschtext=austauschtext)
+        except Exception:
+            return False
+
+    def _is_pruefbare_abweichung_editor_row(self, row):
+        """Offen zeigt nur echte fachliche Abweichungen zwischen manueller Korrektur und Programm-Ergebnis.\n
+        Geprüft wird pro PZN zusammengefasst:\n- unterschiedliche NMG-PZN -> anzeigen
+        - keine NMG-PZN, aber unterschiedlicher/gefüllter Austauschtext -> anzeigen\n- PZN vorhanden, aber NMG-PZN und Austauschtext leer -> nur unter Alle anzeigen
+        """
+        values = self._abweichungs_editor_group_values(row)
+        manuell_pzn = self._normalize_pzn_input(values.get("nmg_manuell"))
+        programm_pzn = self._normalize_pzn_input(values.get("nmg_programm"))
+        manuell_austausch = re.sub(r"\s+", " ", str(values.get("austausch_manuell") or "")).strip().lower()
+        programm_austausch = re.sub(r"\s+", " ", str(values.get("austausch_programm") or "")).strip().lower()
+
+        if not manuell_pzn and not programm_pzn and not manuell_austausch and not programm_austausch:
+            return False
+
+        if manuell_pzn or programm_pzn:
+            return manuell_pzn != programm_pzn
+
+        return manuell_austausch != programm_austausch
+
+    def _load_abweichungs_editor_rows(self, output_file=None, status_filter=None):
+        self._ensure_abweichungs_editor_table()
+        sql = """\nSELECT id, quelle_datei, pzn, artikel, feld, manuell, programm,
+                   COALESCE(status, 'offen') AS status, COALESCE(kommentar, '') AS kommentar,\nbearbeiter, erstellt_am, bearbeitet_am
+            FROM tbl_abweichungs_editor\nWHERE 1=1
+        """
+        params = []
+        if output_file:
+            sql += " AND quelle_datei = ?"
+            params.append(str(Path(output_file)))
+        if status_filter and status_filter != "alle":
+            sql += " AND COALESCE(status, 'offen') = ?"
+            params.append(status_filter)
+        sql += " ORDER BY datetime(COALESCE(bearbeitet_am, erstellt_am)) DESC, id DESC"
+        with sqlite3.connect(DB_PATH) as con:
+            con.row_factory = sqlite3.Row
+            rows = con.execute(sql, params).fetchall()
+
+        if status_filter == "offen":
+            rows = [
+                row for row in rows
+                if self._is_pruefbare_abweichung_editor_row(row)
+                and not self._abweichungs_editor_row_is_already_learned(row)
+            ]
+
+        # Im Editor darf jede Alt-PZN nur einmal erscheinen.
+        # Mehrere Feldabweichungen / Varianten werden in der Detailanzeige zusammengefasst.
+        grouped = {}
+        for row in rows:
+            key = (str(row["quelle_datei"] or ""), self._normalize_pzn_input(row["pzn"]))
+            if not key[1]:
+                continue
+            if key not in grouped:
+                grouped[key] = row
+        return list(grouped.values())
+
+    def _abweichungs_editor_pzn_summary(self, row):
+        """Zählt alle Editor-Zeilen und Varianten zu einer Alt-PZN für Anzeige/Aktionen."""
+        source = str(row["quelle_datei"] or "")
+        pzn = self._normalize_pzn_input(row["pzn"])
+        result = {"ids": [], "anzahl": 0, "nmg_varianten": [], "austausch_varianten": []}
+        if not source or not pzn:
+            return result
+        try:
+            with sqlite3.connect(DB_PATH) as con:
+                con.row_factory = sqlite3.Row
+                rows = con.execute("""\nSELECT id, feld, manuell, programm
+                    FROM tbl_abweichungs_editor\nWHERE quelle_datei = ? AND pzn = ?
+                    ORDER BY id\n""", (source, pzn)).fetchall()
+            nmg = []
+            austausch = []
+            for item in rows:
+                result["ids"].append(int(item["id"]))
+                feld = str(item["feld"] or "").strip().lower()
+                values = [str(item["manuell"] or "").strip(), str(item["programm"] or "").strip()]
+                if "pzn" in feld and "nmg" in feld:
+                    for value in values:
+                        normalized = self._normalize_pzn_input(value)
+                        if normalized and normalized not in nmg:
+                            nmg.append(normalized)
+                elif "austausch" in feld:
+                    for value in values:
+                        cleaned = re.sub(r"\s+", " ", value).strip()
+                        if cleaned and cleaned not in austausch:
+                            austausch.append(cleaned)
+            result["anzahl"] = len(rows)
+            result["nmg_varianten"] = nmg
+            result["austausch_varianten"] = austausch
+        except Exception:
+            pass
+        return result
+
+    def _lookup_editor_artikel_basis(self, pzn):
+        """Liest Artikel, DF, PCK, APU und NMG-Rabatt aus den verfügbaren Stammdaten."""
+        pzn = self._normalize_pzn_input(pzn)
+        result = {"artikel": "", "df": "", "pck": "", "apu": "", "nmg_rabatt": ""}
+        if not pzn:
+            return result
+        candidates = [
+            ("tbl_artikelstamm", {
+                "artikel": ["artikel", "artikelname", "bezeichnung"],
+                "df": ["df", "dar", "darreichungsform"],
+                "pck": ["pck", "packung", "pack"],
+                "apu": ["apu", "hap", "taxe_ek", "taxe_vk"],
+                "nmg_rabatt": ["nmg_rabatt", "rabatt", "rabatt_prozent", "pk_rabatt"],
+            }),
+            ("tbl_pzn_basisdaten", {
+                "artikel": ["artikel", "artikelname", "bezeichnung"],
+                "df": ["df", "dar", "darreichungsform"],
+                "pck": ["pck", "packung", "pack"],
+                "apu": ["apu", "hap", "taxe_ek", "taxe_vk"],
+                "nmg_rabatt": ["nmg_rabatt", "rabatt", "rabatt_prozent", "pk_rabatt"],
+            }),
+            ("tbl_nmg_stamm", {
+                "artikel": ["artikel", "artikelname", "bezeichnung"],
+                "df": ["df", "dar", "darreichungsform"],
+                "pck": ["pck", "packung", "pack"],
+                "apu": ["apu", "hap", "taxe_ek", "taxe_vk"],
+                "nmg_rabatt": ["nmg_rabatt", "rabatt", "rabatt_prozent", "pk_rabatt"],
+            }),
+            ("nmg_rabatte", {
+                "nmg_rabatt": ["nmg_rabatt", "rabatt", "rabatt_prozent", "pk_rabatt", "wert"],
+            }),
+        ]
+        try:
+            with sqlite3.connect(DB_PATH) as con:
+                con.row_factory = sqlite3.Row
+                for table, fields in candidates:
+                    try:
+                        cols = {r[1].lower(): r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()}
+                        if not cols or "pzn" not in cols:
+                            continue
+                        wanted = []
+                        aliases = []
+                        for alias, names in fields.items():
+                            col = next((cols[n.lower()] for n in names if n.lower() in cols), None)
+                            if col:
+                                wanted.append(f"{col} AS {alias}")
+                                aliases.append(alias)
+                        if not wanted:
+                            continue
+                        row = con.execute(f"SELECT {', '.join(wanted)} FROM {table} WHERE {cols['pzn']} = ? LIMIT 1", (pzn,)).fetchone()
+                        if not row:
+                            continue
+                        for alias in aliases:
+                            value = str(row[alias] or "").strip()
+                            if value and not result.get(alias):
+                                result[alias] = value
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return result
+
+    def _abweichungs_editor_changed_fields_text(self, row):
+        """Beschreibt kompakt, welche fachlichen Felder wirklich voneinander abweichen."""
+        values = self._abweichungs_editor_group_values(row)
+        manuell_pzn = self._normalize_pzn_input(values.get("nmg_manuell"))
+        programm_pzn = self._normalize_pzn_input(values.get("nmg_programm"))
+        manuell_austausch = re.sub(r"\s+", " ", str(values.get("austausch_manuell") or "")).strip()
+        programm_austausch = re.sub(r"\s+", " ", str(values.get("austausch_programm") or "")).strip()
+        changed = []
+        if manuell_pzn != programm_pzn and (manuell_pzn or programm_pzn):
+            changed.append("NMG-PZN")
+        if manuell_austausch.lower() != programm_austausch.lower() and (manuell_austausch or programm_austausch):
+            changed.append("Austauschbar gegen")
+        return ", ".join(changed) if changed else "keine Artikelabweichung"
+
+    def _abweichungs_editor_display_values(self, row):
+        """Bereitet die kompakten Anzeigespalten des Abweichungseditors auf."""
+        pzn = self._normalize_pzn_input(row["pzn"])
+        basis = self._lookup_editor_artikel_basis(pzn)
+        artikel = str(row["artikel"] or "").strip() or basis.get("artikel", "")
+        df_value = basis.get("df", "")
+        pck_value = basis.get("pck", "")
+
+        values = self._abweichungs_editor_group_values(row)
+        # Anzeige bevorzugt die manuelle/korrigierte Angabe; falls leer, wird das Programm-Ergebnis gezeigt.
+        nmg_pzn = self._normalize_pzn_input(values.get("nmg_manuell")) or self._normalize_pzn_input(values.get("nmg_programm"))
+        austausch_value = str(values.get("austausch_manuell") or values.get("austausch_programm") or "").strip()
+        nmg_basis = self._lookup_editor_artikel_basis(nmg_pzn) if nmg_pzn else {"artikel": "", "apu": "", "nmg_rabatt": ""}
+        nmg_artikel = nmg_basis.get("artikel", "")
+        changed_fields = self._abweichungs_editor_changed_fields_text(row)
+        return artikel, df_value, pck_value, nmg_pzn, nmg_artikel, austausch_value, changed_fields, nmg_basis.get("nmg_rabatt", ""), nmg_basis.get("apu", "")
+
+    def show_abweichungs_editor(self, output_file=None):
+        """Editor für Abweichungsanalyse: Abweichungen prüfen, markieren und als Lernvorschlag übernehmen.\n
+        Der Editor läuft bewusst in einem eigenen Fenster, damit die aktuell geöffnete\nHauptseite erhalten bleibt. So kann zwischen Analyse, Schulbank und Editor
+        gewechselt werden, ohne dass der Bearbeitungsstand aus der Ansicht verschwindet.\n"""
+        if output_file:
+            try:
+                self._import_abweichungs_editor_file(output_file)
+            except Exception as exc:
+                messagebox.showwarning("Abweichungsanalyse-Editor", f"Abweichungsdatei konnte nicht vollständig eingelesen werden:\n{exc}")
+
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title("Abweichungsanalyse-Editor")
+        win.geometry("1280x760")
+        win.minsize(1050, 620)
+        win.configure(bg="#f5f7fb")
+        # Eigenständiges Fenster: soll in der Taskleiste erscheinen, minimierbar und maximierbar bleiben.
+        try:
+            win.state("zoomed")
+        except Exception:
+            pass
+        win.columnconfigure(0, weight=1)
+        win.rowconfigure(1, weight=1)
+
+        header = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        header.grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 8))
+        header.columnconfigure(0, weight=1)
+        tk.Label(
+            header,
+            text="Abweichungsanalyse-Editor",
+            font=("Arial", 20, "bold"),
+            fg="#0b4a86",
+            bg="#ffffff"
+        ).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 2))
+        tk.Label(
+            header,
+            text="Abweichungen im Programm prüfen. Die Excel-Ausgabe bleibt erhalten; Lernvorschläge entstehen erst durch bewusste Übernahme.",
+            font=("Arial", 10),
+            fg="#333",
+            bg="#ffffff"
+        ).grid(row=1, column=0, sticky="w", padx=14, pady=(0, 12))
+        win_buttons = tk.Frame(header, bg="#ffffff")
+        win_buttons.grid(row=0, column=1, rowspan=2, sticky="e", padx=14, pady=12)
+        tk.Button(win_buttons, text="Minimieren", command=win.iconify, padx=10, pady=6).pack(side="left", padx=(0, 6))
+        tk.Button(win_buttons, text="Maximieren", command=lambda: win.state("zoomed"), padx=10, pady=6).pack(side="left", padx=(0, 6))
+        tk.Button(win_buttons, text="Fenster schließen", command=win.destroy, padx=12, pady=6).pack(side="left")
+
+        body = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        body.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 14))
+        body.columnconfigure(0, weight=1)
+        body.columnconfigure(1, weight=0)
+        body.rowconfigure(1, weight=1)
+
+        top = tk.Frame(body, bg="#ffffff")
+        top.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        tk.Label(top, text="Filter:", bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).pack(side="left", padx=(0, 6))
+        status_var = tk.StringVar(value="offen")
+        source_label = Path(output_file).name if output_file else "alle Abweichungen"
+        tk.Label(top, text=f"Quelle: {source_label}", bg="#ffffff", fg="#333").pack(side="right")
+
+        columns = ("id", "anzahl", "pzn", "artikel", "df", "pck", "nmg_pzn", "nmg_artikel", "austauschbar", "abweichende_felder", "nmg_rabatt", "apu", "status")
+        tree = ttk.Treeview(body, columns=columns, show="headings", selectmode="extended")
+        tree.grid(row=1, column=0, sticky="nsew")
+        headings = {
+            "id": "ID",
+            "anzahl": "Anzahl",
+            "pzn": "PZN",
+            "artikel": "Artikel",
+            "df": "DF",
+            "pck": "PCK (PACK)",
+            "nmg_pzn": "NMG-PZN",
+            "nmg_artikel": "NMG-Artikel",
+            "austauschbar": "Austauschbar gegen",
+            "abweichende_felder": "Abweichende Felder",
+            "nmg_rabatt": "NMG-Rabatt",
+            "apu": "APU",
+            "status": "Status",
+        }
+        widths = {
+            "id": 60,
+            "anzahl": 70,
+            "pzn": 95,
+            "artikel": 280,
+            "df": 80,
+            "pck": 120,
+            "nmg_pzn": 105,
+            "nmg_artikel": 260,
+            "austauschbar": 300,
+            "abweichende_felder": 210,
+            "nmg_rabatt": 110,
+            "apu": 95,
+            "status": 120,
+        }
+        display_columns_without_status = ("id", "anzahl", "pzn", "artikel", "df", "pck", "nmg_pzn", "nmg_artikel", "austauschbar", "abweichende_felder", "nmg_rabatt", "apu")
+        display_columns_with_status = ("id", "anzahl", "pzn", "artikel", "df", "pck", "nmg_pzn", "nmg_artikel", "austauschbar", "abweichende_felder", "nmg_rabatt", "apu", "status")
+        for col in columns:
+            tree.heading(col, text=headings[col])
+            tree.column(col, width=widths[col], anchor="w", stretch=(col in {"artikel", "nmg_artikel", "austauschbar"}))
+        try:
+            self._make_tree_sortable(tree, columns, headings)
+        except Exception:
+            pass
+        scroll = tk.Scrollbar(body, orient="vertical", command=tree.yview)
+        scroll.grid(row=1, column=0, sticky="nse")
+        hscroll = tk.Scrollbar(body, orient="horizontal", command=tree.xview)
+        hscroll.grid(row=2, column=0, sticky="ew", pady=(0, 6))
+        tree.configure(yscrollcommand=scroll.set, xscrollcommand=hscroll.set)
+
+        side = tk.Frame(body, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1, width=285)
+        side.grid(row=1, column=1, sticky="ns", padx=(16, 0))
+        side.grid_propagate(False)
+        detail = tk.StringVar(value="Abweichung auswählen.")
+        tk.Label(side, text="Aktionen", font=("Arial", 14, "bold"), fg="#0b4a86", bg="#f8fbff").pack(anchor="w", padx=16, pady=(16, 8))
+        tk.Label(side, textvariable=detail, justify="left", wraplength=245, bg="#f8fbff", fg="#333").pack(anchor="w", padx=16, pady=(0, 14))
+
+        row_map = {}
+
+        def reload_rows():
+            for iid in tree.get_children(""):
+                tree.delete(iid)
+            row_map.clear()
+            current_filter = status_var.get()
+            tree["displaycolumns"] = display_columns_with_status if current_filter == "alle" else display_columns_without_status
+            rows = self._load_abweichungs_editor_rows(output_file, current_filter)
+            for row in rows:
+                artikel, df_value, pck_value, nmg_value, nmg_artikel, austausch_value, changed_fields, nmg_rabatt, apu = self._abweichungs_editor_display_values(row)
+                summary = self._abweichungs_editor_pzn_summary(row)
+                iid = tree.insert("", "end", values=(
+                    row["id"], summary.get("anzahl", 1) or 1, row["pzn"], artikel, df_value, pck_value,
+                    nmg_value, nmg_artikel, austausch_value, changed_fields, nmg_rabatt, apu, row["status"]
+                ))
+                row_map[iid] = {"row": row, "ids": summary.get("ids") or [int(row["id"])], "summary": summary}
+            self.status.set(f"Abweichungsanalyse-Editor: {len(rows)} Einträge angezeigt.")
+
+        def selected_ids():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Abweichungsanalyse-Editor", "Bitte zuerst einen oder mehrere Einträge auswählen.")
+                return []
+            ids = []
+            for iid in sel:
+                data = row_map.get(iid)
+                if isinstance(data, dict):
+                    ids.extend(int(x) for x in data.get("ids", []) if x)
+                else:
+                    try:
+                        ids.append(int(tree.item(iid, "values")[0]))
+                    except Exception:
+                        pass
+            return sorted(set(ids))
+
+        def selected_row(show_message=True):
+            sel = tree.selection()
+            if not sel:
+                if show_message:
+                    messagebox.showinfo("Abweichungsanalyse-Editor", "Bitte zuerst einen Eintrag auswählen.")
+                return None
+            data = row_map.get(sel[0])
+            if isinstance(data, dict):
+                return data.get("row")
+            return data
+
+        def update_detail(event=None):
+            row = selected_row(show_message=False)
+            if not row:
+                detail.set("Bitte einen Eintrag auswählen.")
+                return
+            artikel, df_value, pck_value, nmg_value, nmg_artikel, austausch_value, changed_fields, nmg_rabatt, apu = self._abweichungs_editor_display_values(row)
+            summary = self._abweichungs_editor_pzn_summary(row)
+            nmg_varianten = "; ".join(summary.get("nmg_varianten") or [])
+            austausch_varianten = "; ".join(summary.get("austausch_varianten") or [])
+            detail.set(
+                f"PZN: {row['pzn']}\n"
+                f"Artikel: {artikel or ''}\n"
+                f"DF: {df_value or ''}\n"
+                f"PCK: {pck_value or ''}\n"
+                f"NMG-PZN: {nmg_value or ''}\n"
+                f"NMG-Artikel: {nmg_artikel or ''}\n"
+                f"Abweichende Felder: {changed_fields or ''}\n"
+                f"NMG-Rabatt: {nmg_rabatt or ''}\n"
+                f"APU: {apu or ''}\n"
+                f"Anzahl Abweichungen: {summary.get('anzahl', 1) or 1}\n\n"
+                f"NMG-PZN-Varianten:\n{nmg_varianten or '-'}\n\n"
+                f"Austausch-Varianten:\n{austausch_varianten or '-'}\n\n"
+                f"Status: {row['status']}"
+            )
+
+        tree.bind("<<TreeviewSelect>>", update_detail)
+
+        def set_status(status):
+            ids = selected_ids()
+            if not ids:
+                return
+            kommentar = ""
+            if status in ("falsch", "ignoriert", "abgelehnt"):
+                kommentar = simpledialog.askstring("Kommentar", "Kommentar optional:") or ""
+            if status == "manuelle_pruefung":
+                kommentar = kommentar or "Zur manuellen Prüfung aus Abweichungseditor"
+            with sqlite3.connect(DB_PATH) as con:
+                con.executemany("""\nUPDATE tbl_abweichungs_editor
+                    SET status = ?, kommentar = COALESCE(NULLIF(?, ''), kommentar),\nbearbeitet_am = CURRENT_TIMESTAMP, bearbeiter = ?
+                    WHERE id = ?\n""", [(status, kommentar, self.bearbeiter, item_id) for item_id in ids])
+                con.commit()
+            reload_rows()
+            if status == "manuelle_pruefung":
+                messagebox.showinfo("Manuelle Prüfung", "Der Fall wurde in die Schulbank → Manuelle Prüfung übergeben.")
+
+        def save_as_lernvorschlag():
+            row = selected_row()
+            if not row:
+                return
+            changed_fields = self._abweichungs_editor_changed_fields_text(row)
+            if changed_fields == "keine Artikelabweichung":
+                messagebox.showinfo("Lernvorschlag", "Dieser Fall enthält keine abweichende NMG-PZN und keinen abweichenden Austauschtext.")
+                return
+            pzn_alt = self._normalize_pzn_input(row["pzn"])
+            values = self._abweichungs_editor_group_values(row)
+            pzn_nmg = self._normalize_pzn_input(values.get("nmg_manuell")) or self._normalize_pzn_input(values.get("nmg_programm"))
+            freitext = str(values.get("austausch_manuell") or values.get("austausch_programm") or "").strip()
+            if not pzn_nmg and not freitext:
+                freitext = simpledialog.askstring("Lernvorschlag", "Austauschbar gegen / Freitext:", initialvalue="") or ""
+            if not pzn_alt:
+                messagebox.showwarning("Lernvorschlag", "Keine gültige PZN vorhanden.")
+                return
+            if not pzn_nmg and not freitext:
+                messagebox.showwarning("Lernvorschlag", "Bitte PZN NMG oder Austauschtext angeben.")
+                return
+            if pzn_nmg and pzn_alt == pzn_nmg:
+                messagebox.showinfo("Lernvorschlag", "PZN alt und PZN NMG sind identisch. Kein Lernvorschlag nötig.")
+                return
+            if self._insert_or_update_lernvorschlag(pzn_alt, row["artikel"] or "", pzn_nmg, freitext, "Neue Lernvorschläge"):
+                with sqlite3.connect(DB_PATH) as con:
+                    ids = selected_ids() or [int(row["id"])]
+                    con.executemany("""\nUPDATE tbl_abweichungs_editor
+                        SET status='lernvorschlag', bearbeitet_am=CURRENT_TIMESTAMP, bearbeiter=?, kommentar='Als Lernvorschlag gespeichert'\nWHERE id=?
+                    """, [(self.bearbeiter, item_id) for item_id in ids])
+                    con.commit()
+                messagebox.showinfo("Lernvorschlag", "Lernvorschlag wurde gespeichert.")
+                reload_rows()
+
+        def add_btn(text, cmd, color="#0b4a86"):
+            tk.Button(side, text=text, command=cmd, bg=color, fg="white", activebackground=color,
+                      relief="flat", font=("Arial", 10, "bold"), padx=10, pady=8).pack(fill="x", padx=16, pady=4)
+
+        for label, val in (("Offen", "offen"), ("Richtig", "richtig"), ("Falsch", "falsch"), ("Lernvorschlag", "lernvorschlag"), ("Abgelehnt", "abgelehnt"), ("Ignoriert", "ignoriert"), ("Alle", "alle")):
+            tk.Radiobutton(top, text=label, variable=status_var, value=val, command=reload_rows, bg="#ffffff").pack(side="left", padx=(0, 8))
+
+        add_btn("✓ Richtig erkannt", lambda: set_status("richtig"), "#11823b")
+        add_btn("✗ Falsch erkannt", lambda: set_status("falsch"), "#9b1c1c")
+        add_btn("🎓 Für Schulbank lernen", save_as_lernvorschlag, "#0b4a86")
+        add_btn("🔎 In manuelle Prüfung", lambda: set_status("manuelle_pruefung"), "#6b4fb3")
+        add_btn("✗ Ablehnen", lambda: set_status("abgelehnt"), "#9b1c1c")
+        add_btn("↷ Ignorieren", lambda: set_status("ignoriert"), "#8b5a00")
+        tk.Button(side, text="Excel öffnen", command=lambda: _open_file(Path(output_file)) if output_file else None, padx=10, pady=7).pack(fill="x", padx=16, pady=(14, 4))
+        tk.Button(side, text="Aktualisieren", command=reload_rows, padx=10, pady=7).pack(fill="x", padx=16, pady=4)
+
+        reload_rows()
+
+    def report_callback_exception(self, exc, val, tb):
+        """Zentrale Fehlerprotokollierung für Tkinter-Callbacks."""
+        try:
+            import traceback as _traceback
+            details = "".join(_traceback.format_exception(exc, val, tb))
+            log_event("fehler", "Programmfehler", details, "ERROR", user=getattr(self, "bearbeiter", ""))
+        except Exception:
+            pass
+        try:
+            messagebox.showerror("Programmfehler", f"Es ist ein Fehler aufgetreten:\n{val}")
+        except Exception:
+            pass
+
+    def _log_action(self, category, action, details=""):
+        try:
+            return log_event(category, action, details, user=getattr(self, "bearbeiter", ""))
+        except Exception:
+            return None
+
+    def _log_error(self, category, action, exc):
+        try:
+            return log_exception(category, action, exc, user=getattr(self, "bearbeiter", ""))
+        except Exception:
+            return None
+
+    def show_protocol_center(self):
+        """Eigenes Fenster für Protokolle: anzeigen, mailen, Supportpaket, Admin-Löschen."""
+        self._log_action("protokolle", "Protokoll-Center geöffnet")
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title("Protokolle")
+        win.geometry("1180x720")
+        win.minsize(980, 560)
+        win.configure(bg="#f5f7fb")
+        try:
+            win.state("zoomed")
+        except Exception:
+            pass
+        win.columnconfigure(0, weight=1)
+        win.rowconfigure(1, weight=1)
+
+        header = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        header.grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 8))
+        header.columnconfigure(0, weight=1)
+        tk.Label(header, text="Protokolle", font=("Arial", 20, "bold"), fg="#0b4a86", bg="#ffffff").grid(row=0, column=0, sticky="w", padx=14, pady=(12, 2))
+        tk.Label(header, text=f"Protokollverzeichnis: {PROTOCOL_ROOT}", font=("Arial", 10), fg="#333", bg="#ffffff").grid(row=1, column=0, sticky="w", padx=14, pady=(0, 12))
+        tk.Button(header, text="Ordner öffnen", command=lambda: _open_folder(PROTOCOL_ROOT), padx=12, pady=6).grid(row=0, column=1, rowspan=2, sticky="e", padx=14, pady=12)
+
+        body = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        body.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 14))
+        body.columnconfigure(0, weight=0)
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(1, weight=1)
+
+        filter_frame = tk.Frame(body, bg="#ffffff")
+        filter_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=10)
+        tk.Label(filter_frame, text="Kategorie:", bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).pack(side="left", padx=(0, 8))
+        category_var = tk.StringVar(value="Alle")
+        categories = ["Alle", "Programm", "Fehler", "Neue_Auswertung", "Schulbank", "Datenaktualisierung", "Produktanalyse", "Marktanalyse", "Abweichungsanalyse", "Update_Backup", "Admin", "Protokolle"]
+        category_box = ttk.Combobox(filter_frame, textvariable=category_var, values=categories, state="readonly", width=28)
+        category_box.pack(side="left")
+
+        columns = ("category", "name", "mtime", "size")
+        tree = ttk.Treeview(body, columns=columns, show="headings", selectmode="browse", height=18)
+        tree.grid(row=1, column=0, sticky="nsew", padx=(12, 8), pady=(0, 12))
+        for col, label, width in [
+            ("category", "Bereich", 155),
+            ("name", "Datei", 180),
+            ("mtime", "Geändert", 145),
+            ("size", "Größe", 80),
+        ]:
+            tree.heading(col, text=label)
+            tree.column(col, width=width, anchor="w")
+        yscroll = tk.Scrollbar(body, orient="vertical", command=tree.yview)
+        yscroll.grid(row=1, column=0, sticky="nse", padx=(0, 8), pady=(0, 12))
+        tree.configure(yscrollcommand=yscroll.set)
+
+        right = tk.Frame(body, bg="#ffffff")
+        right.grid(row=1, column=1, sticky="nsew", padx=(0, 12), pady=(0, 12))
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(0, weight=1)
+        text_box = tk.Text(right, wrap="word", font=("Consolas", 10), bg="#fbfdff")
+        text_box.grid(row=0, column=0, sticky="nsew")
+        text_scroll = tk.Scrollbar(right, orient="vertical", command=text_box.yview)
+        text_scroll.grid(row=0, column=1, sticky="ns")
+        text_box.configure(yscrollcommand=text_scroll.set)
+
+        buttonbar = tk.Frame(right, bg="#ffffff")
+        buttonbar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        files = []
+
+        def selected_file():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Protokolle", "Bitte zuerst ein Protokoll auswählen.")
+                return None
+            idx = int(sel[0])
+            if idx < 0 or idx >= len(files):
+                return None
+            return files[idx]["path"]
+
+        def reload_list(*args):
+            nonlocal files
+            for iid in tree.get_children(""):
+                tree.delete(iid)
+            selected = category_var.get()
+            category = None if selected == "Alle" else selected.lower()
+            # Anzeigenamen werden intern als Ordnernamen genutzt.
+            files = list_protocol_files(category=None if selected == "Alle" else selected)
+            for idx, item in enumerate(files):
+                size = f"{int(item['size'] / 1024)} KB" if item["size"] >= 1024 else f"{item['size']} B"
+                tree.insert("", "end", iid=str(idx), values=(item["category"], item["name"], item["mtime"], size))
+            text_box.delete("1.0", "end")
+            text_box.insert("end", f"{len(files)} Protokoll(e) gefunden.\n")
+
+        def show_selected(event=None):
+            path = selected_file()
+            if not path:
+                return
+            try:
+                text_box.delete("1.0", "end")
+                text_box.insert("end", read_protocol_file(path))
+                self._log_action("protokolle", "Protokoll angezeigt", str(path))
+            except Exception as exc:
+                self._log_error("protokolle", "Protokoll anzeigen", exc)
+                messagebox.showerror("Protokolle", str(exc))
+
+        def send_selected():
+            path = selected_file()
+            if not path:
+                return
+            try:
+                attached = open_mail_with_attachment(path, DEFAULT_RECIPIENT, "NMG Analyse Protokoll")
+                if attached:
+                    messagebox.showinfo("Mail", "Mailentwurf wurde mit Anhang geöffnet.")
+                else:
+                    messagebox.showinfo("Mail", "Standard-Mailprogramm wurde geöffnet. Falls kein Anhang vorhanden ist, bitte die Datei manuell anhängen.")
+                self._log_action("protokolle", "Protokoll per Mail vorbereitet", str(path))
+            except Exception as exc:
+                self._log_error("protokolle", "Protokoll per Mail senden", exc)
+                messagebox.showerror("Mail", str(exc))
+
+        def support_package():
+            try:
+                package = create_support_package()
+                self._log_action("protokolle", "Supportpaket erstellt", str(package))
+                if messagebox.askyesno("Supportpaket", f"Supportpaket erstellt:\n{package}\n\nJetzt per Mail senden?"):
+                    open_mail_with_attachment(package, DEFAULT_RECIPIENT, "NMG Analyse Supportpaket")
+            except Exception as exc:
+                self._log_error("protokolle", "Supportpaket erstellen", exc)
+                messagebox.showerror("Supportpaket", str(exc))
+
+        def delete_selected_admin():
+            path = selected_file()
+            if not path:
+                return
+            password = simpledialog.askstring("Admin", "Admin-Passwort zum Löschen:", show="*")
+            if password != ADMIN_DB_PASSWORD:
+                messagebox.showwarning("Admin", "Falsches Passwort. Protokoll wurde nicht gelöscht.")
+                self._log_action("admin", "Protokoll löschen abgelehnt", str(path))
+                return
+            if not messagebox.askyesno("Protokoll löschen", f"Dieses Protokoll wirklich löschen?\n\n{path}"):
+                return
+            try:
+                delete_protocol_file(path)
+                self._log_action("admin", "Protokoll gelöscht", str(path))
+                reload_list()
+            except Exception as exc:
+                self._log_error("admin", "Protokoll löschen", exc)
+                messagebox.showerror("Admin", str(exc))
+
+        tk.Button(buttonbar, text="Aktualisieren", command=reload_list, padx=12, pady=7).pack(side="left", padx=(0, 8))
+        tk.Button(buttonbar, text="Per Mail senden", command=send_selected, bg="#0b4a86", fg="white", relief="flat", font=("Arial", 10, "bold"), padx=14, pady=8).pack(side="left", padx=(0, 8))
+        tk.Button(buttonbar, text="Supportpaket erstellen", command=support_package, bg="#11823b", fg="white", relief="flat", font=("Arial", 10, "bold"), padx=14, pady=8).pack(side="left", padx=(0, 8))
+        tk.Button(buttonbar, text="Admin: Löschen", command=delete_selected_admin, bg="#9b1c1c", fg="white", relief="flat", font=("Arial", 10, "bold"), padx=14, pady=8).pack(side="right")
+
+        category_box.bind("<<ComboboxSelected>>", reload_list)
+        tree.bind("<<TreeviewSelect>>", show_selected)
+        reload_list()
+
+    def show_backup_dialog(self):
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title("Backup & Wiederherstellung")
+        win.geometry("480x220")
+        tk.Label(win, text="Backup & Wiederherstellung", font=("Arial", 16, "bold")).pack(pady=16)
+        tk.Label(win, text="Beim Programmstart wird automatisch ein Tagesbackup erstellt.\nEs werden die letzten 7 Auto-Backups behalten.").pack(pady=4)
+        tk.Button(win, text="Backup jetzt manuell erstellen", command=self.create_backup, bg="#0b4a86", fg="white", padx=18, pady=8).pack(pady=6)
+        tk.Button(win, text="Backup wiederherstellen", command=self.restore_backup, padx=18, pady=8).pack(pady=6)
+        tk.Button(win, text="Backup-Ordner öffnen", command=lambda: _open_folder(Path(__file__).resolve().parent.parent / "backups")).pack(pady=6)
+
+    def create_backup(self):
+        self._log_action("update_backup", "Backup manuell gestartet")
+        try:
+            out = backup_erstellen()
+            self._log_action("update_backup", "Backup erstellt", str(out))
+            self.status.set(f"Backup erstellt: {out}")
+            messagebox.showinfo("Backup erstellt", f"Backup wurde erstellt:\n{out}")
+        except Exception as exc:
+            self._log_error("update_backup", "Backup erstellen", exc)
+            messagebox.showerror("Backup-Fehler", str(exc))
+
+    def restore_backup(self):
+        self._log_action("update_backup", "Backup-Wiederherstellung geöffnet")
+        file = filedialog.askopenfilename(title="Backup auswählen", filetypes=[("NMG Backup", "*.zip"), ("Alle Dateien", "*.*")])
+        if not file:
+            return
+        try:
+            info = backup_pruefen(file)
+            details = (f"Backup-Datei:\n{file}\n\nVersion: {info.get('app_version','unbekannt')}\nErstellt: {info.get('created_at','unbekannt')}\n\nAktuelle Datenbank wird vorher automatisch gesichert. Wiederherstellen?")
+            if not messagebox.askyesno("Backup wiederherstellen", details):
+                return
+            db = backup_wiederherstellen(file)
+            self._log_action("update_backup", "Backup wiederhergestellt", f"Quelle: {file} | Ziel: {db}")
+            init_db(DB_PATH)
+            self.status.set(f"Backup wiederhergestellt: {db}")
+            messagebox.showinfo("Wiederherstellung fertig", f"Datenbank wurde wiederhergestellt:\n{db}")
+        except Exception as exc:
+            self._log_error("update_backup", "Backup wiederherstellen", exc)
+            messagebox.showerror("Restore-Fehler", str(exc))
+
+
+    def install_update_dialog(self):
+        packages = []
+        try:
+            packages = find_update_packages()
+        except Exception:
+            packages = []
+
+        chosen_file = None
+        if packages:
+            newest = next((p for p in packages if p.get("is_newer")), packages[0])
+            label = "neues Update" if newest.get("is_newer") else "Updatepaket"
+            msg = (
+                f"Gefundenes {label} im Update-Ordner:\n\n"
+                f"{newest.get('name')}\n"
+                f"Zielversion: {newest.get('target_version')}\n"
+                f"Aktuelle Version: {APP_VERSION}\n\n"
+                f"Dieses Update jetzt installieren?"
+            )
+            if messagebox.askyesno("Update gefunden", msg):
+                chosen_file = str(newest.get("path"))
+
+        if not chosen_file:
+            chosen_file = filedialog.askopenfilename(
+                title="NMG-Updatepaket auswählen",
+                initialdir=str(UPDATE_DIR),
+                filetypes=[("NMG Update", "*.nmgupdate"), ("ZIP", "*.zip"), ("Alle Dateien", "*.*")]
+            )
+        if not chosen_file:
+            return
+        try:
+            manifest = validate_update_package(chosen_file)
+            target = manifest.get("target_version", "unbekannt")
+            notes = manifest.get("notes", "")
+            text = (
+                f"Updatepaket:\n{Path(chosen_file).name}\n\n"
+                f"Aktuelle Version: {APP_VERSION}\n"
+                f"Zielversion: {target}\n\n"
+                f"Vor dem Update wird automatisch ein Backup und ein Rücksprungpunkt erstellt.\n"
+                f"Datenbank, gespeicherte Analysen und Backups werden nicht überschrieben.\n\n"
+                f"Nach erfolgreichem Update wird das Programm automatisch neu gestartet.\n\n"
+                f"Hinweise:\n{notes}\n\nUpdate installieren?"
+            )
+            if not messagebox.askyesno("Update installieren", text):
+                return
+            result = install_update_package(chosen_file)
+            msg = (
+                f"Update installiert.\n\n"
+                f"Zielversion: {result.get('target_version')}\n"
+                f"Kopierte Dateien: {len(result.get('copied', []))}\n"
+                f"Backup: {result.get('backup')}\n"
+                f"Rücksprungpunkt: {result.get('rollback')}\n\n"
+                f"Das Programm wird jetzt neu gestartet."
+            )
+            self.status.set(msg)
+            messagebox.showinfo("Update installiert", msg)
+            try:
+                restart_application()
+                self.destroy()
+            except Exception as restart_exc:
+                messagebox.showwarning("Neustart", f"Update ist installiert, aber der automatische Neustart ist fehlgeschlagen.\n\n{restart_exc}\n\nBitte Programm manuell neu starten.")
+        except Exception as exc:
+            messagebox.showerror("Update-Fehler", str(exc))
+
+    def open_update_folder(self):
+        try:
+            open_updates_folder()
+        except Exception as exc:
+            messagebox.showerror("Update-Ordner", str(exc))
+
+
+    def rollback_dialog(self):
+        snaps = list_rollback_snapshots()
+        if not snaps:
+            messagebox.showinfo("Vorherige Version", "Es wurde noch kein Rücksprungpunkt gefunden. Rücksprungpunkte entstehen automatisch vor Updates.")
+            return
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title("Vorherige Version wiederherstellen")
+        win.geometry("720x420")
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+        tk.Label(win, text="Vorherige Version wiederherstellen", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 6))
+        tk.Label(win, text="Wählen Sie einen Rücksprungpunkt. Vor dem Zurückspielen wird der aktuelle Stand nochmals gesichert.", bg="#f5f7fb", fg="#333").pack(anchor="w", padx=22, pady=(0, 12))
+        lb = tk.Listbox(win, font=("Consolas", 10), height=12)
+        lb.pack(fill="both", expand=True, padx=22, pady=(0, 12))
+        for s in snaps:
+            lb.insert("end", f"{s.name}   ({datetime_from_mtime(s)})")
+        def do_restore():
+            sel = lb.curselection()
+            if not sel:
+                messagebox.showinfo("Auswahl", "Bitte Rücksprungpunkt auswählen.")
+                return
+            snap = snaps[sel[0]]
+            if not messagebox.askyesno("Rollback", f"Diesen Rücksprungpunkt wiederherstellen?\n\n{snap.name}\n\nDanach Programm neu starten."):
+                return
+            try:
+                res = restore_rollback_snapshot(snap)
+                messagebox.showinfo("Rollback fertig", f"Vorherige Version wurde wiederhergestellt.\n\nSicherheitskopie aktueller Stand:\n{res.get('safety')}\n\nBitte Programm schließen und neu starten.")
+                win.destroy()
+            except Exception as exc:
+                messagebox.showerror("Rollback-Fehler", str(exc))
+        bar = tk.Frame(win, bg="#f5f7fb")
+        bar.pack(fill="x", padx=22, pady=(0, 18))
+        tk.Button(bar, text="Abbrechen", command=win.destroy, padx=16, pady=8).pack(side="right", padx=(8,0))
+        tk.Button(bar, text="Wiederherstellen", command=do_restore, bg="#0b4a86", fg="white", padx=18, pady=8).pack(side="right")
+
+    def show_version(self):
+        text = versionsinfo() + f"\nUpdate-Ordner: {UPDATE_DIR}"
+        self.status.set(text)
+        messagebox.showinfo("Versionsinfo", text)
+
+    def clear_page(self):
+        for widget in self.page.winfo_children():
+            widget.destroy()
+        self.page.columnconfigure(0, weight=1)
+        self.page.rowconfigure(0, weight=1)
+        self.page.rowconfigure(1, weight=1)
+
+    def _page_header(self, title, subtitle=""):
+        header = tk.Frame(self.page, bg="#ffffff")
+        header.grid(row=0, column=0, sticky="ew", padx=14, pady=(8, 4))
+        tk.Label(header, text=title, font=("Arial", 15, "bold"), fg="#0b4a86", bg="#ffffff").pack(anchor="w")
+        if subtitle:
+            tk.Label(header, text=subtitle, font=("Arial", 9), fg="#666", bg="#ffffff").pack(anchor="w", pady=(2, 0))
+
+    def _action_page(self, title, subtitle, button_text, command, color="#0b4a86"):
+        self.clear_page()
+        self._page_header(title, subtitle)
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        tk.Button(
+            body,
+            text=button_text,
+            command=command,
+            bg=color,
+            fg="white",
+            activebackground=color,
+            relief="flat",
+            font=("Arial", 12, "bold"),
+            padx=20,
+            pady=10
+        ).pack(anchor="w", pady=8)
+
+
+    def _sort_key_for_tree(self, value):
+        """Robuste Sortierung für Treeview-Spalten: Zahlen, Datumswerte und Text."""
+        text = str(value or "").strip()
+        if not text:
+            return (0, "")
+        normalized = text.replace(".", "").replace(",", ".")
+        try:
+            return (1, float(normalized))
+        except Exception:
+            pass
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d.%m.%Y %H:%M:%S", "%d.%m.%Y"):
+            try:
+                from datetime import datetime
+                return (2, datetime.strptime(text[:19], fmt))
+            except Exception:
+                pass
+        return (3, text.lower())
+
+    def _make_tree_sortable(self, tree, columns, headings=None):
+        """Macht eine ttk.Treeview per Klick auf die Spaltenüberschrift sortierbar."""
+        headings = headings or {}
+        sort_state = {}
+
+        def sort_by(col):
+            reverse = sort_state.get(col, False)
+            items = []
+            for iid in tree.get_children(""):
+                try:
+                    items.append((self._sort_key_for_tree(tree.set(iid, col)), iid))
+                except Exception:
+                    items.append(((3, ""), iid))
+            items.sort(key=lambda item: item[0], reverse=reverse)
+            for index, (_, iid) in enumerate(items):
+                tree.move(iid, "", index)
+            sort_state[col] = not reverse
+
+            for c in columns:
+                label = headings.get(c, c)
+                if c == col:
+                    label += "  ▼" if reverse else "  ▲"
+                tree.heading(c, text=label, command=lambda cc=c: sort_by(cc))
+
+        for col in columns:
+            tree.heading(col, text=headings.get(col, col), command=lambda c=col: sort_by(c))
+
+    def _apply_output_period_header(self, output_file, zeitraum_monate=None):
+        """Benennt in der fertigen Auswertung die Absatzspalte passend zum Mapping-Zeitraum um.\n
+        Intern bleibt die Mapping-Standarddatei kompatibel mit dem Exporter.\nSichtbar in der fertigen Auswertung steht danach z. B.
+        "Abverkäufe 12 Monate" statt "Abverkäufe 6 Monate".\n"""
+        try:
+            zeitraum = int(zeitraum_monate or 0)
+        except Exception:
+            zeitraum = 0
+        if zeitraum not in (6, 12):
+            return
+
+        target_text = f"Abverkäufe {zeitraum} Monate"
+        try:
+            path = Path(output_file)
+            if not path.exists():
+                return
+            wb = load_workbook(path)
+            changed = False
+            for ws in wb.worksheets:
+                max_scan_row = min(ws.max_row, 10)
+                for row in ws.iter_rows(min_row=1, max_row=max_scan_row):
+                    for cell in row:
+                        value = str(cell.value or "").strip()
+                        normalized = value.lower().replace("ae", "ä")
+                        if value == "Abverkäufe 6 Monate" or normalized in {"abverkäufe 6 monate", "abverkaeufe 6 monate"}:
+                            cell.value = target_text
+                            changed = True
+                        elif "verkaufsmenge" in normalized and "6 monate" in normalized:
+                            cell.value = f"Verkaufsmenge der letzten {zeitraum} Monate"
+                            changed = True
+            if changed:
+                wb.save(path)
+        except Exception:
+            # Die Auswertung darf wegen einer reinen Überschriftenkorrektur nicht fehlschlagen.
+            pass
+
+
+    def _auswertungsvorlagen_dir(self):
+        path = DATA_DIR / "vorlagen" / "auswertungsvorlagen"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _template_meta_key(self, slot, suffix):
+        return f"auswertungsvorlage_slot_{int(slot)}_{suffix}"
+
+    def _list_auswertungsvorlagen(self):
+        """Liest bis zu drei hinterlegte Auswertungsvorlagen aus meta."""
+        templates = []
+        with sqlite3.connect(DB_PATH) as con:
+            con.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            for slot in (1, 2, 3):
+                path = ""
+                name = f"Vorlage {slot}"
+                source = ""
+                updated = ""
+                row = con.execute("SELECT value FROM meta WHERE key=?", (self._template_meta_key(slot, "path"),)).fetchone()
+                if row:
+                    path = row[0]
+                row = con.execute("SELECT value FROM meta WHERE key=?", (self._template_meta_key(slot, "name"),)).fetchone()
+                if row and row[0]:
+                    name = row[0]
+                row = con.execute("SELECT value FROM meta WHERE key=?", (self._template_meta_key(slot, "source"),)).fetchone()
+                if row:
+                    source = row[0]
+                row = con.execute("SELECT value FROM meta WHERE key=?", (self._template_meta_key(slot, "updated"),)).fetchone()
+                if row:
+                    updated = row[0]
+                if path and Path(path).exists():
+                    templates.append({"slot": slot, "name": name, "path": path, "source": source, "updated": updated})
+        return templates
+
+    def _get_selected_auswertungsvorlage_slot(self):
+        value = self._get_meta_value("auswertungsvorlage_selected_slot", "")
+        try:
+            slot = int(value)
+            return slot if slot in (1, 2, 3) else None
+        except Exception:
+            return None
+
+    def _set_selected_auswertungsvorlage_slot(self, slot):
+        if slot in (1, 2, 3):
+            self._set_meta_value("auswertungsvorlage_selected_slot", str(slot))
+        else:
+            self._set_meta_value("auswertungsvorlage_selected_slot", "")
+
+    def _template_combo_values(self):
+        values = ["Keine Vorlage / Standard"]
+        for item in self._list_auswertungsvorlagen():
+            values.append(f"{item['slot']}: {item['name']}")
+        return values
+
+    def _template_label_for_selected_slot(self):
+        selected = self._get_selected_auswertungsvorlage_slot()
+        if selected:
+            for item in self._list_auswertungsvorlagen():
+                if item["slot"] == selected:
+                    return f"{item['slot']}: {item['name']}"
+        return "Keine Vorlage / Standard"
+
+    def _slot_from_template_label(self, label):
+        text = str(label or "").strip()
+        if len(text) >= 2 and text[0].isdigit() and text[1] == ":":
+            slot = int(text[0])
+            return slot if slot in (1, 2, 3) else None
+        return None
+
+    def _get_auswertungsvorlage_path(self, slot=None):
+        slot = slot or self._get_selected_auswertungsvorlage_slot()
+        if slot not in (1, 2, 3):
+            return None
+        with sqlite3.connect(DB_PATH) as con:
+            row = con.execute("SELECT value FROM meta WHERE key=?", (self._template_meta_key(slot, "path"),)).fetchone()
+            if not row:
+                return None
+        path = Path(row[0])
+        return path if path.exists() else None
+
+    def _preview_auswertungsvorlage_text(self, path):
+        try:
+            wb = load_workbook(path, read_only=False, data_only=True)
+            ws = wb.active
+            headers = []
+            for c in range(1, min(ws.max_column, 22) + 1):
+                value = ws.cell(1, c).value
+                if value not in (None, ""):
+                    headers.append(str(value))
+            header_text = "; ".join(headers[:18]) or "keine Kopfzeile erkannt"
+            return (
+                f"Datei: {Path(path).name}\n"
+                f"Blatt: {ws.title}\n"
+                f"Spalten: {ws.max_column} | Zeilen: {ws.max_row}\n"
+                f"Kopfzeile: {header_text}"
+            )
+        except Exception as exc:
+            return f"Vorschau konnte nicht gelesen werden:\n{exc}"
+
+    def _copy_cell_format(self, src, dst, copy_value=False):
+        if copy_value:
+            dst.value = src.value
+        if src.has_style:
+            dst.font = copy_cell_style(src.font)
+            dst.fill = copy_cell_style(src.fill)
+            dst.border = copy_cell_style(src.border)
+            dst.alignment = copy_cell_style(src.alignment)
+            dst.number_format = src.number_format
+            dst.protection = copy_cell_style(src.protection)
+
+    def _apply_auswertungsvorlage(self, output_file, slot=None, zeitraum_monate=None):
+        """Übernimmt aus der gewählten Vorlage nur Layout, Spaltenbreiten und Kopfzeile; keine Datenzeilen."""
+        template_path = self._get_auswertungsvorlage_path(slot)
+        if not template_path:
+            return
+        try:
+            out_path = Path(output_file)
+            if not out_path.exists():
+                return
+            tpl_wb = load_workbook(template_path)
+            tpl_ws = tpl_wb.active
+            out_wb = load_workbook(out_path)
+            out_ws = out_wb.active
+
+            max_col = max(tpl_ws.max_column, out_ws.max_column)
+
+            # Spaltenüberschriften und deren Formatierung übernehmen.
+            for c in range(1, max_col + 1):
+                src = tpl_ws.cell(1, c)
+                dst = out_ws.cell(1, c)
+                if src.value not in (None, ""):
+                    dst.value = src.value
+                self._copy_cell_format(src, dst, copy_value=False)
+                letter = get_column_letter(c)
+                if tpl_ws.column_dimensions[letter].width:
+                    out_ws.column_dimensions[letter].width = tpl_ws.column_dimensions[letter].width
+
+            # Formatierung der ersten Datenzeile als Muster auf vorhandene Datenzeilen anwenden.
+            sample_row = 2 if tpl_ws.max_row >= 2 else 1
+            for r in range(2, out_ws.max_row + 1):
+                for c in range(1, max_col + 1):
+                    self._copy_cell_format(tpl_ws.cell(sample_row, c), out_ws.cell(r, c), copy_value=False)
+
+            # Zeilenhöhe, Filter, Freeze und Druck-/Ansichtseinstellungen übernehmen, soweit vorhanden.
+            for r in range(1, min(tpl_ws.max_row, 5) + 1):
+                if tpl_ws.row_dimensions[r].height:
+                    out_ws.row_dimensions[r].height = tpl_ws.row_dimensions[r].height
+            out_ws.freeze_panes = tpl_ws.freeze_panes or out_ws.freeze_panes
+            if tpl_ws.auto_filter and tpl_ws.auto_filter.ref:
+                out_ws.auto_filter.ref = out_ws.dimensions
+            try:
+                out_ws.sheet_view.showGridLines = tpl_ws.sheet_view.showGridLines
+            except Exception:
+                pass
+
+            out_wb.save(out_path)
+        except Exception as exc:
+            # Layout darf die fachliche Auswertung nicht blockieren.
+            try:
+                self.status.set(f"Auswertung erstellt, aber Vorlage konnte nicht angewendet werden: {exc}")
+            except Exception:
+                pass
+
+    def _run_neue_auswertung_export(self, file, analyse_name, kundentyp=None, kundennummer="", kundenname="", zeitraum_monate=None, vorlage_slot=None):
+        """Erzeugt die Auswertung und speichert sie im Analyseordner."""
+        self._log_action("neue_auswertung", "Auswertungserstellung gestartet", f"Datei: {file} | Analyse: {analyse_name}")
+        out = Path(create_linden_export(file, analyse_name))
+        try:
+            if kundentyp is not None:
+                self._mark_latest_auswertung_customer(kundentyp, kundennummer, kundenname or analyse_name)
+        except Exception:
+            pass
+        analyse_dir = SAVED_ANALYSES_DIR / f"{analyse_name}_{out.stem[-15:] if len(out.stem) >= 15 else ''}".strip("_")
+        analyse_dir.mkdir(parents=True, exist_ok=True)
+        copied_out = analyse_dir / out.name
+        shutil.copy2(out, copied_out)
+        try:
+            shutil.copy2(file, analyse_dir / f"Rohdaten_{Path(file).name}")
+        except Exception:
+            pass
+        self._apply_auswertungsvorlage(copied_out, vorlage_slot, zeitraum_monate)
+        self._apply_output_period_header(copied_out, zeitraum_monate)
+        self._roadmap_mark_neue_auswertung_form_erledigt()
+        self._log_action("neue_auswertung", "Auswertung gespeichert", str(copied_out))
+        self.status.set(f"Auswertung gespeichert: {copied_out}")
+        messagebox.showinfo("Auswertung fertig", f"Auswertung wurde erstellt und gespeichert:\n{copied_out}\n\nDer Ordner wird jetzt geöffnet.")
+        _open_folder(analyse_dir)
+        return copied_out
+
+    def _create_standard_rohdaten_from_mapping(self, file_path, mapping):
+        """Erstellt aus einer unbekannten Rohdatei eine Standard-Rohdatei, die der Exporter lesen kann."""
+        path = Path(file_path)
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+        def to_int(value, default=0):
+            try:
+                return int(str(value).strip())
+            except Exception:
+                return default
+
+        pzn_col = to_int(mapping.get("pzn_spalte"))
+        menge_col = to_int(mapping.get("absatz_spalte"))
+        artikel_col = to_int(mapping.get("artikel_spalte"))
+        hersteller_col = to_int(mapping.get("hersteller_spalte"))
+        ek_col = to_int(mapping.get("ek_spalte"))
+        header_zeile = to_int(mapping.get("header_zeile"), 1)
+        zeitraum = to_int(mapping.get("zeitraum_monate"), 6)
+
+        if not pzn_col or not menge_col:
+            raise ValueError("Mapping unvollständig: PZN-Spalte und Menge-Spalte sind Pflicht.")
+
+        src_wb = load_workbook(path, read_only=True, data_only=True)
+        src_ws = src_wb.active
+        out_wb = Workbook()
+        out_ws = out_wb.active
+        out_ws.title = "Rohdaten_Mapping"
+        out_ws.append([
+            "PZN",
+            "Artikelname",
+            "DF",
+            "Pck",
+            "Herst",
+            "EK",
+            "Abverkäufe 6 Monate",
+            "Zeitraum Monate",
+        ])
+
+        def val(row, col):
+            if not col:
+                return None
+            return row[col - 1] if len(row) >= col else None
+
+        written = 0
+        for row in src_ws.iter_rows(min_row=header_zeile + 1, values_only=True):
+            pzn = val(row, pzn_col)
+            menge = val(row, menge_col)
+            if pzn in (None, "") and menge in (None, ""):
+                continue
+            if pzn in (None, ""):
+                continue
+            out_ws.append([
+                pzn,
+                val(row, artikel_col) or "",
+                "",
+                "",
+                val(row, hersteller_col) or "",
+                val(row, ek_col) or "",
+                menge,
+                zeitraum,
+            ])
+            written += 1
+
+        if written == 0:
+            raise ValueError("Mit dem gewählten Mapping wurden keine verwertbaren Zeilen gefunden.")
+
+        safe = re.sub(r"[^A-Za-z0-9_-]+", "_", path.stem)[:45]
+        out_path = OUTPUT_DIR / f"Rohdaten_Mapping_{safe}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+        out_wb.save(out_path)
+        return out_path
+
+    def _run_auswertung_after_mapping(self, original_file, mapping, analyse_name, kundentyp=None, kundennummer="", kundenname="", vorlage_slot=None):
+        """Speichert Mapping, baut Standarddatei und startet die Auswertung direkt danach."""
+        mapped_file = self._create_standard_rohdaten_from_mapping(original_file, mapping)
+        self.status.set(f"Mapping angewendet. Starte Auswertung mit Standarddatei: {mapped_file.name}")
+        return self._run_neue_auswertung_export(str(mapped_file), analyse_name, kundentyp, kundennummer, kundenname, mapping.get("zeitraum_monate"))
+
+    def _ensure_rohdaten_mapping_table(self):
+        with sqlite3.connect(DB_PATH) as con:
+            con.execute("""\nCREATE TABLE IF NOT EXISTS tbl_rohdaten_mapping (
+                    dateiname TEXT PRIMARY KEY,\npzn_spalte TEXT,
+                    hersteller_spalte TEXT,\nek_spalte TEXT,
+                    absatz_spalte TEXT,\nheader_zeile INTEGER DEFAULT 1,
+                    format_typ TEXT DEFAULT 'standard',\nzeitraum_monate INTEGER DEFAULT 6,
+                    artikel_spalte TEXT,\nbearbeiter TEXT,
+                    letzte_aktualisierung TEXT DEFAULT CURRENT_TIMESTAMP\n)
+            """)
+            cols = {row[1] for row in con.execute("PRAGMA table_info(tbl_rohdaten_mapping)").fetchall()}
+            if "zeitraum_monate" not in cols:
+                con.execute("ALTER TABLE tbl_rohdaten_mapping ADD COLUMN zeitraum_monate INTEGER DEFAULT 6")
+            if "artikel_spalte" not in cols:
+                con.execute("ALTER TABLE tbl_rohdaten_mapping ADD COLUMN artikel_spalte TEXT")
+            if "bearbeiter" not in cols:
+                con.execute("ALTER TABLE tbl_rohdaten_mapping ADD COLUMN bearbeiter TEXT")
+            con.commit()
+
+    def _open_rohdaten_format_assistent(self, file_path, fehlertext=""):
+        """Fragt Spalten für unbekannte Rohdaten ab und speichert das Mapping für spätere Importe."""
+        path = Path(file_path)
+        self._ensure_rohdaten_mapping_table()
+        try:
+            wb = load_workbook(path, read_only=True, data_only=True)
+            ws = wb.active
+            headers = []
+            for col in range(1, ws.max_column + 1):
+                value = ws.cell(1, col).value
+                label = str(value).strip() if value not in (None, "") else f"Spalte {col}"
+                headers.append(f"{col}: {label}")
+        except Exception as exc:
+            messagebox.showerror("Formatassistent", f"Datei konnte nicht gelesen werden:\n{exc}")
+            return False
+
+        if not headers:
+            messagebox.showinfo("Formatassistent", "Keine Spalten in der Datei erkannt.")
+            return False
+
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title("Rohdaten-Formatassistent")
+        win.geometry("720x520")
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+
+        tk.Label(win, text="Rohdaten-Formatassistent", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 4))
+        hinweis = f"Datei: {path.name}\n"
+        if fehlertext:
+            hinweis += f"\nAutomatische Erkennung fehlgeschlagen:\n{fehlertext}\n"
+        hinweis += "\nBitte die Spalten zuordnen. Pflichtfelder sind PZN, Menge/Absatz und Zeitraum."
+        tk.Label(win, text=hinweis, justify="left", bg="#f5f7fb", fg="#333", wraplength=660).pack(anchor="w", padx=22, pady=(0, 12))
+
+        form = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        form.pack(fill="both", expand=True, padx=22, pady=(0, 12))
+        form.columnconfigure(1, weight=1)
+
+        pzn_var = tk.StringVar()
+        menge_var = tk.StringVar()
+        zeitraum_var = tk.StringVar(value="6")
+        artikel_var = tk.StringVar(value="")
+        hersteller_var = tk.StringVar(value="")
+        ek_var = tk.StringVar(value="")
+
+        combo_values = [""] + headers
+        rows = [
+            ("PZN-Spalte *", pzn_var, headers),
+            ("Menge / Absatz-Spalte *", menge_var, headers),
+            ("Artikelname-Spalte optional", artikel_var, combo_values),
+            ("Hersteller-Spalte optional", hersteller_var, combo_values),
+            ("EK-Spalte optional", ek_var, combo_values),
+        ]
+        for r, (label, var, values) in enumerate(rows):
+            tk.Label(form, text=label, bg="#ffffff", fg="#0b4a86", font=("Arial", 11, "bold")).grid(row=r, column=0, sticky="w", padx=14, pady=9)
+            cb = ttk.Combobox(form, textvariable=var, values=values, state="readonly", width=58)
+            cb.grid(row=r, column=1, sticky="ew", padx=14, pady=9)
+
+        tk.Label(form, text="Zeitraum *", bg="#ffffff", fg="#0b4a86", font=("Arial", 11, "bold")).grid(row=5, column=0, sticky="w", padx=14, pady=9)
+        period = tk.Frame(form, bg="#ffffff")
+        period.grid(row=5, column=1, sticky="w", padx=14, pady=9)
+        tk.Radiobutton(period, text="6 Monate", variable=zeitraum_var, value="6", bg="#ffffff").pack(side="left", padx=(0, 18))
+        tk.Radiobutton(period, text="12 Monate", variable=zeitraum_var, value="12", bg="#ffffff").pack(side="left")
+
+        result = {"mapping": None}
+
+        def clean_col(value):
+            if not value:
+                return ""
+            return value.split(":", 1)[0].strip()
+
+        def save_mapping():
+            pzn_col = clean_col(pzn_var.get())
+            menge_col = clean_col(menge_var.get())
+            if not pzn_col or not menge_col:
+                messagebox.showinfo("Formatassistent", "Bitte mindestens PZN-Spalte und Menge/Absatz-Spalte auswählen.")
+                return
+            with sqlite3.connect(DB_PATH) as con:
+                con.execute("""\nINSERT INTO tbl_rohdaten_mapping (
+                        dateiname, pzn_spalte, absatz_spalte, zeitraum_monate,\nartikel_spalte, hersteller_spalte, ek_spalte,
+                        header_zeile, format_typ, bearbeiter, letzte_aktualisierung\n) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'manuell', ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(dateiname) DO UPDATE SET\npzn_spalte=excluded.pzn_spalte,
+                        absatz_spalte=excluded.absatz_spalte,\nzeitraum_monate=excluded.zeitraum_monate,
+                        artikel_spalte=excluded.artikel_spalte,\nhersteller_spalte=excluded.hersteller_spalte,
+                        ek_spalte=excluded.ek_spalte,\nformat_typ='manuell',
+                        bearbeiter=excluded.bearbeiter,\nletzte_aktualisierung=CURRENT_TIMESTAMP
+                """, (
+                    path.name, pzn_col, menge_col, int(zeitraum_var.get()),
+                    clean_col(artikel_var.get()), clean_col(hersteller_var.get()), clean_col(ek_var.get()),
+                    getpass.getuser()
+                ))
+                con.commit()
+            mapping = {
+                "dateiname": path.name,
+                "pzn_spalte": pzn_col,
+                "absatz_spalte": menge_col,
+                "zeitraum_monate": int(zeitraum_var.get()),
+                "artikel_spalte": clean_col(artikel_var.get()),
+                "hersteller_spalte": clean_col(hersteller_var.get()),
+                "ek_spalte": clean_col(ek_var.get()),
+                "header_zeile": 1,
+            }
+            result["mapping"] = mapping
+            self.status.set(f"Rohdaten-Mapping gespeichert: {path.name}")
+            try:
+                add_roadmap_item(
+                    bereich="Import",
+                    titel="Rohdaten-Formatassistent / Mapping gespeichert",
+                    beschreibung=f"Mapping für {path.name}: PZN-Spalte {pzn_col}, Menge-Spalte {menge_col}, Zeitraum {zeitraum_var.get()} Monate.",
+                    status="Erledigt",
+                    prioritaet="Normal",
+                )
+            except Exception:
+                pass
+            messagebox.showinfo("Formatassistent", "Mapping gespeichert. Die Auswertung wird jetzt automatisch gestartet.")
+            win.destroy()
+
+        buttons = tk.Frame(win, bg="#f5f7fb")
+        buttons.pack(fill="x", padx=22, pady=(0, 18))
+        tk.Button(buttons, text="Abbrechen", command=win.destroy, padx=16, pady=8).pack(side="right", padx=(8, 0))
+        tk.Button(buttons, text="Mapping speichern und Auswertung starten", command=save_mapping, bg="#0b4a86", fg="white", relief="flat", font=("Arial", 11, "bold"), padx=20, pady=9).pack(side="right")
+        self.wait_window(win)
+        return result["mapping"]
+
+    def _dashboard_all_tiles(self):
+        """Alle verfügbaren Kacheln für das Dashboard (Schnellzugriff + Info-Widgets)."""
+        return [
+            # --- Schnellzugriff ---
+            ("neue_auswertung",  "📊", "Neue Auswertung",      "PK-/ZF-Auswertung starten.",               self.show_neue_auswertung_page,              "#0b4a86"),
+            ("gespeicherte",     "📁", "Ges. Analysen",        "Vorhandene Analysen öffnen.",               self.open_saved_analyses,                    "#3867b7"),
+            ("schulbank",        "🎓", "Schulbank",            "Lernvorschläge bearbeiten.",                lambda: self.show_schulbank_page("Schulbank"),"#11823b"),
+            ("kunden",           "👥", "Kunden",               "Kundenstamm und -history.",                 self.show_kunden_center,                     "#0b4a86"),
+            ("bestellung",       "🛒", "Bestellung",           "Bestellhistorie und Auswertungen.",         self.show_bestell_center,                    "#8b5a00"),
+            ("todo",             "✅", "ToDo",                 "Aufgaben und offene Punkte.",               self.show_todo_center,                        "#11823b"),
+            ("mitarbeiter",      "👥", "Mitarbeiter",          "Zuständigkeiten und Datenpfade.",           self.show_mitarbeiter_center,                "#6b4fb3"),
+            ("produktanalyse",   "📈", "Produktanalyse",       "Produktchancen erstellen.",                 self.market_opportunities,                   "#11823b"),
+            ("marktanalyse",     "🌍", "Marktanalyse",         "Nicht-PK-Potenziale analysieren.",          self.market_analysis,                        "#3867b7"),
+            ("abweichung",       "🔍", "Abweichungsanalyse",   "Manuelle vs. Programm-Auswertung.",         self.deviation_analysis,                     "#8b5a00"),
+            ("datenupdates",     "🗄", "Daten aktualisieren",  "Stammdaten und Importe pflegen.",           self.show_daten_aktualisieren_page,          "#555"),
+            ("roadmap",          "📌", "Roadmap",              "Offene und erledigte Punkte.",              self.show_roadmap_page,                      "#6b4fb3"),
+        ]
+
+    def _dashboard_all_info_widgets(self):
+        """Alle wählbaren Info-Widget-IDs mit Beschreibung."""
+        return [
+            ("info_ampel",    "🗄 Daten-Aktualität",     "Zeigt APU/HAP, NMG, PK Rabatte, Artikelstamm mit Ampel-Farben."),
+            ("info_todos",    "✅ Offene ToDos",          "Zeigt die nächsten offenen Aufgaben mit Priorität und Fälligkeitsdatum."),
+            ("info_analysen", "📊 Letzte Auswertungen",  "Zeigt die 5 neuesten gespeicherten Analysen."),
+
+        ]
+
+    def _dashboard_get_active_tiles(self):
+        saved = self._get_meta_value("dashboard_aktive_kacheln", "")
+        if saved:
+            return set(saved.split(","))
+        return {t[0] for t in self._dashboard_all_tiles()[:7]}
+
+    def _dashboard_set_active_tiles(self, active_set):
+        self._set_meta_value("dashboard_aktive_kacheln", ",".join(sorted(active_set)))
+
+    def _dashboard_get_active_info(self):
+        saved = self._get_meta_value("dashboard_aktive_info", "")
+        if saved:
+            return set(saved.split(","))
+        return {"info_ampel", "info_todos", "info_analysen"}
+
+    def _dashboard_set_active_info(self, active_set):
+        self._set_meta_value("dashboard_aktive_info", ",".join(sorted(active_set)))
+
+    def _dashboard_info_panel(self, parent, active_info):
+        """Kompakter Info-Streifen oben auf der Startseite."""
+        if not active_info:
+            return
+
+        info_row = tk.Frame(parent, bg="#f5f7fb")
+        info_row.pack(fill="x", padx=14, pady=(6, 4))
+        col_count = len(active_info)
+        for i in range(col_count):
+            info_row.columnconfigure(i, weight=1)
+        col_idx = 0
+
+        if "info_ampel" in active_info:
+            amp_box = tk.Frame(info_row, bg="#f0f4fa", highlightbackground="#c5d3e8", highlightthickness=1)
+            amp_box.grid(row=0, column=col_idx, sticky="nsew", padx=(0, 4), ipady=2)
+            tk.Label(amp_box, text="🗄 Daten-Aktualität", font=("Arial", 9, "bold"), fg="#0b4a86", bg="#f0f4fa").pack(anchor="w", padx=8, pady=(5,2))
+            items = self._get_data_update_status_items()
+            if items:
+                for name, val in items:
+                    amp = self._status_ampel(val)
+                    color = self._status_ampel_color(val)
+                    date_str = self._format_status_datetime(val)
+                    tk.Label(amp_box, text=f"{amp} {name}: {date_str}", font=("Arial", 8), fg=color, bg="#f0f4fa").pack(anchor="w", padx=8)
+            else:
+                tk.Label(amp_box, text="–", font=("Arial", 8), fg="#888", bg="#f0f4fa").pack(anchor="w", padx=8)
+            tk.Label(amp_box, text="🟢<30T 🟡30-60T 🔴>60T ⚪kein", font=("Arial", 7), fg="#888", bg="#f0f4fa").pack(anchor="w", padx=8, pady=(0,4))
+            col_idx += 1
+
+        if "info_todos" in active_info:
+            todo_box = tk.Frame(info_row, bg="#f0faf4", highlightbackground="#b2d8c0", highlightthickness=1)
+            todo_box.grid(row=0, column=col_idx, sticky="nsew", padx=(4, 4), ipady=2)
+            tk.Label(todo_box, text="✅ Offene ToDos", font=("Arial", 9, "bold"), fg="#11823b", bg="#f0faf4").pack(anchor="w", padx=8, pady=(5,2))
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    con.row_factory = sqlite3.Row
+                    todos = con.execute(
+                        "SELECT titel, prioritaet FROM tbl_todo_center WHERE lower(status) NOT IN ('erledigt','done','abgeschlossen') ORDER BY faellig_am ASC LIMIT 4"
+                    ).fetchall()
+                    gesamt = con.execute("SELECT COUNT(*) FROM tbl_todo_center WHERE lower(status) NOT IN ('erledigt','done','abgeschlossen')").fetchone()[0]
+                if todos:
+                    for t in todos:
+                        prio = str(t["prioritaet"] or "")
+                        icon = "🔴" if "hoch" in prio.lower() else "🟡"
+                        tk.Label(todo_box, text=f"{icon} {(t['titel'] or '')[:38]}", font=("Arial", 8), fg="#145c2e", bg="#f0faf4").pack(anchor="w", padx=8)
+                    if gesamt > 4:
+                        tk.Label(todo_box, text=f"… +{gesamt-4} weitere", font=("Arial", 7), fg="#666", bg="#f0faf4").pack(anchor="w", padx=8)
+                else:
+                    tk.Label(todo_box, text="Keine offenen ToDos ✔", font=("Arial", 8), fg="#11823b", bg="#f0faf4").pack(anchor="w", padx=8)
+            except Exception:
+                tk.Label(todo_box, text="–", font=("Arial", 8), fg="#888", bg="#f0faf4").pack(anchor="w", padx=8)
+            tk.Button(todo_box, text="ToDo →", command=self.show_todo_center, bg="#11823b", fg="white",
+                      relief="flat", font=("Arial", 8), padx=6, pady=2).pack(anchor="w", padx=8, pady=(2,4))
+            col_idx += 1
+
+        if "info_analysen" in active_info:
+            ana_box = tk.Frame(info_row, bg="#fafafa", highlightbackground="#d8e2ee", highlightthickness=1)
+            ana_box.grid(row=0, column=col_idx, sticky="nsew", padx=(4, 0), ipady=2)
+            tk.Label(ana_box, text="📊 Letzte Auswertungen", font=("Arial", 9, "bold"), fg="#0b4a86", bg="#fafafa").pack(anchor="w", padx=8, pady=(5,2))
+            try:
+                rows = self._get_saved_analysis_rows(limit=4)
+                if rows:
+                    for r in rows:
+                        dq = "PK" if (r["datenquelle"] or "NMG") == "NMG" else r["datenquelle"]
+                        datum_str = str(r["datum"] or "")[:10]
+                        name = str(r["apotheke"] or "–")[:28]
+                        tk.Label(ana_box, text=f"[{dq}] {datum_str} – {name}", font=("Arial", 8), fg="#333", bg="#fafafa").pack(anchor="w", padx=8)
+                else:
+                    tk.Label(ana_box, text="Noch keine Auswertungen.", font=("Arial", 8), fg="#888", bg="#fafafa").pack(anchor="w", padx=8)
+            except Exception:
+                tk.Label(ana_box, text="–", font=("Arial", 8), fg="#888", bg="#fafafa").pack(anchor="w", padx=8)
+            tk.Button(ana_box, text="Alle →", command=self.open_saved_analyses, bg="#3867b7", fg="white",
+                      relief="flat", font=("Arial", 8), padx=6, pady=2).pack(anchor="w", padx=8, pady=(2,4))
+
+
+
+    def _dashboard_open_kachel_editor(self):
+        """Dialog: Mitarbeiter wählt welche Kacheln und Info-Widgets angezeigt werden."""
+        active_tiles = self._dashboard_get_active_tiles()
+        active_info = self._dashboard_get_active_info()
+        all_tiles = self._dashboard_all_tiles()
+        all_info = self._dashboard_all_info_widgets()
+
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title("Dashboard anpassen")
+        win.geometry("860x680")
+        win.minsize(640, 520)
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+        try:
+            win.state("zoomed")
+        except Exception:
+            pass
+
+        tk.Label(win, text="⚙️  Dashboard anpassen", font=("Arial", 16, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 2))
+        tk.Label(win, text="Wähle welche Info-Bereiche und Schnellzugriff-Kacheln auf der Startseite erscheinen.\nDie Auswahl wird für dich gespeichert.", font=("Arial", 10), fg="#444", bg="#f5f7fb", justify="left").pack(anchor="w", padx=22, pady=(0, 10))
+
+        # --- Info-Widgets ---
+        tk.Label(win, text="Info-Bereiche (obere Zeile):", font=("Arial", 11, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(4, 2))
+        info_frame = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        info_frame.pack(fill="x", padx=22, pady=(0, 10))
+        info_checks = {}
+        for key, label, desc in all_info:
+            row_f = tk.Frame(info_frame, bg="#ffffff")
+            row_f.pack(fill="x", padx=10, pady=4)
+            var = tk.BooleanVar(value=(key in active_info))
+            info_checks[key] = var
+            tk.Checkbutton(row_f, variable=var, bg="#ffffff", activebackground="#ffffff", cursor="hand2").pack(side="left")
+            tk.Label(row_f, text=label, font=("Arial", 11, "bold"), fg="#123", bg="#ffffff", width=26, anchor="w").pack(side="left")
+            tk.Label(row_f, text=desc, font=("Arial", 9), fg="#555", bg="#ffffff", anchor="w", wraplength=280).pack(side="left", padx=(4, 0))
+
+        # --- Schnellzugriff-Kacheln ---
+        tk.Label(win, text="Schnellzugriff-Kacheln:", font=("Arial", 11, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(4, 2))
+        tile_container = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        tile_container.pack(fill="both", expand=True, padx=22, pady=(0, 10))
+
+        canvas = tk.Canvas(tile_container, bg="#ffffff", highlightthickness=0)
+        scrollbar = tk.Scrollbar(tile_container, orient="vertical", command=canvas.yview)
+        scroll_inner = tk.Frame(canvas, bg="#ffffff")
+        scroll_inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_inner, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        tile_checks = {}
+        for key, icon, title, desc, _, color in all_tiles:
+            row_f = tk.Frame(scroll_inner, bg="#ffffff")
+            row_f.pack(fill="x", padx=10, pady=3)
+            var = tk.BooleanVar(value=(key in active_tiles))
+            tile_checks[key] = var
+            tk.Checkbutton(row_f, variable=var, bg="#ffffff", activebackground="#ffffff", cursor="hand2").pack(side="left")
+            tk.Label(row_f, text=icon, font=("Arial", 13), fg=color, bg="#ffffff", width=3).pack(side="left")
+            tk.Label(row_f, text=title, font=("Arial", 11, "bold"), fg="#123", bg="#ffffff", width=20, anchor="w").pack(side="left")
+            tk.Label(row_f, text=desc, font=("Arial", 9), fg="#555", bg="#ffffff", anchor="w").pack(side="left", padx=(4, 0))
+
+        def save():
+            new_tiles = {k for k, v in tile_checks.items() if v.get()}
+            new_info = {k for k, v in info_checks.items() if v.get()}
+            if not new_tiles and not new_info:
+                messagebox.showinfo("Dashboard", "Bitte mindestens eine Kachel oder einen Info-Bereich auswählen.")
+                return
+            if len(new_tiles) > 8:
+                messagebox.showinfo("Dashboard", f"Maximal 8 Schnellzugriff-Kacheln erlaubt. Aktuell gewählt: {len(new_tiles)}.\nBitte {len(new_tiles)-8} Kachel(n) abwählen.")
+                return
+            self._dashboard_set_active_tiles(new_tiles)
+            self._dashboard_set_active_info(new_info)
+            win.destroy()
+            self.show_startseite()
+
+        def select_all():
+            for v in tile_checks.values():
+                v.set(True)
+            for v in info_checks.values():
+                v.set(True)
+
+        def deselect_all():
+            for v in tile_checks.values():
+                v.set(False)
+            for v in info_checks.values():
+                v.set(False)
+
+        btn_row = tk.Frame(win, bg="#f5f7fb")
+        btn_row.pack(fill="x", padx=22, pady=(0, 14))
+        tk.Button(btn_row, text="Alle auswählen", command=select_all, padx=10, pady=6).pack(side="left", padx=(0, 6))
+        tk.Button(btn_row, text="Alle abwählen", command=deselect_all, padx=10, pady=6).pack(side="left")
+        tk.Button(btn_row, text="Abbrechen", command=win.destroy, padx=14, pady=6).pack(side="right", padx=(8, 0))
+        tk.Button(btn_row, text="✔  Speichern", command=save, bg="#0b4a86", fg="white", relief="flat", font=("Arial", 11, "bold"), padx=16, pady=6).pack(side="right")
+
+    def show_globale_suche(self, start_query=""):
+        """Globale Suche über Kunden, Auswertungen, ToDos und Mitarbeiter."""
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title("Globale Suche")
+        win.geometry("860x600")
+        win.minsize(640, 460)
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+
+        tk.Label(win, text="🔍  Globale Suche", font=("Arial", 14, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(16, 4))
+        tk.Label(win, text="Suche in Kunden (Name, Kundennummer, PLZ, Inhaber), Auswertungen und ToDos.", font=("Arial", 9), fg="#666", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(0, 8))
+
+        search_frame = tk.Frame(win, bg="#f5f7fb")
+        search_frame.pack(fill="x", padx=20, pady=(0, 8))
+        search_var = tk.StringVar(value=start_query)
+        search_entry = tk.Entry(search_frame, textvariable=search_var, font=("Arial", 12), width=50)
+        search_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        search_entry.focus_set()
+
+        # Ergebnis-Notebook (Tabs)
+        nb = ttk.Notebook(win)
+        nb.pack(fill="both", expand=True, padx=20, pady=(0, 8))
+
+        # Tab 1: Kunden
+        kunden_frame = tk.Frame(nb, bg="#ffffff")
+        nb.add(kunden_frame, text="👥 Kunden")
+        kunden_frame.columnconfigure(0, weight=1)
+        kunden_frame.rowconfigure(0, weight=1)
+        k_cols = ("kundennummer", "kundenname", "plz", "ort", "inhaber", "email", "status")
+        k_tree = ttk.Treeview(kunden_frame, columns=k_cols, show="headings", selectmode="browse")
+        k_heads = {"kundennummer":"Kundennr.", "kundenname":"Apothekenname", "plz":"PLZ",
+                   "ort":"Ort", "inhaber":"Inhaber", "email":"E-Mail", "status":"Status"}
+        for c in k_cols:
+            k_tree.heading(c, text=k_heads[c])
+            k_tree.column(c, width=110 if c != "kundenname" else 200, anchor="w")
+        k_tree.grid(row=0, column=0, sticky="nsew")
+        k_sb = tk.Scrollbar(kunden_frame, orient="vertical", command=k_tree.yview)
+        k_sb.grid(row=0, column=1, sticky="ns")
+        k_tree.configure(yscrollcommand=k_sb.set)
+        k_row_map = {}
+
+        def open_kunde(event=None):
+            sel = k_tree.selection()
+            if sel:
+                self._kunden_detail_dialog(k_row_map.get(sel[0]))
+        k_tree.bind("<Double-1>", open_kunde)
+        tk.Label(kunden_frame, text="Doppelklick = Kundendaten öffnen", font=("Arial", 8), fg="#888", bg="#ffffff").grid(row=1, column=0, sticky="w", padx=4)
+
+        # Tab 2: Auswertungen
+        ana_frame = tk.Frame(nb, bg="#ffffff")
+        nb.add(ana_frame, text="📊 Auswertungen")
+        ana_frame.columnconfigure(0, weight=1)
+        ana_frame.rowconfigure(0, weight=1)
+        a_cols = ("datum", "apotheke", "kundennummer", "typ", "treffer")
+        a_tree = ttk.Treeview(ana_frame, columns=a_cols, show="headings", selectmode="browse")
+        a_heads = {"datum":"Datum", "apotheke":"Name", "kundennummer":"Kundennr.", "typ":"Typ", "treffer":"Treffer"}
+        for c in a_cols:
+            a_tree.heading(c, text=a_heads[c])
+            a_tree.column(c, width=100 if c != "apotheke" else 250, anchor="w")
+        a_tree.grid(row=0, column=0, sticky="nsew")
+        a_sb = tk.Scrollbar(ana_frame, orient="vertical", command=a_tree.yview)
+        a_sb.grid(row=0, column=1, sticky="ns")
+        a_tree.configure(yscrollcommand=a_sb.set)
+        a_row_map = {}
+
+        # Tab 3: ToDos
+        todo_frame = tk.Frame(nb, bg="#ffffff")
+        nb.add(todo_frame, text="✅ ToDos")
+        todo_frame.columnconfigure(0, weight=1)
+        todo_frame.rowconfigure(0, weight=1)
+        t_cols = ("titel", "bereich", "status", "prioritaet", "faellig_am")
+        t_tree = ttk.Treeview(todo_frame, columns=t_cols, show="headings", selectmode="browse")
+        t_heads = {"titel":"ToDo", "bereich":"Bereich", "status":"Status", "prioritaet":"Priorität", "faellig_am":"Fällig"}
+        for c in t_cols:
+            t_tree.heading(c, text=t_heads[c])
+            t_tree.column(c, width=100 if c != "titel" else 280, anchor="w")
+        t_tree.grid(row=0, column=0, sticky="nsew")
+        t_sb = tk.Scrollbar(todo_frame, orient="vertical", command=t_tree.yview)
+        t_sb.grid(row=0, column=1, sticky="ns")
+        t_tree.configure(yscrollcommand=t_sb.set)
+
+        def do_search(*args):
+            q = search_var.get().strip().lower()
+            # Kunden
+            for item in k_tree.get_children(): k_tree.delete(item)
+            k_row_map.clear()
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    con.row_factory = sqlite3.Row
+                    kunden = con.execute("SELECT * FROM tbl_kunden_center ORDER BY kundenname").fetchall()
+                for k in kunden:
+                    search_str = " ".join(str(k[c] or "") for c in k.keys()).lower()
+                    if not q or q in search_str:
+                        vals = tuple(str(k[c] or "") for c in k_cols if c in k.keys())
+                        # pad fehlende Spalten
+                        vals = tuple(str(k[c] if c in k.keys() else "") for c in k_cols)
+                        iid = k_tree.insert("", "end", values=vals)
+                        k_row_map[iid] = dict(k)
+            except Exception: pass
+
+            # Auswertungen
+            for item in a_tree.get_children(): a_tree.delete(item)
+            a_row_map.clear()
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    con.row_factory = sqlite3.Row
+                    rows = con.execute("""
+                        SELECT id, datum, apotheke, COALESCE(kundennummer,'') as kundennummer,
+                               COALESCE(datenquelle,'NMG') as datenquelle, nmg_treffer
+                        FROM tbl_auswertungen ORDER BY datetime(datum) DESC LIMIT 300
+                    """).fetchall()
+                for r in rows:
+                    search_str = f"{r['apotheke'] or ''} {r['kundennummer'] or ''}".lower()
+                    if not q or q in search_str:
+                        dq = "PK" if r["datenquelle"] == "NMG" else r["datenquelle"]
+                        iid = a_tree.insert("", "end", values=(
+                            str(r["datum"] or "")[:10], str(r["apotheke"] or ""),
+                            str(r["kundennummer"] or ""), dq, r["nmg_treffer"] or 0
+                        ))
+                        a_row_map[iid] = dict(r)
+            except Exception: pass
+
+            # ToDos
+            for item in t_tree.get_children(): t_tree.delete(item)
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    con.row_factory = sqlite3.Row
+                    todos = con.execute("SELECT * FROM tbl_todo_center ORDER BY faellig_am").fetchall()
+                for t in todos:
+                    search_str = f"{t['titel'] or ''} {t['bereich'] or ''}".lower()
+                    if not q or q in search_str:
+                        t_tree.insert("", "end", values=tuple(str(t[c] or "") for c in t_cols))
+            except Exception: pass
+
+            # Tab-Labels aktualisieren
+            nb.tab(0, text=f"👥 Kunden ({len(k_tree.get_children())})")
+            nb.tab(1, text=f"📊 Auswertungen ({len(a_tree.get_children())})")
+            nb.tab(2, text=f"✅ ToDos ({len(t_tree.get_children())})")
+
+        search_var.trace_add("write", do_search)
+        do_search()
+
+        bar = tk.Frame(win, bg="#f5f7fb")
+        bar.pack(fill="x", padx=20, pady=(0, 14))
+        tk.Button(bar, text="Schließen", command=win.destroy, padx=14, pady=7).pack(side="right")
+
+    def _schnellnotiz_widget(self, parent):
+        """Schnell-Notiz-Eingabe für die Startseite."""
+        box = tk.Frame(parent, bg="#fffef0", highlightbackground="#e8d99a", highlightthickness=1)
+        box.pack(fill="x", padx=14, pady=(0, 6))
+        box.columnconfigure(1, weight=1)
+
+        tk.Label(box, text="📝 Schnellnotiz", font=("Arial", 9, "bold"), fg="#7a6000", bg="#fffef0").grid(row=0, column=0, sticky="w", padx=8, pady=(5,2))
+
+        notiz_var = tk.StringVar()
+        entry = tk.Entry(box, textvariable=notiz_var, font=("Arial", 10), bg="#fffff8",
+                         relief="solid", bd=1)
+        entry.grid(row=0, column=1, sticky="ew", padx=(4, 4), pady=(5,2))
+
+        def speichern_notiz():
+            text = notiz_var.get().strip()
+            if not text:
+                return
+
+            # Auswahl: ToDo oder Kunde
+            win = tk.Toplevel(self)
+            win.resizable(True, True)
+            win.title("Notiz speichern")
+            win.geometry("400x220")
+            win.configure(bg="#f5f7fb")
+            win.transient(self)
+            win.grab_set()
+
+            tk.Label(win, text=f'Notiz: "{text[:50]}"', font=("Arial", 10), fg="#333", bg="#f5f7fb",
+                     wraplength=360).pack(anchor="w", padx=20, pady=(14,8))
+            tk.Label(win, text="Wohin soll die Notiz?", font=("Arial", 11, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=20)
+
+            btn_row = tk.Frame(win, bg="#f5f7fb")
+            btn_row.pack(fill="x", padx=20, pady=(12,0))
+
+            def als_todo():
+                try:
+                    with sqlite3.connect(DB_PATH) as con:
+                        con.execute("CREATE TABLE IF NOT EXISTS tbl_todo_center (id INTEGER PRIMARY KEY AUTOINCREMENT, titel TEXT NOT NULL, bereich TEXT, status TEXT DEFAULT 'offen', prioritaet TEXT DEFAULT 'Normal', bearbeiter TEXT, erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP, geaendert_am TEXT, notizen TEXT, verantwortlich TEXT, faellig_am TEXT)")
+                        con.execute("INSERT INTO tbl_todo_center(titel,bereich,status,prioritaet,bearbeiter) VALUES(?,?,?,?,?)",
+                                    (text, "Schnellnotiz", "offen", "Normal", self.bearbeiter))
+                        con.commit()
+                except Exception as exc:
+                    messagebox.showerror("Fehler", str(exc))
+                    return
+                notiz_var.set("")
+                win.destroy()
+
+            def als_kundennotiz():
+                win.destroy()
+                self.show_globale_suche(start_query="")
+                # Hinweis: Benutzer wählt dann den Kunden via globale Suche
+
+            tk.Button(btn_row, text="✅  Als ToDo speichern", command=als_todo,
+                      bg="#11823b", fg="white", relief="flat", font=("Arial", 10, "bold"),
+                      padx=14, pady=6).pack(side="left", padx=(0,8))
+            tk.Button(btn_row, text="👥  Zu Kunde (Suche öffnen)", command=als_kundennotiz,
+                      bg="#0b4a86", fg="white", relief="flat", font=("Arial", 10),
+                      padx=14, pady=6).pack(side="left")
+            tk.Button(btn_row, text="Abbrechen", command=win.destroy, padx=10, pady=6).pack(side="right")
+
+        tk.Button(box, text="💾", command=speichern_notiz, bg="#e8d99a", fg="#7a6000",
+                  relief="flat", font=("Arial", 11, "bold"), padx=6, pady=2).grid(row=0, column=2, padx=(0,4), pady=(5,2))
+
+        # Suche-Button
+        tk.Button(box, text="🔍 Suche", command=self.show_globale_suche, bg="#d8e2ee", fg="#0b4a86",
+                  relief="flat", font=("Arial", 9), padx=8, pady=2).grid(row=0, column=3, padx=(0,8), pady=(5,2))
+
+        tk.Label(box, text="Enter = Todo, 🔍 = Globale Suche", font=("Arial", 7), fg="#aaa", bg="#fffef0").grid(
+            row=1, column=0, columnspan=4, sticky="w", padx=8, pady=(0,3))
+        entry.bind("<Return>", lambda e: speichern_notiz())
+
+    def show_startseite(self):
+        self.clear_page()
+
+        active_info = self._dashboard_get_active_info()
+        active_keys = self._dashboard_get_active_tiles()
+        all_tiles = self._dashboard_all_tiles()
+        active_tiles = [t for t in all_tiles if t[0] in active_keys]
+
+        # Scrollbares Hauptframe – füllt den gesamten self.page-Bereich
+        outer = tk.Frame(self.page, bg="#ffffff")
+        outer.grid(row=0, column=0, rowspan=2, sticky="nsew")
+        self.page.columnconfigure(0, weight=1)
+        self.page.rowconfigure(0, weight=1)
+        self.page.rowconfigure(1, weight=1)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(0, weight=1)
+
+        # Canvas + Scrollbar für vollständige Scrollunterstützung
+        canvas = tk.Canvas(outer, bg="#ffffff", highlightthickness=0)
+        vsb = tk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        outer.rowconfigure(0, weight=1)
+        outer.columnconfigure(0, weight=1)
+
+        inner = tk.Frame(canvas, bg="#ffffff")
+        win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def on_configure(event=None):
+            bbox = canvas.bbox("all")
+            if not bbox: return
+            canvas.configure(scrollregion=bbox)
+            try: canvas.itemconfig(win_id, width=canvas.winfo_width())
+            except Exception: pass
+            content_h = bbox[3] - bbox[1]
+            canvas_h = canvas.winfo_height()
+            if content_h > canvas_h + 10:
+                vsb.grid(row=0, column=1, sticky="ns")
+            else:
+                vsb.grid_remove()
+        inner.bind("<Configure>", on_configure)
+        canvas.bind("<Configure>", lambda e: (on_configure(), canvas.itemconfig(win_id, width=e.width)))
+
+        def on_mousewheel(event):
+            try:
+                bbox = canvas.bbox("all")
+                if bbox and (bbox[3] - bbox[1]) > canvas.winfo_height() + 10:
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except Exception:
+                pass
+        # Nur auf diesen Canvas binden, nicht global – verhindert Fehler auf anderen Seiten
+        canvas.bind("<MouseWheel>", on_mousewheel)
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+
+        def _unbind_wheel(event=None):
+            try:
+                canvas.unbind_all("<MouseWheel>")
+            except Exception:
+                pass
+        canvas.bind("<Destroy>", _unbind_wheel)
+        outer.bind("<Destroy>", _unbind_wheel)
+
+        # --- Kopfzeile ---
+        header_bar = tk.Frame(inner, bg="#f0f4fa", highlightbackground="#c5d3e8", highlightthickness=1)
+        header_bar.pack(fill="x", padx=18, pady=(14, 0))
+        begruessung = f"🏠  Guten Tag, {self.bearbeiter or 'Bearbeiter'}!"
+        tk.Label(header_bar, text=begruessung, font=("Arial", 15, "bold"), fg="#0b4a86", bg="#f0f4fa").pack(side="left", padx=16, pady=10)
+        tk.Button(
+            header_bar,
+            text="⚙️  Dashboard anpassen",
+            command=self._dashboard_open_kachel_editor,
+            bg="#0b4a86",
+            fg="white",
+            activebackground="#0b4a86",
+            relief="flat",
+            font=("Arial", 10, "bold"),
+            padx=14,
+            pady=6,
+        ).pack(side="right", padx=14, pady=8)
+
+        # --- Schnellnotiz + Suche ---
+        self._schnellnotiz_widget(inner)
+
+        # --- Info-Panel ---
+        if active_info:
+            self._dashboard_info_panel(inner, active_info)
+            sep = tk.Frame(inner, bg="#d8e2ee", height=1)
+            sep.pack(fill="x", padx=14, pady=(2, 0))
+
+        # --- Schnellzugriff ---
+        if active_tiles:
+            tk.Label(inner, text="Schnellzugriff", font=("Arial", 11, "bold"), fg="#555", bg="#ffffff").pack(anchor="w", padx=22, pady=(10, 2))
+            tile_frame = tk.Frame(inner, bg="#ffffff")
+            tile_frame.pack(fill="x", padx=14, pady=(0, 18))
+            cols_count = 4
+            for i in range(cols_count):
+                tile_frame.columnconfigure(i, weight=1)
+
+            for idx, (key, icon, title, desc, cmd, color) in enumerate(active_tiles):
+                row = idx // cols_count
+                col = idx % cols_count
+                f = tk.Frame(tile_frame, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1)
+                f.grid(row=row, column=col, sticky="nsew", padx=8, pady=8, ipadx=4, ipady=4)
+                tk.Label(f, text=icon, font=("Arial", 28), bg="#f8fbff", fg=color).pack(pady=(14, 4))
+                tk.Label(f, text=title, font=("Arial", 12, "bold"), bg="#f8fbff", fg="#123").pack()
+                tk.Label(f, text=desc, wraplength=190, justify="center", bg="#f8fbff", fg="#555", font=("Arial", 9)).pack(padx=10, pady=6)
+                tk.Button(f, text="Öffnen  →", command=cmd, bg=color, fg="white", activebackground=color,
+                          relief="flat", font=("Arial", 10, "bold"), padx=14, pady=6).pack(fill="x", padx=14, pady=(4, 12))
+        else:
+            tk.Label(inner, text="Keine Kacheln aktiv. Bitte '⚙️ Dashboard anpassen' nutzen.", fg="#888", bg="#ffffff", font=("Arial", 10)).pack(pady=20)
+
+        self.status.set(f"Startseite bereit.  {len(active_tiles)} Schnellzugriff-Kacheln  |  {len(active_info)} Info-Bereiche aktiv.")
+
+    # ── SHAREPOINT / ONEDRIVE VORBEREITUNG ──────────────────────────────────────
+    def show_datenbankpfad_page(self):
+        """Datenbankpfad konfigurieren – vorbereitet für OneDrive/SharePoint."""
+        self.clear_page()
+        self._page_header(
+            "Datenbankpfad / Cloud-Synchronisation",
+            "Lokaler Pfad, OneDrive-Ordner oder SharePoint-Pfad für die Datenbank."
+        )
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure(1, weight=1)
+
+        current_path = str(DB_PATH)
+        override = self._get_meta_value("db_path_override", "")
+
+        tk.Label(body, text="Aktiver Datenbankpfad:", bg="#ffffff", fg="#0b4a86", font=("Arial", 11, "bold")).grid(row=0, column=0, sticky="nw", padx=0, pady=(0, 4))
+        tk.Label(body, text=current_path, bg="#ffffff", fg="#333", wraplength=700, justify="left").grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 16))
+
+        tk.Label(body, text="Status:", bg="#ffffff", fg="#0b4a86", font=("Arial", 11, "bold")).grid(row=2, column=0, sticky="w", pady=(0, 12))
+        if override:
+            status_text = f"Override aktiv: {override}"
+            status_color = "#11823b"
+        else:
+            status_text = "Standard-Pfad (kein Override gesetzt)"
+            status_color = "#666"
+        tk.Label(body, text=status_text, bg="#ffffff", fg=status_color, font=("Arial", 10)).grid(row=2, column=1, sticky="w", pady=(0, 12))
+
+        sep = tk.Frame(body, bg="#d8e2ee", height=1)
+        sep.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 16))
+
+        info_box = tk.Frame(body, bg="#fff8e1", highlightbackground="#efd39a", highlightthickness=1)
+        info_box.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 16))
+        tk.Label(info_box, text=(
+            "\U0001f512  Diese Funktion ist vorbereitet und wird mit einem zuk\u00fcnftigen Update aktiviert.\n\n"
+            "Geplant: Datenbankpfad auf einen synchronisierten OneDrive-Ordner oder SharePoint-Pfad legen.\n"
+            "Alle Mitarbeiter die auf denselben Ordner zugreifen teilen automatisch dieselbe Datenbank.\n\n"
+            "Voraussetzungen:\n"
+            "  \u2022  OneDrive/SharePoint muss auf dem PC synchronisiert sein\n"
+            "  \u2022  Alle Nutzer ben\u00f6tigen Schreibrechte auf den Ordner\n"
+            "  \u2022  Gleichzeitiger Zugriff wird durch SQLite-Locking gehandhabt\n\n"
+            "Zum Aktivieren: Update einspielen und hier den Zielordner ausw\u00e4hlen."
+        ), bg="#fff8e1", fg="#5a3800", justify="left", anchor="w", padx=14, pady=12, font=("Arial", 10)).pack(fill="x")
+
+        # Vorschau: Pfad wählen (noch deaktiviert)
+        path_var = tk.StringVar(value=override or current_path)
+        tk.Label(body, text="Zielordner (Vorschau):", bg="#ffffff", fg="#0b4a86", font=("Arial", 11, "bold")).grid(row=5, column=0, sticky="w", pady=(8, 4))
+        pf = tk.Frame(body, bg="#ffffff")
+        pf.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        pf.columnconfigure(0, weight=1)
+        path_entry = tk.Entry(pf, textvariable=path_var, state="disabled", fg="#888")
+        path_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        tk.Button(pf, text="Ordner auswählen (inaktiv)", state="disabled", padx=12, pady=5).grid(row=0, column=1)
+
+        tk.Label(body, text="Diese Einstellung ist mit dem aktuellen Programmstand noch nicht aktiv.\nSie wird durch ein zuk\u00fcnftiges Update freigeschaltet.",
+                 bg="#ffffff", fg="#888", font=("Arial", 9), justify="left").grid(row=7, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+        self.status.set("Datenbankpfad-Konfiguration – bereit für zukünftiges Cloud-Update.")
+
+    def show_report_page(self):
+        """Report-Seite: Kunden-Ampel-Auswertung und Duplikat-Erkennung."""
+        self.clear_page()
+        self._page_header("Report", "Kunden-Ampel, Duplikate und Auswertungsübersicht.")
+
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0,14))
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+
+        # Tab-Auswahl
+        nb = ttk.Notebook(body)
+        nb.grid(row=0, column=0, sticky="nsew", rowspan=2)
+        body.rowconfigure(0, weight=1)
+
+        # ── Tab 1: Kunden-Ampel ─────────────────────────────────────────────
+        ampel_frame = tk.Frame(nb, bg="#ffffff")
+        nb.add(ampel_frame, text="🚦 Kunden-Ampel")
+        ampel_frame.columnconfigure(0, weight=1)
+        ampel_frame.rowconfigure(1, weight=1)
+
+        af_top = tk.Frame(ampel_frame, bg="#ffffff")
+        af_top.grid(row=0, column=0, sticky="ew", pady=(8,4))
+        filter_var = tk.StringVar(value="alle")
+        tk.Label(af_top, text="Filter:", bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).pack(side="left")
+        for val, label, color in [("alle","Alle","#555"),("gruen","🟢 Grün (<6M)","#11823b"),("gelb","🟡 Gelb (6-9M)","#8b6914"),("rot","🔴 Rot (>9M / nie)","#c00")]:
+            tk.Radiobutton(af_top, text=label, variable=filter_var, value=val,
+                           bg="#ffffff", fg=color, command=lambda: reload_ampel(filter_var.get())).pack(side="left", padx=6)
+        tk.Button(af_top, text="📄 Export als PDF vorbereiten", bg="#3867b7", fg="white", relief="flat",
+                  padx=10, pady=4, command=lambda: messagebox.showinfo("Report", "PDF-Export wird in einer zukünftigen Version implementiert.")).pack(side="right", padx=8)
+
+        a_cols = ("ampel", "kundennummer", "kundenname", "plz", "status", "letzte_analyse", "tage")
+        a_heads = {"ampel":"🚦","kundennummer":"Kundennr.","kundenname":"Apotheke","plz":"PLZ",
+                   "status":"Status","letzte_analyse":"Letzte Analyse","tage":"Tage"}
+        a_tree = ttk.Treeview(ampel_frame, columns=a_cols, show="headings", selectmode="browse")
+        for c in a_cols:
+            a_tree.heading(c, text=a_heads[c])
+            a_tree.column(c, width=30 if c=="ampel" else (180 if c=="kundenname" else 80), anchor="w")
+        a_tree.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0,8))
+        a_sb = tk.Scrollbar(ampel_frame, orient="vertical", command=a_tree.yview)
+        a_sb.grid(row=1, column=1, sticky="ns", pady=(0,8))
+        a_tree.configure(yscrollcommand=a_sb.set)
+        a_row_map = {}
+
+        def reload_ampel(filt="alle"):
+            from datetime import datetime
+            for item in a_tree.get_children(): a_tree.delete(item)
+            a_row_map.clear()
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    con.row_factory = sqlite3.Row
+                    kunden = con.execute("SELECT * FROM tbl_kunden_center ORDER BY kundenname").fetchall()
+                for k in kunden:
+                    if str(k["status"] or "").lower() == "inaktiv":
+                        continue
+                    knr = str(k["kundennummer"] or "")
+                    kname = str(k["kundenname"] or "")
+                    with sqlite3.connect(DB_PATH) as con:
+                        row = con.execute("""
+                            SELECT MAX(datum) as letzte FROM tbl_auswertungen
+                            WHERE (kundennummer=? AND kundennummer<>'') OR (kundenname=? AND kundenname<>'')
+                        """, (knr, kname)).fetchone()
+                    letzte = row[0] if row and row[0] else None
+                    if letzte:
+                        try:
+                            dt = datetime.strptime(str(letzte)[:10], "%Y-%m-%d")
+                            tage = (datetime.now() - dt).days
+                            datum_str = dt.strftime("%d.%m.%Y")
+                        except Exception:
+                            tage = 9999; datum_str = str(letzte)[:10]
+                    else:
+                        tage = 9999; datum_str = "–"
+
+                    if tage < 180: amp_key = "gruen"; amp = "🟢"
+                    elif tage < 270: amp_key = "gelb"; amp = "🟡"
+                    else: amp_key = "rot"; amp = "🔴"
+
+                    if filt != "alle" and filt != amp_key:
+                        continue
+
+                    iid = a_tree.insert("", "end", values=(
+                        amp, knr, kname,
+                        str(k["plz"] if "plz" in k.keys() else ""),
+                        str(k["status"] or ""),
+                        datum_str, f"{tage}d" if tage < 9999 else "–"
+                    ))
+                    a_row_map[iid] = dict(k)
+            except Exception as exc:
+                tk.Label(ampel_frame, text=f"Fehler: {exc}", fg="#c00", bg="#ffffff").grid(row=2, column=0)
+            nb.tab(0, text=f"🚦 Kunden-Ampel ({len(a_tree.get_children())})")
+
+        reload_ampel()
+        filter_var.trace_add("write", lambda *_: reload_ampel(filter_var.get()))
+
+        # ── Tab 2: Duplikate ─────────────────────────────────────────────────
+        dup_frame = tk.Frame(nb, bg="#ffffff")
+        nb.add(dup_frame, text="🔍 Duplikate")
+        dup_frame.columnconfigure(0, weight=1)
+        dup_frame.rowconfigure(1, weight=1)
+
+        df_top = tk.Frame(dup_frame, bg="#ffffff")
+        df_top.grid(row=0, column=0, sticky="ew", pady=(8,4))
+        tk.Label(df_top, text="Duplikate nach Namen, PLZ oder Kundennummer.", bg="#ffffff", fg="#555", font=("Arial", 9)).pack(side="left", padx=8)
+        tk.Button(df_top, text="🔄 Aktualisieren", command=lambda: reload_duplikate(), padx=10, pady=4).pack(side="right", padx=8)
+
+        d_cols = ("id1","name1","plz1","id2","name2","plz2","grund")
+        d_heads = {"id1":"ID 1","name1":"Apotheke 1","plz1":"PLZ 1","id2":"ID 2","name2":"Apotheke 2","plz2":"PLZ 2","grund":"Grund"}
+        d_tree = ttk.Treeview(dup_frame, columns=d_cols, show="headings", selectmode="browse")
+        for c in d_cols:
+            d_tree.heading(c, text=d_heads[c])
+            d_tree.column(c, width=50 if c.startswith("id") else (160 if "name" in c else 60), anchor="w")
+        d_tree.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0,4))
+        d_sb = tk.Scrollbar(dup_frame, orient="vertical", command=d_tree.yview)
+        d_sb.grid(row=1, column=1, sticky="ns", pady=(0,4))
+        d_tree.configure(yscrollcommand=d_sb.set)
+        d_row_map = {}
+
+        def reload_duplikate():
+            for item in d_tree.get_children(): d_tree.delete(item)
+            d_row_map.clear()
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    con.row_factory = sqlite3.Row
+                    kunden = con.execute("SELECT * FROM tbl_kunden_center ORDER BY kundenname").fetchall()
+                kunden_list = [dict(k) for k in kunden]
+                seen = set()
+                for i, k1 in enumerate(kunden_list):
+                    for k2 in kunden_list[i+1:]:
+                        pair = (min(k1["id"],k2["id"]), max(k1["id"],k2["id"]))
+                        if pair in seen: continue
+                        grund = None
+                        n1 = str(k1["kundenname"] or "").lower().strip()
+                        n2 = str(k2["kundenname"] or "").lower().strip()
+                        p1 = str(k1["plz"] if "plz" in k1 else "").strip()
+                        p2 = str(k2["plz"] if "plz" in k2 else "").strip()
+                        nr1 = str(k1["kundennummer"] or "").strip()
+                        nr2 = str(k2["kundennummer"] or "").strip()
+                        if nr1 and nr2 and nr1 == nr2:
+                            grund = "Gleiche Kundennummer"
+                        elif n1 and n2 and (n1 == n2 or (len(n1)>4 and n1 in n2) or (len(n2)>4 and n2 in n1)):
+                            grund = "Ähnlicher Name"
+                        elif p1 and p2 and p1 == p2 and n1 and n2 and n1[:4] == n2[:4]:
+                            grund = "Gleiche PLZ + ähnlicher Name"
+                        if grund:
+                            seen.add(pair)
+                            iid = d_tree.insert("", "end", values=(
+                                k1["id"], k1["kundenname"] or "–", p1,
+                                k2["id"], k2["kundenname"] or "–", p2, grund
+                            ))
+                            d_row_map[iid] = (k1, k2)
+            except Exception as exc:
+                pass
+            nb.tab(1, text=f"🔍 Duplikate ({len(d_tree.get_children())})")
+
+        reload_duplikate()
+
+        def zusammenfuehren():
+            sel = d_tree.selection()
+            if not sel:
+                messagebox.showinfo("Duplikate", "Bitte ein Duplikat-Paar auswählen.")
+                return
+            k1, k2 = d_row_map.get(sel[0], (None, None))
+            if not k1 or not k2:
+                return
+            self._kunden_zusammenfuehren_dialog(k1, k2, callback=reload_duplikate)
+
+        tk.Button(dup_frame, text="🔀 Zusammenführen", command=zusammenfuehren,
+                  bg="#8b5a00", fg="white", relief="flat", font=("Arial", 10, "bold"),
+                  padx=12, pady=5).grid(row=2, column=0, sticky="w", padx=8, pady=(0,8))
+
+        # Nav-Eintrag: Report in Nav-Tree (falls noch nicht vorhanden)
+        self.status.set("Report bereit.")
+
+    def _kunden_zusammenfuehren_dialog(self, k1, k2, callback=None):
+        """Dialog: Zwei Kunden zusammenführen – Felder auswählen."""
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title("Kunden zusammenführen")
+        win.geometry("860x580")
+        win.minsize(700, 480)
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+
+        tk.Label(win, text="🔀  Kunden zusammenführen", font=("Arial", 14, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(16,4))
+        tk.Label(win, text="Wähle für jedes Feld welcher Wert behalten werden soll. Der nicht gewählte Eintrag wird gelöscht.", font=("Arial", 9), fg="#666", bg="#f5f7fb", justify="left").pack(anchor="w", padx=20, pady=(0,10))
+
+        felder = ["kundennummer","kundenname","plz","ort","strasse","kundentyp","inhaber",
+                  "ansprechpartner","ansprechpartner2","telefon","email","status","notizen"]
+        f_labels = {"kundennummer":"Kundennummer","kundenname":"Apothekenname","plz":"PLZ",
+                    "ort":"Ort","strasse":"Straße","kundentyp":"Typ","inhaber":"Inhaber",
+                    "ansprechpartner":"Ansprechpartner","ansprechpartner2":"AP 2",
+                    "telefon":"Telefon","email":"E-Mail","status":"Status","notizen":"Notizen"}
+
+        form = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        form.pack(fill="both", expand=True, padx=20, pady=(0,10))
+        form.columnconfigure(1, weight=1)
+        form.columnconfigure(2, weight=1)
+
+        tk.Label(form, text="Feld", bg="#e8edf5", font=("Arial",9,"bold")).grid(row=0,column=0,sticky="ew",padx=6,pady=4)
+        tk.Label(form, text=f"Eintrag 1 (ID {k1['id']})", bg="#e8edf5", font=("Arial",9,"bold")).grid(row=0,column=1,sticky="ew",padx=6,pady=4)
+        tk.Label(form, text=f"Eintrag 2 (ID {k2['id']})", bg="#e8edf5", font=("Arial",9,"bold")).grid(row=0,column=2,sticky="ew",padx=6,pady=4)
+
+        choices = {}
+        for r, f in enumerate(felder, start=1):
+            v1 = str(k1.get(f,"") or "")
+            v2 = str(k2.get(f,"") or "")
+            tk.Label(form, text=f_labels.get(f,f), bg="#ffffff", fg="#0b4a86", font=("Arial",9,"bold")).grid(row=r,column=0,sticky="w",padx=8,pady=3)
+            var = tk.StringVar(value="1")
+            choices[f] = var
+            rb1 = tk.Radiobutton(form, text=v1[:50] or "–", variable=var, value="1", bg="#ffffff", anchor="w", wraplength=280)
+            rb1.grid(row=r, column=1, sticky="ew", padx=6, pady=2)
+            rb2 = tk.Radiobutton(form, text=v2[:50] or "–", variable=var, value="2", bg="#ffffff", anchor="w", wraplength=280)
+            rb2.grid(row=r, column=2, sticky="ew", padx=6, pady=2)
+            # Bevorzuge nicht-leeren Wert
+            if not v1 and v2: var.set("2")
+
+        bar = tk.Frame(win, bg="#f5f7fb")
+        bar.pack(fill="x", padx=20, pady=(0,14))
+
+        def do_merge():
+            merged = {}
+            for f, var in choices.items():
+                merged[f] = str(k1.get(f,"") or "") if var.get() == "1" else str(k2.get(f,"") or "")
+            merged["bearbeiter"] = self.bearbeiter
+            keep_id = k1["id"]
+            del_id = k2["id"]
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    # Auswertungen umhängen
+                    for col in ("kundennummer","kundenname"):
+                        try:
+                            con.execute(f"UPDATE tbl_auswertungen SET {col}=? WHERE kundennummer=? OR kundenname=?",
+                                        (merged.get(col,""), str(k2.get("kundennummer","") or ""), str(k2.get("kundenname","") or "")))
+                        except Exception:
+                            pass
+                    # Ziel-Datensatz aktualisieren
+                    set_sql = ", ".join(f"{f}=:{f}" for f in felder)
+                    merged["id"] = keep_id
+                    con.execute(f"UPDATE tbl_kunden_center SET {set_sql}, geaendert_am=CURRENT_TIMESTAMP, bearbeiter=:bearbeiter WHERE id=:id", merged)
+                    # Duplikat löschen
+                    con.execute("DELETE FROM tbl_kunden_center WHERE id=?", (del_id,))
+                    con.commit()
+                messagebox.showinfo("Zusammenführen", f"Zusammenführung abgeschlossen. Eintrag {del_id} gelöscht, Eintrag {keep_id} behalten.")
+                win.destroy()
+                if callback: callback()
+            except Exception as exc:
+                messagebox.showerror("Fehler", str(exc))
+
+        tk.Button(bar, text="Abbrechen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8,0))
+        tk.Button(bar, text="🔀  Zusammenführen", command=do_merge, bg="#8b5a00", fg="white",
+                  relief="flat", font=("Arial",11,"bold"), padx=16, pady=7).pack(side="right")
+
+    def show_placeholder_page(self, title):
+        self.clear_page()
+        self._page_header(title, "Dieser Bereich ist vorbereitet und wird später fachlich ausgebaut.")
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        tk.Label(
+            body,
+            text=(
+                f"{title} ist als Startseitenbereich angelegt.\n\n"
+                "Die Fachlogik wird später separat umgesetzt, damit die aktuelle Auswertungs-, Schulbank- und Vorlagenlogik nicht verändert wird."
+            ),
+            bg="#ffffff",
+            fg="#333",
+            justify="left",
+            font=("Arial", 11),
+        ).pack(anchor="w", pady=(4, 16))
+        try:
+            add_roadmap_item(
+                bereich="Startseite",
+                titel=f"Startseitenbereich {title}",
+                beschreibung=f"Der Bereich {title} wurde als Startseiten-Kachel vorbereitet und wird später fachlich ausgebaut.",
+                status="Offen",
+                prioritaet="Normal",
+            )
+        except Exception:
+            pass
+
+    def _ensure_center_tables(self):
+        """Bereitet Mitarbeiter-, Kunden-, Bestell- und ToDo-Tabellen vor."""
+        with sqlite3.connect(DB_PATH) as con:
+            con.execute("""\nCREATE TABLE IF NOT EXISTS tbl_mitarbeiter (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,\nvorname TEXT,
+                    name TEXT,\nabteilung TEXT,
+                    position TEXT,\ntelefon TEXT,
+                    mobil TEXT,\nemail TEXT,
+                    vertretung_1 TEXT,\nvertretung_2 TEXT,
+                    aufgaben TEXT,\nonedrive_pfad TEXT,
+                    notizen TEXT,\naktiv INTEGER DEFAULT 1,
+                    erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,\ngeaendert_am TEXT,
+                    bearbeiter TEXT\n)
+            """)
+            con.execute("""\nCREATE TABLE IF NOT EXISTS tbl_kunden_center (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,\nkundennummer TEXT,
+                    kundenname TEXT,\nkundentyp TEXT,
+                    ansprechpartner TEXT,\ntelefon TEXT,
+                    email TEXT,\nstatus TEXT DEFAULT 'aktiv',
+                    notizen TEXT,\nerstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,
+                    geaendert_am TEXT,\nbearbeiter TEXT
+                )\n""")
+            con.execute("""\nCREATE TABLE IF NOT EXISTS tbl_bestellungen_center (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,\nkundennummer TEXT,
+                    kunde TEXT,\nbestellnummer TEXT,
+                    datum TEXT,\nstatus TEXT DEFAULT 'offen',
+                    quelle TEXT,\nnotizen TEXT,
+                    erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,\ngeaendert_am TEXT,
+                    bearbeiter TEXT\n)
+            """)
+            con.execute("""\nCREATE TABLE IF NOT EXISTS tbl_todo_center (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,\ntitel TEXT NOT NULL,
+                    bereich TEXT,\nverantwortlich TEXT,
+                    faellig_am TEXT,\nstatus TEXT DEFAULT 'offen',
+                    prioritaet TEXT DEFAULT 'normal',\nnotizen TEXT,
+                    erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,\ngeaendert_am TEXT,
+                    bearbeiter TEXT\n)
+            """)
+            # Board-/Post-it-Ansicht vorbereiten: Position der Mitarbeiterkarten speichern.
+            cols_m = {row[1] for row in con.execute("PRAGMA table_info(tbl_mitarbeiter)").fetchall()}
+            if "board_x" not in cols_m:
+                con.execute("ALTER TABLE tbl_mitarbeiter ADD COLUMN board_x INTEGER DEFAULT 40")
+            if "board_y" not in cols_m:
+                con.execute("ALTER TABLE tbl_mitarbeiter ADD COLUMN board_y INTEGER DEFAULT 40")
+            con.commit()
+        self._roadmap_mark_center_erledigt()
+
+    def _roadmap_mark_center_erledigt(self):
+        try:
+            titel = "Mitarbeiter-, Kunden-, Bestell- und ToDo-Center vorbereitet"
+            for row in list_roadmap_items():
+                if str(row["titel"]).strip().lower() == titel.lower():
+                    update_roadmap_status(int(row["id"]), "Erledigt")
+                    return
+            add_roadmap_item(
+                bereich="Organisation",
+                titel=titel,
+                beschreibung=(
+                    "Mitarbeiterdatenbank mit Vertretung 1 und Vertretung 2, Kunden-Center mit einem Ansprechpartner, "
+                    "Bestell-Center als Vorbereitung und ToDo-Center wurden als Grundstruktur angelegt. "
+                    "Mitarbeiter-Center zeigt Aufgaben, Vertretungen, OneDrive-Pfade und bereitet eine Board-/Post-it-Ansicht vor."
+                ),
+                status="Erledigt",
+                prioritaet="Normal",
+            )
+        except Exception:
+            pass
+
+    def _center_text_dialog(self, title, fields, initial=None):
+        """Einfaches Formularfenster für Center-Datensätze."""
+        initial = initial or {}
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title(title)
+        win.geometry("760x620")
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+        win.columnconfigure(0, weight=1)
+        tk.Label(win, text=title, font=("Arial", 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 8))
+        form = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        form.pack(fill="both", expand=True, padx=22, pady=(0, 12))
+        form.columnconfigure(1, weight=1)
+        vars_ = {}
+        for r, (key, label, kind) in enumerate(fields):
+            tk.Label(form, text=label, bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=r, column=0, sticky="nw", padx=14, pady=8)
+            var = tk.StringVar(value=str(initial.get(key, "") or ""))
+            vars_[key] = var
+            if kind == "text":
+                txt = tk.Text(form, height=4, wrap="word")
+                txt.insert("1.0", var.get())
+                txt.grid(row=r, column=1, sticky="ew", padx=14, pady=8)
+                vars_[key] = txt
+            else:
+                tk.Entry(form, textvariable=var).grid(row=r, column=1, sticky="ew", padx=14, pady=8)
+        result = {"data": None}
+        def save():
+            data = {}
+            for key, widget in vars_.items():
+                if isinstance(widget, tk.Text):
+                    data[key] = widget.get("1.0", "end").strip()
+                else:
+                    data[key] = widget.get().strip()
+            result["data"] = data
+            win.destroy()
+        bar = tk.Frame(win, bg="#f5f7fb")
+        bar.pack(fill="x", padx=22, pady=(0, 18))
+        tk.Button(bar, text="Abbrechen", command=win.destroy, padx=16, pady=8).pack(side="right", padx=(8,0))
+        tk.Button(bar, text="Speichern", command=save, bg="#0b4a86", fg="white", relief="flat", padx=20, pady=9).pack(side="right")
+        self.wait_window(win)
+        return result["data"]
+
+    def _show_center_table(self, title, subtitle, table, columns, headings, fields, insert_sql, update_sql):
+        self._ensure_center_tables()
+        self.clear_page()
+        self._page_header(title, subtitle)
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+        toolbar = tk.Frame(body, bg="#ffffff")
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        tree = ttk.Treeview(body, columns=columns, show="headings", selectmode="browse")
+        tree.grid(row=1, column=0, sticky="nsew")
+        for col in columns:
+            tree.heading(col, text=headings.get(col, col))
+            tree.column(col, width=120 if col != "notizen" else 240, anchor="w")
+        try:
+            self._make_tree_sortable(tree, columns, headings)
+        except Exception:
+            pass
+        sb = tk.Scrollbar(body, orient="vertical", command=tree.yview)
+        sb.grid(row=1, column=0, sticky="nse")
+        tree.configure(yscrollcommand=sb.set)
+        detail = tk.StringVar(value="Datensatz auswählen.")
+        tk.Label(body, textvariable=detail, bg="#ffffff", fg="#333", justify="left", anchor="w", wraplength=900).grid(row=2, column=0, sticky="ew", pady=(10,0))
+        row_map = {}
+        def reload():
+            for iid in tree.get_children(""):
+                tree.delete(iid)
+            row_map.clear()
+            with sqlite3.connect(DB_PATH) as con:
+                con.row_factory = sqlite3.Row
+                rows = con.execute(f"SELECT * FROM {table} ORDER BY id DESC LIMIT 1000").fetchall()
+            for row in rows:
+                vals = [row[c] if c in row.keys() else "" for c in columns]
+                iid = tree.insert("", "end", values=vals)
+                row_map[iid] = dict(row)
+            self.status.set(f"{title}: {len(rows)} Datensätze angezeigt.")
+        def selected_row():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo(title, "Bitte zuerst einen Datensatz auswählen.")
+                return None
+            return row_map.get(sel[0])
+        def on_select(event=None):
+            row = selected_row()
+            if not row:
+                return
+            text = "\n".join(f"{headings.get(k,k)}: {row.get(k,'') or ''}" for k in columns if k != "id")
+            detail.set(text)
+        tree.bind("<<TreeviewSelect>>", on_select)
+        def add_record():
+            data = self._center_text_dialog(f"{title} – Neu", fields)
+            if not data:
+                return
+            data["bearbeiter"] = self.bearbeiter
+            with sqlite3.connect(DB_PATH) as con:
+                con.execute(insert_sql, data)
+                con.commit()
+            reload()
+        def edit_record():
+            row = selected_row()
+            if not row:
+                return
+            data = self._center_text_dialog(f"{title} – Bearbeiten", fields, row)
+            if not data:
+                return
+            data["id"] = row["id"]
+            data["bearbeiter"] = self.bearbeiter
+            with sqlite3.connect(DB_PATH) as con:
+                con.execute(update_sql, data)
+                con.commit()
+            reload()
+        def delete_record():
+            row = selected_row()
+            if not row:
+                return
+            if not messagebox.askyesno(title, "Datensatz wirklich löschen?"):
+                return
+            with sqlite3.connect(DB_PATH) as con:
+                con.execute(f"DELETE FROM {table} WHERE id=?", (row["id"],))
+                con.commit()
+            reload()
+        tk.Button(toolbar, text="Neu", command=add_record, bg="#0b4a86", fg="white", relief="flat", padx=14, pady=7).pack(side="left", padx=(0,8))
+        tk.Button(toolbar, text="Bearbeiten", command=edit_record, padx=14, pady=7).pack(side="left", padx=8)
+        tk.Button(toolbar, text="Löschen", command=delete_record, padx=14, pady=7).pack(side="left", padx=8)
+        tk.Button(toolbar, text="Aktualisieren", command=reload, padx=14, pady=7).pack(side="left", padx=8)
+        reload()
+
+
+    def _show_mitarbeiter_center_page(self, columns, headings, fields, insert_sql, update_sql):
+        """Mitarbeiter-Center mit Tabellenansicht, Board-Ansicht und Mitarbeiterprofil-Bereich."""
+        self._ensure_center_tables()
+        self._ensure_mitarbeiterprofil_table()
+        self.clear_page()
+        self._page_header(
+            "Mitarbeiter-Center",
+            "Mitarbeiter, Zuständigkeiten, Vertretungen, Aufgaben und Datenpfade."
+        )
+
+        # ── Profil-Leiste oben ──────────────────────────────────────────────────
+        profil_bar = tk.Frame(self.page, bg="#f0f4fa", highlightbackground="#c5d3e8", highlightthickness=1)
+        profil_bar.grid(row=0, column=0, sticky="ew", padx=18, pady=(0, 8))
+        profil_bar.columnconfigure(0, weight=1)
+
+        tk.Label(profil_bar, text="👤  Mitarbeiterprofile", font=("Arial", 11, "bold"),
+                 fg="#0b4a86", bg="#f0f4fa").grid(row=0, column=0, sticky="w", padx=14, pady=(10, 4))
+
+        cards_frame = tk.Frame(profil_bar, bg="#f0f4fa")
+        cards_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
+
+        def reload_profil_bar():
+            for w in cards_frame.winfo_children():
+                w.destroy()
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    con.row_factory = sqlite3.Row
+                    profiles = con.execute(
+                        "SELECT login, vorname, nachname, abteilung, position FROM tbl_mitarbeiterprofil ORDER BY nachname, vorname"
+                    ).fetchall()
+            except Exception:
+                profiles = []
+
+            own_login = (self.bearbeiter or "").strip().lower()
+            # Eigenes Profil zuerst
+            sorted_profiles = sorted(profiles, key=lambda p: (0 if str(p["login"]).lower() == own_login else 1, str(p["nachname"]), str(p["vorname"])))
+
+            for col_idx, p in enumerate(sorted_profiles):
+                is_own = str(p["login"]).lower() == own_login
+                bg = "#e8f1fb" if is_own else "#ffffff"
+                border = "#0b4a86" if is_own else "#d8e2ee"
+                card = tk.Frame(cards_frame, bg=bg, highlightbackground=border, highlightthickness=2, cursor="hand2")
+                card.grid(row=0, column=col_idx, sticky="ns", padx=6, pady=4, ipadx=8, ipady=6)
+                name = f"{p['vorname']} {p['nachname']}".strip() or str(p["login"])
+                badge = " ✏️ (Ich)" if is_own else " 👁"
+                tk.Label(card, text=f"👤  {name}{badge}", font=("Arial", 10, "bold"),
+                         fg="#0b4a86" if is_own else "#333", bg=bg).pack(anchor="w")
+                if p["abteilung"] or p["position"]:
+                    info = " · ".join(filter(None, [str(p["abteilung"] or ""), str(p["position"] or "")]))
+                    tk.Label(card, text=info, font=("Arial", 8), fg="#666", bg=bg).pack(anchor="w")
+                login_val = str(p["login"])
+                readonly = not is_own
+                card.bind("<Button-1>", lambda e, l=login_val, r=readonly: self.show_mitarbeiterprofil_dialog(l, r))
+                for child in card.winfo_children():
+                    child.bind("<Button-1>", lambda e, l=login_val, r=readonly: self.show_mitarbeiterprofil_dialog(l, r))
+
+            # Eigenes Profil fehlt noch? → "Profil anlegen"-Button
+            own_exists = any(str(p["login"]).lower() == own_login for p in sorted_profiles)
+            if not own_exists and not self._is_admin_login():
+                card = tk.Frame(cards_frame, bg="#fff8e1", highlightbackground="#efd39a", highlightthickness=2, cursor="hand2")
+                card.grid(row=0, column=len(sorted_profiles), sticky="ns", padx=6, pady=4, ipadx=8, ipady=6)
+                tk.Label(card, text="➕  Mein Profil anlegen", font=("Arial", 10, "bold"), fg="#8b5a00", bg="#fff8e1").pack(anchor="w")
+                card.bind("<Button-1>", lambda e: self._open_mitarbeiterprofil_pflicht_dialog())
+
+        reload_profil_bar()
+        
+
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+
+        modebar = tk.Frame(body, bg="#ffffff")
+        modebar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+
+        content = tk.Frame(body, bg="#ffffff")
+        content.grid(row=1, column=0, sticky="nsew")
+        content.columnconfigure(0, weight=1)
+        content.rowconfigure(0, weight=1)
+
+        def clear_content():
+            for w in content.winfo_children():
+                w.destroy()
+
+        def show_table():
+            clear_content()
+            # Die bestehende Tabellenlogik in den Content-Bereich eingebettet.
+            frame = tk.Frame(content, bg="#ffffff")
+            frame.grid(row=0, column=0, sticky="nsew")
+            frame.columnconfigure(0, weight=1)
+            frame.rowconfigure(1, weight=1)
+
+            toolbar = tk.Frame(frame, bg="#ffffff")
+            toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+            tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse")
+            tree.grid(row=1, column=0, sticky="nsew")
+            for col in columns:
+                tree.heading(col, text=headings.get(col, col))
+                tree.column(col, width=120 if col != "onedrive_pfad" else 260, anchor="w")
+            try:
+                self._make_tree_sortable(tree, columns, headings)
+            except Exception:
+                pass
+            sb = tk.Scrollbar(frame, orient="vertical", command=tree.yview)
+            sb.grid(row=1, column=0, sticky="nse")
+            tree.configure(yscrollcommand=sb.set)
+            detail = tk.StringVar(value="Datensatz auswählen.")
+            tk.Label(frame, textvariable=detail, bg="#ffffff", fg="#333", justify="left", anchor="w", wraplength=900).grid(row=2, column=0, sticky="ew", pady=(10,0))
+            row_map = {}
+            def reload():
+                for iid in tree.get_children(""):
+                    tree.delete(iid)
+                row_map.clear()
+                with sqlite3.connect(DB_PATH) as con:
+                    con.row_factory = sqlite3.Row
+                    rows = con.execute("SELECT * FROM tbl_mitarbeiter ORDER BY id DESC LIMIT 1000").fetchall()
+                for row in rows:
+                    vals = [row[c] if c in row.keys() else "" for c in columns]
+                    iid = tree.insert("", "end", values=vals)
+                    row_map[iid] = dict(row)
+                self.status.set(f"Mitarbeiter-Center: {len(rows)} Datensätze angezeigt.")
+            def selected_row():
+                sel = tree.selection()
+                if not sel:
+                    messagebox.showinfo("Mitarbeiter-Center", "Bitte zuerst einen Datensatz auswählen.")
+                    return None
+                return row_map.get(sel[0])
+            def on_select(event=None):
+                row = selected_row()
+                if not row:
+                    return
+                text = "\n".join(f"{headings.get(k,k)}: {row.get(k,'') or ''}" for k in columns if k != "id")
+                if row.get("aufgaben"):
+                    text += f"\n\nAufgaben:\n{row.get('aufgaben')}"
+                if row.get("notizen"):
+                    text += f"\n\nNotizen:\n{row.get('notizen')}"
+                detail.set(text)
+            tree.bind("<<TreeviewSelect>>", on_select)
+            def add_record():
+                data = self._center_text_dialog("Mitarbeiter-Center – Neu", fields)
+                if not data:
+                    return
+                data["bearbeiter"] = self.bearbeiter
+                with sqlite3.connect(DB_PATH) as con:
+                    con.execute(insert_sql, data)
+                    con.commit()
+                reload()
+            def edit_record():
+                row = selected_row()
+                if not row:
+                    return
+                data = self._center_text_dialog("Mitarbeiter-Center – Bearbeiten", fields, row)
+                if not data:
+                    return
+                data["id"] = row["id"]
+                data["bearbeiter"] = self.bearbeiter
+                with sqlite3.connect(DB_PATH) as con:
+                    con.execute(update_sql, data)
+                    con.commit()
+                reload()
+            def delete_record():
+                row = selected_row()
+                if not row:
+                    return
+                if not messagebox.askyesno("Mitarbeiter-Center", "Mitarbeiter wirklich löschen?"):
+                    return
+                with sqlite3.connect(DB_PATH) as con:
+                    con.execute("DELETE FROM tbl_mitarbeiter WHERE id=?", (row["id"],))
+                    con.commit()
+                reload()
+            def open_path():
+                row = selected_row()
+                if not row:
+                    return
+                path = str(row.get("onedrive_pfad") or "").strip()
+                if not path:
+                    messagebox.showinfo("Mitarbeiter-Center", "Bei diesem Mitarbeiter ist kein OneDrive-/Datenpfad hinterlegt.")
+                    return
+                _open_folder(Path(path))
+            tk.Button(toolbar, text="Neu", command=add_record, bg="#0b4a86", fg="white", relief="flat", padx=14, pady=7).pack(side="left", padx=(0,8))
+            tk.Button(toolbar, text="Bearbeiten", command=edit_record, padx=14, pady=7).pack(side="left", padx=8)
+            tk.Button(toolbar, text="Löschen", command=delete_record, padx=14, pady=7).pack(side="left", padx=8)
+            tk.Button(toolbar, text="Datenpfad öffnen", command=open_path, padx=14, pady=7).pack(side="left", padx=8)
+            tk.Button(toolbar, text="Aktualisieren", command=reload, padx=14, pady=7).pack(side="left", padx=8)
+            reload()
+
+        def show_board():
+            clear_content()
+            board_frame = tk.Frame(content, bg="#ffffff")
+            board_frame.grid(row=0, column=0, sticky="nsew")
+            board_frame.columnconfigure(0, weight=1)
+            board_frame.rowconfigure(1, weight=1)
+            info = tk.Label(
+                board_frame,
+                text="Post-it-Ansicht: Karten können mit gedrückter Maustaste verschoben werden. Positionen werden gespeichert. Doppelklick öffnet den Datenpfad.",
+                bg="#ffffff",
+                fg="#333",
+                anchor="w",
+            )
+            info.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+            canvas = tk.Canvas(board_frame, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1)
+            canvas.grid(row=1, column=0, sticky="nsew")
+            hbar = tk.Scrollbar(board_frame, orient="horizontal", command=canvas.xview)
+            hbar.grid(row=2, column=0, sticky="ew")
+            vbar = tk.Scrollbar(board_frame, orient="vertical", command=canvas.yview)
+            vbar.grid(row=1, column=1, sticky="ns")
+            canvas.configure(xscrollcommand=hbar.set, yscrollcommand=vbar.set, scrollregion=(0, 0, 1800, 1200))
+
+            with sqlite3.connect(DB_PATH) as con:
+                con.row_factory = sqlite3.Row
+                rows = con.execute("SELECT * FROM tbl_mitarbeiter WHERE COALESCE(aktiv,1)=1 ORDER BY id").fetchall()
+
+            card_items = {}
+            drag = {"id": None, "x": 0, "y": 0}
+
+            def card_text(row):
+                name = " ".join([str(row["vorname"] or "").strip(), str(row["name"] or "").strip()]).strip() or f"Mitarbeiter {row['id']}"
+                lines = [name]
+                if row["position"]:
+                    lines.append(str(row["position"]))
+                if row["abteilung"]:
+                    lines.append(str(row["abteilung"]))
+                if row["vertretung_1"]:
+                    lines.append(f"Vertretung: {row['vertretung_1']}")
+                if row["vertretung_2"]:
+                    lines.append(f"2. Vertretung: {row['vertretung_2']}")
+                if row["aufgaben"]:
+                    aufg = str(row["aufgaben"]).replace("\n", "; ")[:70]
+                    lines.append(f"Aufgaben: {aufg}")
+                if row["onedrive_pfad"]:
+                    lines.append("📂 Datenpfad")
+                return "\n".join(lines)
+
+            def save_position(emp_id, x, y):
+                try:
+                    with sqlite3.connect(DB_PATH) as con:
+                        con.execute("UPDATE tbl_mitarbeiter SET board_x=?, board_y=?, geaendert_am=CURRENT_TIMESTAMP, bearbeiter=? WHERE id=?", (int(x), int(y), self.bearbeiter, int(emp_id)))
+                        con.commit()
+                except Exception:
+                    pass
+
+            def make_card(row, index):
+                emp_id = int(row["id"])
+                x = row["board_x"] if "board_x" in row.keys() and row["board_x"] is not None else 40 + (index % 4) * 280
+                y = row["board_y"] if "board_y" in row.keys() and row["board_y"] is not None else 40 + (index // 4) * 190
+                w, h = 240, 145
+                rect = canvas.create_rectangle(x, y, x+w, y+h, fill="#fff7c2", outline="#d6bd48", width=2)
+                txt = canvas.create_text(x+12, y+12, text=card_text(row), anchor="nw", width=w-24, font=("Arial", 10))
+                card_items[emp_id] = (rect, txt, row)
+                for item in (rect, txt):
+                    canvas.tag_bind(item, "<ButtonPress-1>", lambda e, eid=emp_id: start_drag(e, eid))
+                    canvas.tag_bind(item, "<B1-Motion>", lambda e, eid=emp_id: move_drag(e, eid))
+                    canvas.tag_bind(item, "<ButtonRelease-1>", lambda e, eid=emp_id: end_drag(e, eid))
+                    canvas.tag_bind(item, "<Double-Button-1>", lambda e, eid=emp_id: open_card_path(eid))
+
+            def start_drag(event, emp_id):
+                drag["id"] = emp_id
+                drag["x"] = canvas.canvasx(event.x)
+                drag["y"] = canvas.canvasy(event.y)
+
+            def move_drag(event, emp_id):
+                if drag["id"] != emp_id:
+                    return
+                x = canvas.canvasx(event.x)
+                y = canvas.canvasy(event.y)
+                dx = x - drag["x"]
+                dy = y - drag["y"]
+                rect, txt, _row = card_items[emp_id]
+                canvas.move(rect, dx, dy)
+                canvas.move(txt, dx, dy)
+                drag["x"] = x
+                drag["y"] = y
+
+            def end_drag(event, emp_id):
+                if drag["id"] != emp_id:
+                    return
+                rect, _txt, _row = card_items[emp_id]
+                x1, y1, _x2, _y2 = canvas.coords(rect)
+                save_position(emp_id, x1, y1)
+                drag["id"] = None
+                self.status.set("Mitarbeiter-Board: Position gespeichert.")
+
+            def open_card_path(emp_id):
+                row = card_items[emp_id][2]
+                path = str(row["onedrive_pfad"] or "").strip()
+                if path:
+                    _open_folder(Path(path))
+                else:
+                    messagebox.showinfo("Mitarbeiter-Board", "Für diese Karte ist kein Datenpfad hinterlegt.")
+
+            for idx, row in enumerate(rows):
+                make_card(row, idx)
+            self.status.set(f"Mitarbeiter-Board: {len(rows)} Karten angezeigt.")
+
+        tk.Button(modebar, text="Tabelle", command=show_table, bg="#0b4a86", fg="white", relief="flat", padx=16, pady=8).pack(side="left", padx=(0,8))
+        tk.Button(modebar, text="Board / Post-it", command=show_board, bg="#6b4fb3", fg="white", relief="flat", padx=16, pady=8).pack(side="left", padx=8)
+        show_table()
+
+    def show_mitarbeiter_center(self):
+        """Mitarbeiter-Center: alle Mitarbeiter als Kacheln. Eigene Karte bearbeitbar, fremde nur ansehen."""
+        self._ensure_center_tables()
+        self._ensure_mitarbeiterprofil_table()
+        self.clear_page()
+        self._page_header("Mitarbeiter", "Alle Mitarbeiter auf einen Blick. Eigene Karte bearbeitbar.")
+
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+
+        # Toolbar
+        toolbar = tk.Frame(body, bg="#ffffff")
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+
+        own_login = (self.bearbeiter or "").strip().lower()
+
+        def reload():
+            for w in cards_outer.winfo_children():
+                w.destroy()
+            _render_cards()
+
+        # Karten-Bereich scrollbar
+        canvas_m = tk.Canvas(body, bg="#ffffff", highlightthickness=0)
+        vsb_m = tk.Scrollbar(body, orient="vertical", command=canvas_m.yview)
+        canvas_m.configure(yscrollcommand=vsb_m.set)
+        canvas_m.grid(row=1, column=0, sticky="nsew")
+        vsb_m.grid(row=1, column=1, sticky="ns")
+
+        cards_outer = tk.Frame(canvas_m, bg="#ffffff")
+        win_id_m = canvas_m.create_window((0, 0), window=cards_outer, anchor="nw")
+        cards_outer.bind("<Configure>", lambda e: canvas_m.configure(scrollregion=canvas_m.bbox("all")))
+        canvas_m.bind("<Configure>", lambda e: canvas_m.itemconfig(win_id_m, width=e.width))
+
+        def _render_cards():
+            # Lade Mitarbeiter: erst tbl_mitarbeiterprofil, dann tbl_mitarbeiter als Fallback
+            mitarbeiter = []
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    con.row_factory = sqlite3.Row
+                    # Profile aus tbl_mitarbeiterprofil
+                    profil_rows = con.execute(
+                        "SELECT login, vorname, nachname, telefon, mobil, email, abteilung, position FROM tbl_mitarbeiterprofil ORDER BY nachname, vorname"
+                    ).fetchall()
+                    for p in profil_rows:
+                        name = f"{p['vorname']} {p['nachname']}".strip()
+                        mitarbeiter.append({
+                            "name": name or str(p["login"]),
+                            "login": str(p["login"]),
+                            "abteilung": str(p["abteilung"] or ""),
+                            "position": str(p["position"] or ""),
+                            "telefon": str(p["telefon"] or ""),
+                            "mobil": str(p["mobil"] or ""),
+                            "email": str(p["email"] or ""),
+                            "quelle": "profil",
+                        })
+                    # Ergänze aus tbl_mitarbeiter (wenn kein Profil-Duplikat)
+                    ma_rows = con.execute("SELECT * FROM tbl_mitarbeiter ORDER BY name, vorname").fetchall()
+                    existing_names = {m["name"].lower() for m in mitarbeiter}
+                    for row in ma_rows:
+                        full = f"{row['vorname'] or ''} {row['name'] or ''}".strip()
+                        if full.lower() not in existing_names:
+                            mitarbeiter.append({
+                                "name": full or f"MA #{row['id']}",
+                                "login": "",
+                                "abteilung": str(row["abteilung"] or ""),
+                                "position": str(row["position"] or ""),
+                                "telefon": str(row["telefon"] or ""),
+                                "mobil": str(row["mobil"] or ""),
+                                "email": str(row["email"] or ""),
+                                "vertretung": str(row["vertretung_1"] or ""),
+                                "aufgaben": str(row["aufgaben"] or ""),
+                                "quelle": "mitarbeiter",
+                                "id": row["id"],
+                            })
+            except Exception:
+                pass
+
+            # Eigenen Login ganz vorne
+            mitarbeiter.sort(key=lambda m: (0 if m.get("login","").lower() == own_login else 1, m["name"]))
+
+            if not mitarbeiter:
+                tk.Label(cards_outer, text="Noch keine Mitarbeiterdaten vorhanden.\nMitarbeiterprofile k\u00f6nnen unter 'Mein Profil' angelegt werden.",
+                         bg="#ffffff", fg="#888", font=("Arial", 10), justify="center").pack(pady=40)
+                return
+
+            cols_count = 4
+            for idx, m in enumerate(mitarbeiter):
+                r = idx // cols_count
+                c = idx % cols_count
+                is_own = m.get("login", "").lower() == own_login
+                bg = "#e8f1fb" if is_own else "#f8fbff"
+                border = "#0b4a86" if is_own else "#d8e2ee"
+                card = tk.Frame(cards_outer, bg=bg, highlightbackground=border, highlightthickness=2)
+                card.grid(row=r, column=c, sticky="nsew", padx=8, pady=8, ipadx=8, ipady=8)
+                cards_outer.columnconfigure(c, weight=1)
+
+                # Initialen-Avatar
+                initials = "".join(p[0].upper() for p in m["name"].split()[:2] if p)
+                avatar_bg = "#0b4a86" if is_own else "#6b4fb3"
+                av = tk.Label(card, text=initials or "?", font=("Arial", 20, "bold"),
+                              fg="white", bg=avatar_bg, width=3, relief="flat")
+                av.pack(pady=(12, 6))
+
+                tk.Label(card, text=m["name"], font=("Arial", 11, "bold"), fg="#123", bg=bg).pack()
+                if is_own:
+                    tk.Label(card, text="(Ich)", font=("Arial", 8), fg="#0b4a86", bg=bg).pack()
+
+                # Daten anzeigen
+                info_lines = []
+                if m.get("position"):   info_lines.append(f"🏷  {m['position']}")
+                if m.get("abteilung"):  info_lines.append(f"🏢  {m['abteilung']}")
+                if m.get("telefon"):    info_lines.append(f"📞  {m['telefon']}")
+                if m.get("mobil"):      info_lines.append(f"📱  {m['mobil']}")
+                if m.get("email"):      info_lines.append(f"✉  {m['email']}")
+                if m.get("vertretung"):info_lines.append(f"🔄  {m['vertretung']}")
+
+                for line in info_lines[:5]:
+                    tk.Label(card, text=line, font=("Arial", 9), fg="#444", bg=bg, anchor="w").pack(anchor="w", padx=4)
+
+                # Button
+                if is_own or self._is_admin_login():
+                    btn_text = "✏️  Bearbeiten" if is_own else "✏️  Admin"
+                    login_val = m.get("login") or ""
+                    tk.Button(card, text=btn_text,
+                              command=lambda l=login_val: self.show_mitarbeiterprofil_dialog(l, readonly=False),
+                              bg="#0b4a86", fg="white", relief="flat", font=("Arial", 9, "bold"),
+                              padx=10, pady=4).pack(fill="x", padx=8, pady=(8, 4))
+                else:
+                    login_val = m.get("login") or ""
+                    tk.Button(card, text="👁  Ansehen",
+                              command=lambda l=login_val: self.show_mitarbeiterprofil_dialog(l, readonly=True),
+                              bg="#888", fg="white", relief="flat", font=("Arial", 9),
+                              padx=10, pady=4).pack(fill="x", padx=8, pady=(8, 4))
+
+        _render_cards()
+
+        # Toolbar-Buttons
+        def neuer_eintrag():
+            # Mitarbeiter in tbl_mitarbeiter anlegen (für Nicht-Profilnutzer)
+            fields = [("vorname","Vorname","entry"),("name","Nachname","entry"),
+                      ("abteilung","Abteilung","entry"),("position","Position","entry"),
+                      ("telefon","Telefon","entry"),("mobil","Mobil","entry"),
+                      ("email","E-Mail","entry"),("vertretung_1","Vertretung","entry")]
+            data = self._center_text_dialog("Neuer Mitarbeiter", fields)
+            if not data:
+                return
+            data["bearbeiter"] = self.bearbeiter
+            with sqlite3.connect(DB_PATH) as con:
+                con.execute("""INSERT INTO tbl_mitarbeiter(vorname,name,abteilung,position,telefon,mobil,email,vertretung_1,bearbeiter)
+                    VALUES(:vorname,:name,:abteilung,:position,:telefon,:mobil,:email,:vertretung_1,:bearbeiter)""", data)
+                con.commit()
+            reload()
+
+        tk.Button(toolbar, text="➕ Mitarbeiter anlegen", command=neuer_eintrag,
+                  bg="#0b4a86", fg="white", relief="flat", padx=14, pady=6).pack(side="left", padx=(0, 8))
+        tk.Button(toolbar, text="🔄 Aktualisieren", command=reload, padx=12, pady=6).pack(side="left")
+        self.status.set("Mitarbeiter-Center bereit.")
+
+    def _ensure_kunden_center_extended(self):
+        """Erweitert tbl_kunden_center um neue Pflichtfelder falls noch nicht vorhanden."""
+        with sqlite3.connect(DB_PATH) as con:
+            existing = {r[1] for r in con.execute("PRAGMA table_info(tbl_kunden_center)").fetchall()}
+            for col, typedef in [
+                ("plz", "TEXT"), ("ort", "TEXT"), ("strasse", "TEXT"),
+                ("inhaber", "TEXT"), ("ansprechpartner2", "TEXT"),
+                ("kundentyp", "TEXT"), ("ansprechpartner", "TEXT"),
+            ]:
+                if col not in existing:
+                    con.execute(f"ALTER TABLE tbl_kunden_center ADD COLUMN {col} {typedef}")
+            con.commit()
+
+    def _kunden_detail_dialog(self, kunden_row=None):
+        """Vollständiges Kunden-Formular: Stammdaten + Analysen + E-Mail."""
+        self._ensure_kunden_center_extended()
+        is_new = kunden_row is None
+        title = "Neuer Kunde" if is_new else f"Kunde: {kunden_row.get('kundenname','') or kunden_row.get('kundennummer','')}"
+
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title(title)
+        win.geometry("1000x700")
+        win.minsize(800, 560)
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+        try:
+            win.state("zoomed")
+        except Exception:
+            pass
+
+        win.columnconfigure(0, weight=3)
+        win.columnconfigure(1, weight=2)
+        win.rowconfigure(1, weight=1)
+
+        tk.Label(win, text=title, font=("Arial", 16, "bold"), fg="#0b4a86", bg="#f5f7fb").grid(row=0, column=0, columnspan=2, sticky="w", padx=22, pady=(16, 8))
+
+        # ── Linke Spalte: Stammdaten ──────────────────────────────────────────
+        left = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        left.grid(row=1, column=0, sticky="nsew", padx=(22, 8), pady=(0, 12))
+        left.columnconfigure(1, weight=1)
+
+        tk.Label(left, text="Stammdaten", font=("Arial", 12, "bold"), fg="#0b4a86", bg="#ffffff").grid(row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(12, 6))
+
+        initial = dict(kunden_row) if kunden_row else {}
+        fields_def = [
+            ("kundennummer", "Kundennummer *"),
+            ("kundenname",   "Apothekenname *"),
+            ("plz",          "PLZ *"),
+            ("ort",          "Ort"),
+            ("strasse",      "Straße"),
+            ("kundentyp",    "Typ (PK/ZF)"),
+            ("inhaber",      "Inhaber"),
+            ("ansprechpartner", "Ansprechpartner"),
+            ("ansprechpartner2","Ansprechpartner 2"),
+            ("telefon",      "Telefon"),
+            ("email",        "E-Mail"),
+            ("status",       "Status (aktiv/inaktiv)"),
+        ]
+        vars_ = {}
+        for r, (key, label) in enumerate(fields_def, start=1):
+            is_req = label.endswith("*")
+            fg = "#c00" if is_req else "#0b4a86"
+            tk.Label(left, text=label, bg="#ffffff", fg=fg, font=("Arial", 10, "bold")).grid(row=r, column=0, sticky="w", padx=14, pady=5)
+            var = tk.StringVar(value=str(initial.get(key, "") or ""))
+            if key == "status" and not initial.get("status"):
+                var.set("aktiv")
+            vars_[key] = var
+            tk.Entry(left, textvariable=var).grid(row=r, column=1, sticky="ew", padx=14, pady=5)
+
+        # Notizen
+        notiz_row = len(fields_def) + 1
+        tk.Label(left, text="Notizen", bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=notiz_row, column=0, sticky="nw", padx=14, pady=5)
+        notiz_txt = tk.Text(left, height=4, wrap="word")
+        notiz_txt.insert("1.0", str(initial.get("notizen", "") or ""))
+        notiz_txt.grid(row=notiz_row, column=1, sticky="ew", padx=14, pady=5)
+
+        # ── Rechte Spalte: Analysen ───────────────────────────────────────────
+        right = tk.Frame(win, bg="#fafbff", highlightbackground="#d8e2ee", highlightthickness=1)
+        right.grid(row=1, column=1, sticky="nsew", padx=(0, 22), pady=(0, 12))
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(1, weight=1)
+
+        tk.Label(right, text="Analysen zu diesem Kunden", font=("Arial", 12, "bold"), fg="#0b4a86", bg="#fafbff").grid(row=0, column=0, sticky="w", padx=14, pady=(12, 6))
+
+        ana_frame = tk.Frame(right, bg="#fafbff")
+        ana_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        ana_frame.columnconfigure(0, weight=1)
+        ana_frame.rowconfigure(0, weight=1)
+
+        ana_tree = ttk.Treeview(ana_frame, columns=("datum","typ","apotheke","treffer"), show="headings", selectmode="browse")
+        for col, head, w in [("datum","Datum",90),("typ","Typ",50),("apotheke","Name",160),("treffer","Treffer",60)]:
+            ana_tree.heading(col, text=head)
+            ana_tree.column(col, width=w, anchor="w")
+        ana_tree.grid(row=0, column=0, sticky="nsew")
+        ana_sb = tk.Scrollbar(ana_frame, orient="vertical", command=ana_tree.yview)
+        ana_sb.grid(row=0, column=1, sticky="ns")
+        ana_tree.configure(yscrollcommand=ana_sb.set)
+
+        ana_rows = {}
+
+        def load_analysen():
+            for item in ana_tree.get_children():
+                ana_tree.delete(item)
+            ana_rows.clear()
+            knr = vars_["kundennummer"].get().strip()
+            kname = vars_["kundenname"].get().strip()
+            if not knr and not kname:
+                return
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    con.row_factory = sqlite3.Row
+                    rows = con.execute("""\nSELECT id, datum, COALESCE(datenquelle,'PK') as datenquelle,
+                               apotheke, quelldatei, ausgabedatei, nmg_treffer, kundennummer, kundenname\nFROM tbl_auswertungen
+                        WHERE (kundennummer=? AND kundennummer<>'')\nOR (kundenname=? AND kundenname<>'')
+                        ORDER BY datetime(datum) DESC LIMIT 30\n""", (knr, kname)).fetchall()
+                for row in rows:
+                    dq = "PK" if (row["datenquelle"] or "NMG") == "NMG" else row["datenquelle"]
+                    datum = str(row["datum"] or "")[:10]
+                    iid = ana_tree.insert("", "end", values=(datum, dq, row["apotheke"] or "", row["nmg_treffer"] or 0))
+                    ana_rows[iid] = dict(row)
+            except Exception:
+                pass
+
+        load_analysen()
+
+        def send_email_analyse():
+            sel = ana_tree.selection()
+            if not sel:
+                messagebox.showinfo(title, "Bitte zuerst eine Analyse auswählen.")
+                return
+            row = ana_rows.get(sel[0], {})
+            email_addr = vars_["email"].get().strip()
+            if not email_addr:
+                if messagebox.askyesno(title, "Keine E-Mail-Adresse hinterlegt.\nJetzt E-Mail-Adresse eingeben?"):
+                    new_mail = simpledialog.askstring(title, "E-Mail-Adresse eingeben:")
+                    if new_mail:
+                        vars_["email"].set(new_mail.strip())
+                        email_addr = new_mail.strip()
+                    else:
+                        return
+                else:
+                    return
+            ausgabe = row.get("ausgabedatei", "") or ""
+            anhang = ""
+            if ausgabe and Path(ausgabe).exists():
+                anhang = ausgabe
+            else:
+                try:
+                    for f in (Path(__file__).resolve().parent.parent / "gespeicherte_analysen").rglob("*.xlsx"):
+                        if row.get("apotheke") and str(row["apotheke"]).lower() in str(f).lower():
+                            anhang = str(f)
+                            break
+                except Exception:
+                    pass
+            try:
+                import subprocess, sys
+                if sys.platform.startswith("win"):
+                    import win32com.client
+                    outlook = win32com.client.Dispatch("Outlook.Application")
+                    mail = outlook.CreateItem(0)
+                    mail.To = email_addr
+                    mail.Subject = f"Analyse – {row.get('apotheke','')}"
+                    mail.Body = f"Anbei die Auswertung vom {str(row.get('datum',''))[:10]}."
+                    if anhang:
+                        mail.Attachments.Add(anhang)
+                    mail.Display(True)
+                else:
+                    messagebox.showinfo(title, "Outlook-Integration nur unter Windows verfügbar.")
+            except Exception as exc:
+                messagebox.showerror(title, f"Outlook konnte nicht geöffnet werden:\n{exc}")
+
+        btn_ana_row = tk.Frame(right, bg="#fafbff")
+        btn_ana_row.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
+        tk.Button(btn_ana_row, text="📧 Analyse per E-Mail senden", command=send_email_analyse,
+                  bg="#3867b7", fg="white", relief="flat", padx=12, pady=6).pack(side="left")
+        tk.Button(btn_ana_row, text="🔄 Aktualisieren", command=load_analysen, padx=10, pady=6).pack(side="left", padx=(8, 0))
+
+
+        # ── Button-Leiste – immer am unteren Rand sichtbar ────────────────────
+        win.rowconfigure(2, weight=0)
+        bar = tk.Frame(win, bg="#e8edf5", highlightbackground="#c5d3e8", highlightthickness=1)
+        bar.grid(row=2, column=0, columnspan=2, sticky="ew", padx=0, pady=0, ipady=4)
+
+        def save_kunde():
+            knr = vars_["kundennummer"].get().strip()
+            kname = vars_["kundenname"].get().strip()
+            plz = vars_["plz"].get().strip()
+            if not knr:
+                messagebox.showinfo(title, "Kundennummer ist ein Pflichtfeld.")
+                return
+            if not kname:
+                messagebox.showinfo(title, "Apothekenname ist ein Pflichtfeld.")
+                return
+            if not plz:
+                messagebox.showinfo(title, "PLZ ist ein Pflichtfeld.")
+                return
+            data = {k: v.get().strip() for k, v in vars_.items()}
+            data["notizen"] = notiz_txt.get("1.0", "end").strip()
+            data["bearbeiter"] = self.bearbeiter
+            with sqlite3.connect(DB_PATH) as con:
+                if is_new:
+                    con.execute("""
+                        INSERT INTO tbl_kunden_center(kundennummer,kundenname,plz,ort,strasse,kundentyp,
+                            inhaber,ansprechpartner,ansprechpartner2,telefon,email,status,notizen,bearbeiter)
+                        VALUES(:kundennummer,:kundenname,:plz,:ort,:strasse,:kundentyp,
+                            :inhaber,:ansprechpartner,:ansprechpartner2,:telefon,:email,:status,:notizen,:bearbeiter)
+                    """, data)
+                else:
+                    data["id"] = kunden_row["id"]
+                    con.execute("""
+                        UPDATE tbl_kunden_center SET kundennummer=:kundennummer,kundenname=:kundenname,
+                            plz=:plz,ort=:ort,strasse=:strasse,kundentyp=:kundentyp,
+                            inhaber=:inhaber,ansprechpartner=:ansprechpartner,
+                            ansprechpartner2=:ansprechpartner2,telefon=:telefon,email=:email,
+                            status=:status,notizen=:notizen,geaendert_am=CURRENT_TIMESTAMP,
+                            bearbeiter=:bearbeiter WHERE id=:id
+                    """, data)
+                con.commit()
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    cols_a = {r[1] for r in con.execute("PRAGMA table_info(tbl_auswertungen)").fetchall()}
+                    for col in ("kundennummer", "kundenname"):
+                        if col not in cols_a:
+                            con.execute(f"ALTER TABLE tbl_auswertungen ADD COLUMN {col} TEXT")
+                    con.execute("""
+                        UPDATE tbl_auswertungen SET kundennummer=?, kundenname=?
+                        WHERE (apotheke=? OR kundenname=?) AND (kundennummer IS NULL OR kundennummer='')
+                    """, (data["kundennummer"], data["kundenname"], data["kundenname"], data["kundenname"]))
+                    con.commit()
+            except Exception:
+                pass
+            win.destroy()  # schließt ohne Meldung
+
+        tk.Button(bar, text="Abbrechen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8, 8), pady=4)
+        tk.Button(bar, text="✔  Speichern", command=save_kunde, bg="#0b4a86", fg="white",
+                  relief="flat", font=("Arial", 12, "bold"), padx=18, pady=7).pack(side="right", pady=4)
+
+
+    def show_apps_page(self):
+        """Apps-Übersicht: alle Center als Schnellstart-Kacheln."""
+        self.clear_page()
+        self._page_header("Apps", "Schnellzugriff auf alle Bereiche.")
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure((0, 1, 2, 3), weight=1)
+
+        app_tiles = [
+            ("\U0001f465", "Kunden", "Kundenstamm, Analysen, E-Mail-Versand.", self.show_kunden_center, "#0b4a86"),
+            ("\U0001f464", "Mitarbeiter", "Mitarbeiterdaten, Profile, Vertretungen.", self.show_mitarbeiter_center, "#6b4fb3"),
+            ("\u2705", "ToDo", "Aufgaben, offene Punkte und Notizen.", self.show_todo_center, "#11823b"),
+            ("\U0001f6d2", "Bestellungen", "Bestellhistorie und Auswertungen.", self.show_bestell_center, "#8b5a00"),
+        ]
+        for idx, (icon, title, desc, cmd, color) in enumerate(app_tiles):
+            f = tk.Frame(body, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1)
+            f.grid(row=0, column=idx, sticky="nsew", padx=10, pady=10, ipadx=4, ipady=4)
+            tk.Label(f, text=icon, font=("Arial", 36), bg="#f8fbff", fg=color).pack(pady=(20, 6))
+            tk.Label(f, text=title, font=("Arial", 14, "bold"), bg="#f8fbff", fg="#123").pack()
+            tk.Label(f, text=desc, justify="center", bg="#f8fbff", fg="#555", font=("Arial", 10)).pack(padx=14, pady=8)
+            tk.Button(f, text="Öffnen  →", command=cmd, bg=color, fg="white",
+                      activebackground=color, relief="flat", font=("Arial", 11, "bold"),
+                      padx=16, pady=8).pack(fill="x", padx=18, pady=(4, 18))
+        self.status.set("Apps bereit.")
+
+    def show_kunden_center(self):
+        """Neues Kunden-Center: Tabelle + Detail-Dialog mit Analysen und E-Mail."""
+        self._ensure_center_tables()
+        self._ensure_kunden_center_extended()
+        self.clear_page()
+        self._page_header("Kunden-Center", "Apotheken verwalten · Analysen einsehen · per E-Mail versenden.")
+
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+
+        toolbar = tk.Frame(body, bg="#ffffff")
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+
+        search_var = tk.StringVar()
+        tk.Label(toolbar, text="Suche:", bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).pack(side="left")
+        search_entry = tk.Entry(toolbar, textvariable=search_var, width=28)
+        search_entry.pack(side="left", padx=(6, 12))
+
+        cols = ("ampel", "kundennummer", "kundenname", "plz", "ort", "status", "letzte_analyse", "email")
+        heads = {"ampel": "🚦", "kundennummer": "Kundennummer", "kundenname": "Apothekenname",
+                 "plz": "PLZ", "ort": "Ort", "status": "Status",
+                 "letzte_analyse": "Letzte Analyse", "email": "E-Mail"}
+
+        tree_frame = tk.Frame(body, bg="#ffffff")
+        tree_frame.grid(row=1, column=0, sticky="nsew")
+        tree_frame.columnconfigure(0, weight=1)
+        tree_frame.rowconfigure(0, weight=1)
+
+        tree = ttk.Treeview(tree_frame, columns=cols, show="headings", selectmode="browse")
+        for col in cols:
+            tree.heading(col, text=heads[col])
+            if col == "ampel":
+                tree.column(col, width=30, anchor="center", stretch=False)
+            elif col == "kundenname":
+                tree.column(col, width=200, anchor="w")
+            elif col == "letzte_analyse":
+                tree.column(col, width=90, anchor="w")
+            else:
+                tree.column(col, width=100, anchor="w")
+        tree.grid(row=0, column=0, sticky="nsew")
+        sb = tk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        sb.grid(row=0, column=1, sticky="ns")
+        tree.configure(yscrollcommand=sb.set)
+
+        row_map = {}
+
+        def _kunden_ampel(kundennummer, kundenname):
+            """Ampel: grün < 6 Monate, gelb 6-9, rot > 9 Monate oder nie."""
+            from datetime import datetime, timedelta
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    knr = kundennummer or ""
+                    kname = kundenname or ""
+                    row = con.execute("""
+                        SELECT MAX(datum) as letzte FROM tbl_auswertungen
+                        WHERE (kundennummer=? AND kundennummer<>'') OR (kundenname=? AND kundenname<>'')
+                    """, (knr, kname)).fetchone()
+                letzte = row[0] if row and row[0] else None
+                if not letzte:
+                    return "🔴", "–"
+                dt = datetime.strptime(str(letzte)[:10], "%Y-%m-%d")
+                tage = (datetime.now() - dt).days
+                datum_str = dt.strftime("%d.%m.%Y")
+                if tage < 180:
+                    return "🟢", datum_str
+                elif tage < 270:
+                    return "🟡", datum_str
+                else:
+                    return "🔴", datum_str
+            except Exception:
+                return "⚪", "–"
+
+        def reload(filter_text=""):
+            for item in tree.get_children():
+                tree.delete(item)
+            row_map.clear()
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    con.row_factory = sqlite3.Row
+                    rows = con.execute("SELECT * FROM tbl_kunden_center ORDER BY kundenname").fetchall()
+                for row in rows:
+                    amp, letzte = _kunden_ampel(str(row["kundennummer"] or ""), str(row["kundenname"] or ""))
+                    # vals mit Ampel und letzte_analyse
+                    col_vals = {"ampel": amp, "kundennummer": str(row["kundennummer"] or ""),
+                                "kundenname": str(row["kundenname"] or ""), "plz": str(row["plz"] if "plz" in row.keys() else ""),
+                                "ort": str(row["ort"] if "ort" in row.keys() else ""),
+                                "status": str(row["status"] or ""), "letzte_analyse": letzte,
+                                "email": str(row["email"] if "email" in row.keys() else "")}
+                    vals = tuple(col_vals.get(c, "") for c in cols)
+                    if filter_text and filter_text.lower() not in " ".join(str(v) for v in vals).lower():
+                        continue
+                    iid = tree.insert("", "end", values=vals)
+                    row_map[iid] = dict(row)
+                    row_map[iid]["_letzte_analyse"] = letzte
+                    row_map[iid]["_ampel"] = amp
+            except Exception:
+                pass
+
+        reload()
+        search_var.trace_add("write", lambda *_: reload(search_var.get().strip()))
+
+        def open_detail(event=None):
+            sel = tree.selection()
+            if sel:
+                self._kunden_detail_dialog(row_map.get(sel[0]))
+                reload(search_var.get().strip())
+
+        def new_kunde():
+            self._kunden_detail_dialog(None)
+            reload(search_var.get().strip())
+
+        def delete_kunde():
+            sel = tree.selection()
+            if not sel:
+                return
+            row = row_map.get(sel[0])
+            if not row:
+                return
+            if not messagebox.askyesno("Kunden-Center", f"Kunde '{row.get('kundenname','')}' wirklich löschen?"):
+                return
+            with sqlite3.connect(DB_PATH) as con:
+                con.execute("DELETE FROM tbl_kunden_center WHERE id=?", (row["id"],))
+                con.commit()
+            reload(search_var.get().strip())
+
+        tree.bind("<Double-1>", open_detail)
+
+        tk.Button(toolbar, text="Neu", command=new_kunde, bg="#0b4a86", fg="white", relief="flat", padx=14, pady=7).pack(side="left", padx=(0, 6))
+        tk.Button(toolbar, text="Öffnen / Bearbeiten", command=open_detail, padx=14, pady=7).pack(side="left", padx=(0, 6))
+        tk.Button(toolbar, text="Löschen", command=delete_kunde, padx=14, pady=7).pack(side="left", padx=(0, 6))
+        tk.Button(toolbar, text="Aktualisieren", command=lambda: reload(search_var.get().strip()), padx=14, pady=7).pack(side="left")
+
+        self.status.set("Kunden-Center bereit.")
+
+    def show_bestell_center(self):
+        cols = ("id", "datum", "kundennummer", "kunde", "bestellnummer", "status", "quelle")
+        heads = {"id":"ID", "datum":"Datum", "kundennummer":"Kundennummer", "kunde":"Kunde", "bestellnummer":"Bestellnummer", "status":"Status", "quelle":"Quelle"}
+        fields = [("datum","Datum","entry"),("kundennummer","Kundennummer","entry"),("kunde","Kunde","entry"),("bestellnummer","Bestellnummer","entry"),("status","Status","entry"),("quelle","Quelle","entry"),("notizen","Notizen","text")]
+        insert = """INSERT INTO tbl_bestellungen_center(datum,kundennummer,kunde,bestellnummer,status,quelle,notizen,bearbeiter) VALUES (:datum,:kundennummer,:kunde,:bestellnummer,:status,:quelle,:notizen,:bearbeiter)"""
+        update = """UPDATE tbl_bestellungen_center SET datum=:datum,kundennummer=:kundennummer,kunde=:kunde,bestellnummer=:bestellnummer,status=:status,quelle=:quelle,notizen=:notizen,geaendert_am=CURRENT_TIMESTAMP,bearbeiter=:bearbeiter WHERE id=:id"""
+        self._show_center_table("Bestell-Center", "Vorbereitung für spätere Bestellhistorien und Auswertungen.", "tbl_bestellungen_center", cols, heads, fields, insert, update)
+
+    def show_todo_center(self):
+        cols = ("id", "titel", "bereich", "verantwortlich", "faellig_am", "status", "prioritaet")
+        heads = {"id":"ID", "titel":"ToDo", "bereich":"Bereich", "verantwortlich":"Verantwortlich", "faellig_am":"Fällig", "status":"Status", "prioritaet":"Priorität"}
+        fields = [("titel","ToDo / Aufgabe","entry"),("bereich","Bereich","entry"),("verantwortlich","Verantwortlich","entry"),("faellig_am","Fällig am","entry"),("status","Status","entry"),("prioritaet","Priorität","entry"),("notizen","Notizen","text")]
+        insert = """INSERT INTO tbl_todo_center(titel,bereich,verantwortlich,faellig_am,status,prioritaet,notizen,bearbeiter) VALUES (:titel,:bereich,:verantwortlich,:faellig_am,:status,:prioritaet,:notizen,:bearbeiter)"""
+        update = """UPDATE tbl_todo_center SET titel=:titel,bereich=:bereich,verantwortlich=:verantwortlich,faellig_am=:faellig_am,status=:status,prioritaet=:prioritaet,notizen=:notizen,geaendert_am=CURRENT_TIMESTAMP,bearbeiter=:bearbeiter WHERE id=:id"""
+        self._show_center_table("ToDo-Center", "Aufgaben und offene Punkte intern vorbereiten.", "tbl_todo_center", cols, heads, fields, insert, update)
+
+    def _get_meta_value(self, key, default=""):
+        try:
+            with sqlite3.connect(DB_PATH) as con:
+                row = con.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+                return row[0] if row else default
+        except Exception:
+            return default
+
+    def _set_meta_value(self, key, value):
+        try:
+            with sqlite3.connect(DB_PATH) as con:
+                con.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, value))
+                con.commit()
+        except Exception:
+            pass
+
+    def _roadmap_mark_v11_erledigt(self):
+        """Roadmap-Eintrag für v11 nur einmal anlegen."""
+        if self._get_meta_value("roadmap_v11_sortierung_formatassistent", "") == "erledigt":
+            return
+        try:
+            add_roadmap_item(
+                bereich="GUI / Import",
+                titel="v11: Tabellen sortierbar und Rohdaten-Formatassistent vorbereitet",
+                beschreibung=(
+                    "Alle Treeview-Tabellen sind per Spaltenkopf sortierbar. "
+                    "Bei unbekanntem Rohdatenformat kann ein Formatassistent PZN-Spalte, Menge/Absatz-Spalte und Zeitraum 6/12 Monate erfassen. "
+                    "Das Mapping wird in tbl_rohdaten_mapping gespeichert."
+                ),
+                status="Erledigt",
+                prioritaet="Hoch",
+            )
+            self._set_meta_value("roadmap_v11_sortierung_formatassistent", "erledigt")
+        except Exception:
+            pass
+
+    def _roadmap_mark_status_ui_v15_erledigt(self):
+        """Roadmap-Eintrag für rechten Statusbereich, Ampel, Logo und Vollbild."""
+        title = "Rechter Statusbereich mit Daten-Ampel und Vollbildstart"
+        try:
+            for row in list_roadmap_items():
+                if str(row["titel"]).strip().lower() == title.lower():
+                    if row["status"] != "Erledigt":
+                        update_roadmap_status(int(row["id"]), "Erledigt")
+                    return
+            add_roadmap_item(
+                bereich="GUI",
+                titel=title,
+                beschreibung=(
+                    "Aktiver Bearbeiter zeigt zusätzlich Version und Datenbankname. "
+                    "Letzte Datenaktualisierung für APU/HAP, NMG Artikel, PK Rabatte und Artikelstamm "
+                    "wird mit Datum, Leerzeilen, Ampel und Legende angezeigt. Logo wird proportional dargestellt "
+                    "und das Programm startet maximiert."
+                ),
+                status="Erledigt",
+                prioritaet="Normal",
+            )
+        except Exception:
+            pass
+
+    def _ensure_kunden_tables(self):
+        with sqlite3.connect(DB_PATH) as con:
+            for table in ("tbl_pk_kunden", "tbl_zf_kunden"):
+                con.execute(f"""\nCREATE TABLE IF NOT EXISTS {table} (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,\nkundennummer TEXT,
+                        kundenname TEXT,\napotheke TEXT,
+                        status TEXT NOT NULL DEFAULT 'aktiv',\nerstellt_am TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        aktualisiert_am TEXT,\nbearbeiter TEXT
+                    )\n""")
+                con.execute(f"""\nCREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_kundennummer
+                    ON {table}(kundennummer)\nWHERE kundennummer IS NOT NULL AND kundennummer <> ''
+                """)
+            con.execute("INSERT OR IGNORE INTO meta(key,value) VALUES('neue_auswertung_kundentyp','PK')")
+            con.commit()
+
+    def _save_kunde_for_auswertung(self, kundentyp, kundennummer, kundenname, apotheke):
+        self._ensure_kunden_tables()
+        table = "tbl_zf_kunden" if kundentyp == "ZF" else "tbl_pk_kunden"
+        nummer = (kundennummer or "").strip()
+        name = (kundenname or "").strip()
+        apo = (apotheke or name or nummer or "").strip()
+        if not any([nummer, name, apo]):
+            return
+        bearbeiter = getpass.getuser()
+        with sqlite3.connect(DB_PATH) as con:
+            if nummer:
+                existing = con.execute(f"SELECT id FROM {table} WHERE kundennummer = ? LIMIT 1", (nummer,)).fetchone()
+            else:
+                existing = con.execute(f"SELECT id FROM {table} WHERE COALESCE(kundenname,'') = ? AND COALESCE(apotheke,'') = ? LIMIT 1", (name, apo)).fetchone()
+            if existing:
+                con.execute(f"""\nUPDATE {table}
+                    SET kundenname = ?,\napotheke = ?,
+                        status = 'aktiv',\naktualisiert_am = CURRENT_TIMESTAMP,
+                        bearbeiter = ?\nWHERE id = ?
+                """, (name, apo, bearbeiter, existing[0]))
+            else:
+                con.execute(f"""\nINSERT INTO {table} (
+                        kundennummer, kundenname, apotheke, status, erstellt_am, bearbeiter\n) VALUES (?, ?, ?, 'aktiv', CURRENT_TIMESTAMP, ?)
+                """, (nummer, name, apo, bearbeiter))
+            con.commit()
+
+    def _mark_latest_auswertung_customer(self, kundentyp, kundennummer, kundenname):
+        """Ergänzt Kundenangaben an der gerade erstellten Auswertung, falls die Spalten vorhanden sind."""
+        try:
+            with sqlite3.connect(DB_PATH) as con:
+                cols = {r[1] for r in con.execute("PRAGMA table_info(tbl_auswertungen)").fetchall()}
+                for col_name in ("kundentyp", "kundennummer", "kundenname"):
+                    if col_name not in cols:
+                        con.execute(f"ALTER TABLE tbl_auswertungen ADD COLUMN {col_name} TEXT")
+                datenquelle = "ZF" if kundentyp == "ZF" else "NMG"
+                row = con.execute("SELECT id FROM tbl_auswertungen ORDER BY id DESC LIMIT 1").fetchone()
+                if row:
+                    con.execute("""\nUPDATE tbl_auswertungen
+                        SET kundentyp = ?,\nkundennummer = ?,
+                            kundenname = ?,\ndatenquelle = ?
+                        WHERE id = ?\n""", (kundentyp, kundennummer, kundenname, datenquelle, row[0]))
+                con.commit()
+        except Exception:
+            pass
+
+    def _roadmap_mark_neue_auswertung_form_erledigt(self):
+        try:
+            ensure_roadmap_table()
+            titel = "Neue Auswertung Formular mit Kundentyp und Kundendaten"
+            for row in list_roadmap_items():
+                if row["titel"] == titel:
+                    update_roadmap_status(int(row["id"]), "Erledigt")
+                    return
+            add_roadmap_item(
+                bereich="Analyse",
+                titel=titel,
+                beschreibung=(
+                    "Neue Auswertung startet jetzt über eine Formularansicht mit Kundentyp "
+                    "Partnerkondition/Zukunftswerk, gespeicherter letzter Auswahl, Kundennummer, "
+                    "Kundenname und Rohdaten-Dateiauswahl. Kundentabellen für PK und ZF sind vorbereitet."
+                ),
+                status="Erledigt",
+                prioritaet="Hoch"
+            )
+        except Exception:
+            pass
+
+    def _kunden_zuordnen_dialog(self, auswertung_id, apotheke_name="", callback=None):
+        """Dialog um eine Auswertung nachträglich einem Kunden zuzuordnen."""
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title("Auswertung einem Kunden zuordnen")
+        win.geometry("680x480")
+        win.minsize(500, 380)
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+        tk.Label(win, text="Auswertung einem Kunden zuordnen", font=("Arial", 14, "bold"),
+                 fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(16, 4))
+        tk.Label(win, text=f"Auswertung: {apotheke_name}", font=("Arial", 10), fg="#555",
+                 bg="#f5f7fb").pack(anchor="w", padx=20, pady=(0, 8))
+        tk.Label(win, text="Kunden suchen und zuordnen – oder Abbrechen für keine Zuordnung.",
+                 font=("Arial", 9), fg="#888", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(0, 10))
+        sf = tk.Frame(win, bg="#f5f7fb")
+        sf.pack(fill="x", padx=20, pady=(0, 6))
+        sv = tk.StringVar()
+        tk.Label(sf, text="Suche:", bg="#f5f7fb", font=("Arial", 10, "bold")).pack(side="left")
+        tk.Entry(sf, textvariable=sv, width=35).pack(side="left", padx=(6, 8))
+        cols = ("kundennummer", "kundenname", "plz", "ort", "status")
+        heads = {"kundennummer": "Kundennr.", "kundenname": "Apothekenname", "plz": "PLZ", "ort": "Ort", "status": "Status"}
+        tf = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        tf.pack(fill="both", expand=True, padx=20, pady=(0, 8))
+        tf.columnconfigure(0, weight=1)
+        tf.rowconfigure(0, weight=1)
+        tree = ttk.Treeview(tf, columns=cols, show="headings", selectmode="browse", height=10)
+        for c in cols:
+            tree.heading(c, text=heads[c])
+            tree.column(c, width=120 if c != "kundenname" else 200, anchor="w")
+        tree.grid(row=0, column=0, sticky="nsew")
+        sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
+        sb.grid(row=0, column=1, sticky="ns")
+        tree.configure(yscrollcommand=sb.set)
+        row_map = {}
+        def reload(ft=""):
+            for item in tree.get_children(): tree.delete(item)
+            row_map.clear()
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    con.row_factory = sqlite3.Row
+                    rows = con.execute("SELECT * FROM tbl_kunden_center ORDER BY kundenname").fetchall()
+                for row in rows:
+                    vals = tuple(str(row[c] or "") for c in cols)
+                    if ft and ft.lower() not in " ".join(vals).lower(): continue
+                    iid = tree.insert("", "end", values=vals)
+                    row_map[iid] = dict(row)
+            except Exception: pass
+        reload()
+        if apotheke_name: sv.set(apotheke_name[:20]); reload(apotheke_name[:20])
+        sv.trace_add("write", lambda *_: reload(sv.get().strip()))
+        bar = tk.Frame(win, bg="#f5f7fb")
+        bar.pack(fill="x", padx=20, pady=(0, 14))
+        def uebernehmen():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Zuordnen", "Bitte einen Kunden auswählen.")
+                return
+            k = row_map.get(sel[0], {})
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    for col in ("kundennummer", "kundenname"):
+                        if col not in {r[1] for r in con.execute("PRAGMA table_info(tbl_auswertungen)").fetchall()}:
+                            con.execute(f"ALTER TABLE tbl_auswertungen ADD COLUMN {col} TEXT")
+                    con.execute("UPDATE tbl_auswertungen SET kundennummer=?, kundenname=? WHERE id=?",
+                                (k.get("kundennummer",""), k.get("kundenname",""), auswertung_id))
+                    con.commit()
+            except Exception as exc:
+                messagebox.showerror("Fehler", str(exc)); return
+            win.destroy()
+            if callback: callback()
+        tk.Button(bar, text="Abbrechen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8,0))
+        tk.Button(bar, text="Übernehmen", command=uebernehmen, bg="#0b4a86", fg="white",
+                  relief="flat", font=("Arial", 11, "bold"), padx=16, pady=7).pack(side="right")
+
+    def show_neue_auswertung_page(self):
+        self._ensure_kunden_tables()
+        self.clear_page()
+        self._page_header(
+            "Neue Auswertung",
+            "Kundentyp, Kundendaten und Rohdaten in einer Ansicht erfassen."
+        )
+
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure(1, weight=1)
+
+        last_type = self._get_meta_value("neue_auswertung_kundentyp", "PK")
+        if last_type not in ("PK", "ZF"):
+            last_type = "PK"
+
+        kundentyp_var = tk.StringVar(value=last_type)
+        kundennummer_var = tk.StringVar()
+        kundenname_var = tk.StringVar()
+        apotheke_var = tk.StringVar()
+        rohdatei_var = tk.StringVar()
+        vorlage_var = tk.StringVar(value=self._template_label_for_selected_slot())
+
+        form = tk.Frame(body, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1)
+        form.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 14), ipady=8)
+        form.columnconfigure(1, weight=1)
+
+        tk.Label(form, text="1. Kundentyp", bg="#f8fbff", fg="#0b4a86", font=("Arial", 12, "bold")).grid(row=0, column=0, sticky="w", padx=14, pady=(14, 6))
+        type_frame = tk.Frame(form, bg="#f8fbff")
+        type_frame.grid(row=0, column=1, sticky="w", padx=14, pady=(14, 6))
+        tk.Radiobutton(type_frame, text="Partnerkondition", variable=kundentyp_var, value="PK", bg="#f8fbff").pack(side="left", padx=(0, 18))
+        tk.Radiobutton(type_frame, text="Zukunftswerk", variable=kundentyp_var, value="ZF", bg="#f8fbff").pack(side="left")
+
+        # Kundennummer optional – für spätere Zuordnung
+        tk.Label(form, text="2. Kundennummer (optional)", bg="#f8fbff", fg="#0b4a86", font=("Arial", 12, "bold")).grid(row=1, column=0, sticky="w", padx=14, pady=7)
+        entry_knr = tk.Entry(form, textvariable=kundennummer_var, width=28)
+        entry_knr.grid(row=1, column=1, sticky="ew", padx=14, pady=7)
+        tk.Label(form, text="Kann leer bleiben – Zuordnung nach Auswertung möglich", bg="#f8fbff", fg="#888", font=("Arial", 9)).grid(row=1, column=2, sticky="w", padx=(0,14), pady=7)
+        labels = [
+            ("3. Kundenname / Apotheke", kundenname_var, "z. B. Rosen Apotheke Forst"),
+            ("4. Auswertungsname", apotheke_var, "Name für Ausgabeordner und Analyse"),
+        ]
+        for idx, (label, var, hint) in enumerate(labels, start=2):
+            tk.Label(form, text=label, bg="#f8fbff", fg="#0b4a86", font=("Arial", 12, "bold")).grid(row=idx, column=0, sticky="w", padx=14, pady=7)
+            entry = tk.Entry(form, textvariable=var, width=54)
+            entry.grid(row=idx, column=1, sticky="ew", padx=14, pady=7)
+            tk.Label(form, text=hint, bg="#f8fbff", fg="#666", font=("Arial", 9)).grid(row=idx, column=2, sticky="w", padx=(0, 14), pady=7)
+
+        def choose_raw_file():
+            file = filedialog.askopenfilename(title="Rohdaten auswählen", filetypes=SUPPORTED_DATA_FILETYPES)
+            if not file:
+                return
+            rohdatei_var.set(file)
+            if not apotheke_var.get().strip():
+                apotheke_var.set(Path(file).stem.replace("_", " "))
+            if not kundenname_var.get().strip():
+                kundenname_var.set(Path(file).stem.replace("_", " "))
+            self.status.set(f"Rohdaten ausgewählt: {Path(file).name}")
+
+        tk.Label(form, text="5. Rohdaten", bg="#f8fbff", fg="#0b4a86", font=("Arial", 12, "bold")).grid(row=4, column=0, sticky="w", padx=14, pady=7)
+        file_frame = tk.Frame(form, bg="#f8fbff")
+        file_frame.grid(row=4, column=1, columnspan=2, sticky="ew", padx=14, pady=7)
+        file_frame.columnconfigure(0, weight=1)
+        tk.Entry(file_frame, textvariable=rohdatei_var, state="readonly").grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        tk.Button(file_frame, text="Datei auswählen", command=choose_raw_file, padx=12, pady=5).grid(row=0, column=1)
+
+        tk.Label(form, text="6. Auswertungsvorlage", bg="#f8fbff", fg="#0b4a86", font=("Arial", 12, "bold")).grid(row=5, column=0, sticky="w", padx=14, pady=7)
+        template_frame = tk.Frame(form, bg="#f8fbff")
+        template_frame.grid(row=5, column=1, columnspan=2, sticky="ew", padx=14, pady=7)
+        template_frame.columnconfigure(0, weight=1)
+        ttk.Combobox(template_frame, textvariable=vorlage_var, values=self._template_combo_values(), state="readonly").grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        tk.Button(template_frame, text="Vorlagen verwalten", command=self.show_auswertungsvorlage_page, padx=12, pady=5).grid(row=0, column=1)
+
+        info = (
+            "Hinweis: Der Kundentyp und die gewählte Auswertungsvorlage werden gespeichert und beim nächsten Öffnen wieder vorgeschlagen.\n"
+            "Die Kundendaten werden bereits in PK-/ZF-Kundentabellen vorbereitet."
+        )
+        tk.Label(body, text=info, justify="left", bg="#ffffff", fg="#333").grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 12))
+
+        def start_analysis():
+            file = rohdatei_var.get().strip()
+            if not file:
+                messagebox.showinfo("Neue Auswertung", "Bitte zuerst eine Rohdaten-Datei auswählen.")
+                return
+            kundentyp = kundentyp_var.get()
+            kundennummer = kundennummer_var.get().strip()
+            kundenname = kundenname_var.get().strip()
+            analyse_name = _safe_name(apotheke_var.get().strip() or kundenname or Path(file).stem.replace("_", " "))
+            if not analyse_name:
+                messagebox.showinfo("Neue Auswertung", "Bitte Kundenname oder Auswertungsname eingeben.")
+                return
+
+            self._set_meta_value("neue_auswertung_kundentyp", kundentyp)
+            self._save_kunde_for_auswertung(kundentyp, kundennummer, kundenname, analyse_name)
+            vorlage_slot = self._slot_from_template_label(vorlage_var.get())
+            self._set_selected_auswertungsvorlage_slot(vorlage_slot)
+
+            try:
+                self._run_neue_auswertung_export(file, analyse_name, kundentyp, kundennummer, kundenname or analyse_name, vorlage_slot=vorlage_slot)
+                self.after(100, _nach_auswertung_zuordnen)
+            except UnknownInputFormatError as exc:
+                self.status.set(str(exc))
+                if messagebox.askyesno("Format nicht erkannt", f"{exc}\n\nSoll der Rohdaten-Formatassistent geöffnet werden?"):
+                    mapping = self._open_rohdaten_format_assistent(file, str(exc))
+                    if mapping:
+                        try:
+                            self._run_auswertung_after_mapping(file, mapping, analyse_name, kundentyp, kundennummer, kundenname or analyse_name, vorlage_slot=vorlage_slot)
+                        except Exception as mapped_exc:
+                            self.status.set(f"Auswertung nach Mapping fehlgeschlagen: {mapped_exc}")
+                            messagebox.showerror("Auswertungsfehler nach Mapping", str(mapped_exc))
+                else:
+                    messagebox.showwarning("Format nicht erkannt", str(exc))
+            except Exception as exc:
+                messagebox.showerror("Auswertungsfehler", str(exc))
+
+        def _nach_auswertung_zuordnen():
+            if kundennummer_var.get().strip():
+                return
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    row = con.execute("SELECT id, kundennummer FROM tbl_auswertungen ORDER BY id DESC LIMIT 1").fetchone()
+                    if row and not row[1]:
+                        ana_id = row[0]
+                        if messagebox.askyesno("Kundenzuordnung",
+                                "Soll diese Auswertung einem Kunden zugeordnet werden?\n\n"
+                                "Nein lässt die Auswertung ohne Kundenzuordnung gespeichert."):
+                            self._kunden_zuordnen_dialog(ana_id, apotheke_name=apotheke_var.get().strip() or kundenname_var.get().strip())
+            except Exception:
+                pass
+
+        buttonbar = tk.Frame(body, bg="#ffffff")
+        buttonbar.grid(row=2, column=0, columnspan=3, sticky="w", pady=(0, 18))
+        tk.Button(
+            buttonbar,
+            text="Auswertung starten  →",
+            command=start_analysis,
+            bg="#0b4a86",
+            fg="white",
+            activebackground="#0b4a86",
+            relief="flat",
+            font=("Arial", 12, "bold"),
+            padx=20,
+            pady=10
+        ).pack(side="left")
+        tk.Button(
+            buttonbar,
+            text="Zurücksetzen",
+            command=lambda: [kundennummer_var.set(""), kundenname_var.set(""), apotheke_var.set(""), rohdatei_var.set("")],
+            padx=16,
+            pady=9
+        ).pack(side="left", padx=10)
+
+        # Eigener Block: Abweichungsanalyse. Bewusst getrennt von Neue Auswertung.
+        abw = tk.Frame(body, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1)
+        abw.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(4, 0), ipady=8)
+        abw.columnconfigure(1, weight=1)
+
+        programm_auswertung_var = tk.StringVar()
+        manuelle_anpassung_var = tk.StringVar()
+        selected_programm_info = tk.StringVar(value="Keine Programm-Auswertung ausgewählt.")
+
+        tk.Label(
+            abw,
+            text="Abweichungsanalyse",
+            bg="#f8fbff",
+            fg="#0b4a86",
+            font=("Arial", 16, "bold")
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=14, pady=(14, 4))
+        tk.Label(
+            abw,
+            text="Getrennter Bereich: Programm-Auswertung auswählen, manuelle Anpassung laden und Abweichungsanalyse starten.",
+            bg="#f8fbff",
+            fg="#333"
+        ).grid(row=1, column=0, columnspan=3, sticky="w", padx=14, pady=(0, 10))
+
+        def choose_programm_file():
+            file = filedialog.askopenfilename(title="Programm-Auswertung auswählen", filetypes=SUPPORTED_DATA_FILETYPES)
+            if not file:
+                return
+            programm_auswertung_var.set(file)
+            selected_programm_info.set(f"Datei: {Path(file).name}")
+            self.status.set(f"Programm-Auswertung ausgewählt: {Path(file).name}")
+
+        def choose_saved_programm():
+            rows = self._get_saved_analysis_rows()
+            if not rows:
+                messagebox.showinfo("Gespeicherte Auswertungen", "Es wurden keine gespeicherten Auswertungen gefunden.")
+                return
+
+            win = tk.Toplevel(self)
+            win.resizable(True, True)
+            win.title("Gespeicherte Auswertung auswählen")
+            win.geometry("920x460")
+            win.configure(bg="#f5f7fb")
+            win.transient(self)
+            win.grab_set()
+
+            tk.Label(win, text="Programm-Auswertung aus Datenbank wählen", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 6))
+            tk.Label(win, text="Die Ausgabedatei der gewählten gespeicherten Analyse wird für die Abweichungsanalyse verwendet.", bg="#f5f7fb", fg="#333").pack(anchor="w", padx=22, pady=(0, 10))
+
+            frame = tk.Frame(win, bg="#f5f7fb")
+            frame.pack(fill="both", expand=True, padx=22, pady=(0, 12))
+            frame.columnconfigure(0, weight=1)
+            frame.rowconfigure(0, weight=1)
+
+            lb = tk.Listbox(frame, font=("Consolas", 10), height=15)
+            lb.grid(row=0, column=0, sticky="nsew")
+            scroll = tk.Scrollbar(frame, orient="vertical", command=lb.yview)
+            scroll.grid(row=0, column=0, sticky="nse")
+            lb.configure(yscrollcommand=scroll.set)
+
+            for row in rows:
+                dq = "PK" if row["datenquelle"] == "NMG" else row["datenquelle"]
+                datum = str(row["datum"] or "")[:19]
+                name = str(row["apotheke"] or "")[:38]
+                lb.insert("end", f"{row['id']:>5} | {datum:<19} | {dq:<3} | {name:<38} | Pos: {row['anzahl_positionen'] or 0:>5}")
+
+            def use_selected():
+                sel = lb.curselection()
+                if not sel:
+                    messagebox.showinfo("Auswahl", "Bitte zuerst eine gespeicherte Auswertung auswählen.")
+                    return
+                row = rows[sel[0]]
+                f = self._find_output_file_for_analysis_row(row)
+                if not f:
+                    messagebox.showwarning(
+                        "Ausgabedatei fehlt",
+                        "Zu dieser gespeicherten Auswertung wurde keine Ausgabedatei gefunden. Bitte die Programm-Auswertung als Datei auswählen."
+                    )
+                    return
+                programm_auswertung_var.set(str(f))
+                selected_programm_info.set(f"Gespeichert: ID {row['id']} | {row['apotheke']} | {f.name}")
+                self.status.set(f"Gespeicherte Programm-Auswertung ausgewählt: {f.name}")
+                win.destroy()
+
+            btns = tk.Frame(win, bg="#f5f7fb")
+            btns.pack(fill="x", padx=22, pady=(0, 18))
+            tk.Button(btns, text="Abbrechen", command=win.destroy, padx=14, pady=8).pack(side="right", padx=(8, 0))
+            tk.Button(btns, text="Auswertung übernehmen", command=use_selected, bg="#0b4a86", fg="white", relief="flat", padx=18, pady=9).pack(side="right")
+            lb.bind("<Double-Button-1>", lambda e: use_selected())
+
+        def choose_manual_file():
+            file = filedialog.askopenfilename(title="Manuelle Anpassung auswählen", filetypes=SUPPORTED_DATA_FILETYPES)
+            if not file:
+                return
+            manuelle_anpassung_var.set(file)
+            self.status.set(f"Manuelle Anpassung ausgewählt: {Path(file).name}")
+
+        def start_deviation_from_page():
+            programm = programm_auswertung_var.get().strip()
+            manuell = manuelle_anpassung_var.get().strip()
+            if not programm:
+                messagebox.showinfo("Abweichungsanalyse", "Bitte zuerst eine Programm-Auswertung auswählen.")
+                return
+            if not manuell:
+                messagebox.showinfo("Abweichungsanalyse", "Bitte zuerst die manuelle Anpassung auswählen.")
+                return
+            try:
+                out = export_abweichungsanalyse(manuell, programm)
+                self._roadmap_mark_abweichung_in_neue_auswertung_erledigt()
+                self.status.set(f"Abweichungsanalyse erzeugt: {out}")
+                self._roadmap_mark_abweichung_schulbank_v9_erledigt()
+                self.show_abweichungs_editor(out)
+            except Exception as exc:
+                messagebox.showerror("Abweichungsanalyse", str(exc))
+
+        tk.Label(abw, text="1. Programm-Auswertung", bg="#f8fbff", fg="#0b4a86", font=("Arial", 12, "bold")).grid(row=2, column=0, sticky="w", padx=14, pady=7)
+        prog_frame = tk.Frame(abw, bg="#f8fbff")
+        prog_frame.grid(row=2, column=1, columnspan=2, sticky="ew", padx=14, pady=7)
+        prog_frame.columnconfigure(0, weight=1)
+        tk.Entry(prog_frame, textvariable=programm_auswertung_var, state="readonly").grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        tk.Button(prog_frame, text="Gespeicherte auswählen", command=choose_saved_programm, padx=10, pady=5).grid(row=0, column=1, padx=(0, 6))
+        tk.Button(prog_frame, text="Datei auswählen", command=choose_programm_file, padx=10, pady=5).grid(row=0, column=2)
+        tk.Label(abw, textvariable=selected_programm_info, bg="#f8fbff", fg="#666", font=("Arial", 9)).grid(row=3, column=1, columnspan=2, sticky="w", padx=14, pady=(0, 6))
+
+        tk.Label(abw, text="2. Manuelle Anpassung", bg="#f8fbff", fg="#0b4a86", font=("Arial", 12, "bold")).grid(row=4, column=0, sticky="w", padx=14, pady=7)
+        man_frame = tk.Frame(abw, bg="#f8fbff")
+        man_frame.grid(row=4, column=1, columnspan=2, sticky="ew", padx=14, pady=7)
+        man_frame.columnconfigure(0, weight=1)
+        tk.Entry(man_frame, textvariable=manuelle_anpassung_var, state="readonly").grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        tk.Button(man_frame, text="Datei auswählen", command=choose_manual_file, padx=10, pady=5).grid(row=0, column=1)
+
+        abw_buttons = tk.Frame(abw, bg="#f8fbff")
+        abw_buttons.grid(row=5, column=0, columnspan=3, sticky="w", padx=14, pady=(10, 14))
+        tk.Button(
+            abw_buttons,
+            text="Abweichungsanalyse starten  →",
+            command=start_deviation_from_page,
+            bg="#8b5a00",
+            fg="white",
+            activebackground="#8b5a00",
+            relief="flat",
+            font=("Arial", 12, "bold"),
+            padx=18,
+            pady=9
+        ).pack(side="left")
+        tk.Button(
+            abw_buttons,
+            text="Abweichung zurücksetzen",
+            command=lambda: [programm_auswertung_var.set(""), manuelle_anpassung_var.set(""), selected_programm_info.set("Keine Programm-Auswertung ausgewählt.")],
+            padx=14,
+            pady=8
+        ).pack(side="left", padx=10)
+
+    def show_analysen_page(self):
+        self.clear_page()
+        self._page_header("Analysen", "Produktanalyse, Marktanalyse, gespeicherte Analysen, Abweichungsanalyse oder manuelle Analysen importieren.")
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure((0, 1, 2, 3, 4), weight=1)
+        self._tile(body, 0, "📈", "Produktanalyse", "Erst gespeicherte Auswertung auswählen, dann Produktanalyse starten.", "Auswählen", lambda: self.open_saved_analyses("produktanalyse"), "#11823b")
+        self._tile(body, 1, "🌍", "Marktanalyse", "Erst gespeicherte Auswertung auswählen, dann Marktanalyse starten.", "Auswählen", lambda: self.open_saved_analyses("marktanalyse"), "#3867b7")
+        self._tile(body, 2, "📁", "Gespeichert", "Gespeicherte Analysen öffnen.", "Öffnen", self.open_saved_analyses, "#0b4a86")
+        self._tile(body, 3, "🔍", "Abweichung", "Manuelle und Programm-Auswertung vergleichen.", "Starten", self.deviation_analysis, "#8b5a00")
+        self._tile(body, 4, "📥", "Manuelle Analysen", "Mitarbeiter-Auswertungen importieren und Schulbank/Analysen füttern.", "Import", self.import_manuelle_analysen, "#6b4fb3")
+
+    def show_produktanalyse_page(self):
+        # Produktanalyse soll gezielt auf einer ausgewählten gespeicherten Auswertung laufen.
+        self.open_saved_analyses("produktanalyse")
+
+    def show_marktanalyse_page(self):
+        # Marktanalyse soll gezielt auf einer ausgewählten gespeicherten Auswertung laufen.
+        self.open_saved_analyses("marktanalyse")
+
+    def show_abweichungsanalyse_page(self):
+        self._action_page(
+            "Abweichungsanalyse",
+            "Manuelle Auswertung und Programm-Auswertung auswählen und vergleichen.",
+            "Abweichungsanalyse starten  →",
+            self.deviation_analysis,
+            "#8b5a00"
+        )
+
+    def show_schulbank_page(self, section="Schulbank"):
+        self._ensure_lernvorschlaege_table()
+        self._roadmap_mark_schulbank_bulk_erledigt()
+        self.clear_page()
+
+        if section == "Schulbank":
+            self._page_header(
+                "Schulbank",
+                "Bitte einen Bereich auswählen. Daten werden erst in den Unterbereichen angezeigt."
+            )
+
+            body = tk.Frame(self.page, bg="#ffffff")
+            body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+            body.columnconfigure((0, 1), weight=1)
+
+            cards = [
+                ("🆕", "Neue Lernvorschläge", "Neue, noch nicht bearbeitete Vorschläge anzeigen.", lambda: self.show_schulbank_page("Neue Lernvorschläge"), "#0b4a86"),
+                ("✅", "Übernommen", "Gelernte Vorschläge der letzten 4 Wochen anzeigen.", lambda: self.show_schulbank_page("Übernommen"), "#11823b"),
+                ("❌", "Abgelehnt", "Abgelehnte Vorschläge der letzten 4 Wochen anzeigen.", lambda: self.show_schulbank_page("Abgelehnt"), "#9b1c1c"),
+                ("🕘", "Historie", "Bearbeitbare Historie von 4 Wochen bis 6 Monate anzeigen.", lambda: self.show_schulbank_page("Historie"), "#8b5a00"),
+                ("🔎", "Manuelle Prüfung", "Mehrdeutige gelernte Austausche prüfen und bereinigen.", self.show_schulbank_manuelle_pruefung, "#6b4fb3"),
+            ]
+
+            for idx, (icon, title, desc, cmd, color) in enumerate(cards):
+                row = idx // 2
+                col = idx % 2
+                f = tk.Frame(body, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1)
+                f.grid(row=row, column=col, sticky="nsew", padx=10, pady=10, ipadx=8, ipady=8)
+                tk.Label(f, text=icon, font=("Arial", 34), bg="#f8fbff", fg=color).pack(pady=(20, 6))
+                tk.Label(f, text=title, font=("Arial", 15, "bold"), bg="#f8fbff", fg="#123").pack()
+                tk.Label(f, text=desc, wraplength=260, justify="center", bg="#f8fbff", fg="#333").pack(padx=18, pady=12)
+                tk.Button(
+                    f,
+                    text="Öffnen  →",
+                    command=cmd,
+                    bg=color,
+                    fg="white",
+                    activebackground=color,
+                    relief="flat",
+                    font=("Arial", 12, "bold"),
+                    padx=18,
+                    pady=8
+                ).pack(fill="x", padx=24, pady=(8, 18))
+
+            self.status.set("Schulbank: Bereich auswählen.")
+            return
+
+        self._page_header(
+            f"AKTIVE SCHULBANK – {section}",
+            "Lernen schreibt sofort in die Austauschdatenbank. Einträge bleiben dauerhaft nachvollziehbar."
+        )
+
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+
+        status_map = {
+            "Neue Lernvorschläge": "neu",
+            "Übernommen": "uebernommen",
+            "Abgelehnt": "abgelehnt",
+            "Historie": getattr(self, "_schulbank_historie_filter", "historie_uebernommen"),
+        }
+        current_status = status_map.get(section, None)
+
+        top = tk.Frame(body, bg="#ffffff")
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+
+        if section == "Historie":
+            def set_history_filter(value):
+                self._schulbank_historie_filter = value
+                self.show_schulbank_page("Historie")
+            active_filter = getattr(self, "_schulbank_historie_filter", "historie_uebernommen")
+            tk.Button(
+                top,
+                text="Übernommene",
+                command=lambda: set_history_filter("historie_uebernommen"),
+                bg="#11823b" if active_filter == "historie_uebernommen" else "#e9eef5",
+                fg="white" if active_filter == "historie_uebernommen" else "#123",
+                relief="flat",
+                padx=14,
+                pady=8
+            ).pack(side="left", padx=(0, 8))
+            tk.Button(
+                top,
+                text="Abgelehnte",
+                command=lambda: set_history_filter("historie_abgelehnt"),
+                bg="#9b1c1c" if active_filter == "historie_abgelehnt" else "#e9eef5",
+                fg="white" if active_filter == "historie_abgelehnt" else "#123",
+                relief="flat",
+                padx=14,
+                pady=8
+            ).pack(side="left", padx=(0, 8))
+        else:
+            tk.Button(
+                top,
+                text="+ Lernvorschlag hinzufügen",
+                command=lambda: self.add_lernvorschlag(section),
+                bg="#0b4a86",
+                fg="white",
+                relief="flat",
+                padx=14,
+                pady=8
+            ).pack(side="left")
+
+        tk.Label(
+            top,
+            text="Übernommen und Abgelehnt bleiben 7 Tage sichtbar und wandern danach in die Historie.",
+            bg="#ffffff",
+            fg="#333",
+            font=("Arial", 10)
+        ).pack(side="left", padx=14)
+
+        columns = ("id", "pzn_alt", "artikel_alt", "pzn_nmg", "freitext_austausch", "status", "bearbeiter", "erstellt_am", "bearbeitet_am")
+        tree = ttk.Treeview(body, columns=columns, show="headings", selectmode="extended")
+        tree.grid(row=1, column=0, sticky="nsew")
+
+        headings = {
+            "id": "ID",
+            "pzn_alt": "PZN alt",
+            "artikel_alt": "Artikel alt",
+            "pzn_nmg": "PZN NMG",
+            "freitext_austausch": "Austauschbar gegen",
+            "status": "Status",
+            "bearbeiter": "Bearbeiter",
+            "erstellt_am": "Erstellt",
+            "bearbeitet_am": "Bearbeitet",
+        }
+        widths = {
+            "id": 50,
+            "pzn_alt": 90,
+            "artikel_alt": 210,
+            "pzn_nmg": 90,
+            "freitext_austausch": 230,
+            "status": 105,
+            "bearbeiter": 110,
+            "erstellt_am": 135,
+            "bearbeitet_am": 135,
+        }
+
+        for col in columns:
+            tree.heading(col, text=headings[col])
+            tree.column(col, width=widths[col], anchor="w")
+        self._make_tree_sortable(tree, columns, headings)
+
+        scrollbar = tk.Scrollbar(body, orient="vertical", command=tree.yview)
+        scrollbar.grid(row=1, column=0, sticky="nse")
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        actionbar = tk.Frame(body, bg="#ffffff")
+        actionbar.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+
+        def selected_ids():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Schulbank", "Bitte zuerst einen oder mehrere Lernvorschläge auswählen.")
+                return []
+            ids = []
+            for iid in sel:
+                try:
+                    ids.append(int(tree.item(iid, "values")[0]))
+                except Exception:
+                    pass
+            return ids
+
+        def selected_id():
+            ids = selected_ids()
+            return ids[0] if ids else None
+
+        rows = self.get_lernvorschlaege(current_status)
+        visible_ids = []
+        for row in rows:
+            visible_ids.append(int(row["id"]))
+            tree.insert("", "end", values=(
+                row["id"],
+                row["pzn_alt"] or "",
+                row["artikel_alt"] or row["produkt_alt"] or "",
+                row["pzn_nmg"] or "",
+                row["freitext_austausch"] or row["produkt_neu"] or "",
+                row["status"],
+                row["bearbeiter"] or "",
+                row["erstellt_am"],
+                row["bearbeitet_am"] or "",
+            ))
+
+        def update_many(item_ids, status, label, confirm_all=False):
+            if not item_ids:
+                messagebox.showinfo("Schulbank", "Keine Einträge ausgewählt.")
+                return
+            if confirm_all:
+                if not messagebox.askyesno("Schulbank Sammelaktion", f"{len(item_ids)} sichtbare Vorschläge werden jetzt {label}.\n\nFortfahren?"):
+                    return
+            elif len(item_ids) > 1:
+                if not messagebox.askyesno("Schulbank Sammelaktion", f"{len(item_ids)} markierte Vorschläge werden jetzt {label}.\n\nFortfahren?"):
+                    return
+
+            done = 0
+            errors = []
+            for item_id in item_ids:
+                try:
+                    self.update_lernvorschlag_status(item_id, status)
+                    done += 1
+                except Exception as exc:
+                    errors.append(f"ID {item_id}: {exc}")
+
+            if errors:
+                messagebox.showwarning("Schulbank", f"{done} Einträge verarbeitet.\n\nFehler:\n" + "\n".join(errors[:8]))
+            else:
+                self.status.set(f"Schulbank: {done} Einträge {label}.")
+            self.show_schulbank_page(section)
+
+        def set_status(status):
+            ids = selected_ids()
+            if not ids:
+                return
+            label = "gelernt" if status == "uebernommen" else ("abgelehnt" if status == "abgelehnt" else "zurückgesetzt")
+            update_many(ids, status, label)
+
+        def delete_selected():
+            ids = selected_ids()
+            if not ids:
+                return
+            if not messagebox.askyesno("Lernvorschläge löschen", f"{len(ids)} Lernvorschlag/Vorschläge wirklich löschen?\n\nDie Einträge werden aus der Schulbank entfernt. Bereits gelernte Austauschdaten bleiben erhalten."):
+                return
+            for item_id in ids:
+                self.delete_lernvorschlag(item_id)
+            self.show_schulbank_page(section)
+
+        tk.Button(actionbar, text="✓ Markierte lernen", command=lambda: set_status("uebernommen"), bg="#11823b", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=(0, 8))
+        tk.Button(actionbar, text="✗ Markierte ablehnen", command=lambda: set_status("abgelehnt"), bg="#9b1c1c", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=8)
+        tk.Button(actionbar, text="✓ Alle sichtbaren lernen", command=lambda: update_many(visible_ids, "uebernommen", "gelernt", True), bg="#11823b", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=8)
+        tk.Button(actionbar, text="✗ Alle sichtbaren ablehnen", command=lambda: update_many(visible_ids, "abgelehnt", "abgelehnt", True), bg="#9b1c1c", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=8)
+        tk.Button(actionbar, text="↩ Rückgängig", command=lambda: set_status("neu"), bg="#8b5a00", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=8)
+        tk.Button(actionbar, text="Löschen", command=delete_selected, padx=14, pady=8).pack(side="left", padx=8)
+
+        self.status.set(f"Schulbank aktiv: {len(rows)} Einträge angezeigt. Mehrfachauswahl ist möglich.")
+
+
+    def show_schulbank_manuelle_pruefung(self):
+        """Prüft gelernte Austauschfälle mit mehreren möglichen NMG-PZN/Austauschtexten je PZN alt."""
+        self.clear_page()
+        self._page_header(
+            "Schulbank – Manuelle Prüfung",
+            "Zeigt PZN alt, für die mehrere gelernte NMG-PZN oder Austauschtexte vorhanden sind. Jeder darf hier bereinigen."
+        )
+
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+
+        info_var = tk.StringVar(value="Mehrdeutige Austausche werden geladen...")
+        tk.Label(body, textvariable=info_var, bg="#ffffff", fg="#333", anchor="w", justify="left").grid(row=0, column=0, sticky="ew", pady=(0, 8))
+
+        columns = ("id", "pzn_alt", "artikel_alt", "pzn_nmg", "freitext_austausch", "quelle", "bearbeiter", "erstellt_am")
+        headings = {
+            "id": "ID",
+            "pzn_alt": "PZN alt",
+            "artikel_alt": "Artikel alt",
+            "pzn_nmg": "PZN NMG",
+            "freitext_austausch": "Austauschbar gegen",
+            "quelle": "Quelle",
+            "bearbeiter": "Bearbeiter",
+            "erstellt_am": "Erstellt",
+        }
+        widths = {
+            "id": 55,
+            "pzn_alt": 95,
+            "artikel_alt": 230,
+            "pzn_nmg": 95,
+            "freitext_austausch": 260,
+            "quelle": 120,
+            "bearbeiter": 120,
+            "erstellt_am": 145,
+        }
+        tree = ttk.Treeview(body, columns=columns, show="headings", selectmode="extended")
+        tree.grid(row=1, column=0, sticky="nsew")
+        for col in columns:
+            tree.heading(col, text=headings[col])
+            tree.column(col, width=widths[col], anchor="w")
+        self._make_tree_sortable(tree, columns, headings)
+        scrollbar = tk.Scrollbar(body, orient="vertical", command=tree.yview)
+        scrollbar.grid(row=1, column=0, sticky="nse")
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        def normalize_pzn_sql_expr(col):
+            return f"printf('%08d', CAST(REPLACE(REPLACE(COALESCE({col},''),'.0',''),' ','') AS INTEGER))"
+
+        def load_rows():
+            rows = []
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    con.row_factory = sqlite3.Row
+                    # 1) Mehrdeutige, bereits gelernte Austauschdaten aus der Austauschdatenbank.
+                    # Gruppierung erfolgt bewusst in Python über normalisierte PZN, damit 1234567,
+                    # 01234567 und Excel-Werte wie 1234567.0 als dieselbe PZN alt gelten.
+                    db_rows = con.execute("""\nSELECT
+                            id,\nCOALESCE(pzn_alt, '') AS pzn_alt,
+                            COALESCE(artikel_alt, '') AS artikel_alt,\nCOALESCE(pzn_nmg, '') AS pzn_nmg,
+                            COALESCE(freitext_austausch, '') AS freitext_austausch,\nCOALESCE(quelle, '') AS quelle,
+                            COALESCE(bearbeiter, '') AS bearbeiter,\nCOALESCE(erstellt_am, gueltig_ab, '') AS erstellt_am,
+                            COALESCE(status, 'aktiv') AS status\nFROM tbl_austauschdatenbank
+                        WHERE COALESCE(status, 'aktiv') = 'aktiv'\nAND COALESCE(pzn_alt, '') <> ''
+                          AND (COALESCE(pzn_nmg, '') <> '' OR COALESCE(freitext_austausch, '') <> '')\nORDER BY pzn_alt, id DESC
+                    """).fetchall()
+
+                    def _norm_text(value):
+                        return " ".join(str(value or "").strip().lower().split())
+
+                    grouped = {}
+                    for r in db_rows:
+                        item = dict(r)
+                        key = self._normalize_pzn_input(item.get("pzn_alt"))
+                        if not key:
+                            continue
+                        item["_source_table"] = "tbl_austauschdatenbank"
+                        item["_norm_pzn_alt"] = key
+                        grouped.setdefault(key, []).append(item)
+
+                    for key, items in grouped.items():
+                        variants = {
+                            (
+                                self._normalize_pzn_input(item.get("pzn_nmg")),
+                                _norm_text(item.get("freitext_austausch")),
+                            )
+                            for item in items
+                            if self._normalize_pzn_input(item.get("pzn_nmg")) or _norm_text(item.get("freitext_austausch"))
+                        }
+                        if len(variants) > 1:
+                            rows.extend(items)
+
+                    # 2) Fälle, die im Abweichungsanalyse-Editor bewusst zur manuellen Prüfung geschickt wurden.
+                    # Diese sind noch nicht zwingend gelernt und dürfen deshalb nicht nur in der Austauschdatenbank gesucht werden.
+                    try:
+                        editor_rows = con.execute("""\nSELECT
+                                id,\nCOALESCE(pzn, '') AS pzn_alt,
+                                COALESCE(artikel, '') AS artikel_alt,\nCOALESCE(MAX(CASE WHEN lower(feld) LIKE '%nmg%' AND lower(feld) LIKE '%pzn%' THEN NULLIF(manuell, '') END),
+                                         MAX(CASE WHEN lower(feld) LIKE '%nmg%' AND lower(feld) LIKE '%pzn%' THEN NULLIF(programm, '') END),\n'') AS pzn_nmg,
+                                COALESCE(MAX(CASE WHEN lower(feld) LIKE '%austausch%' THEN NULLIF(manuell, '') END),\nMAX(CASE WHEN lower(feld) LIKE '%austausch%' THEN NULLIF(programm, '') END),
+                                         '') AS freitext_austausch,\n'Abweichungseditor' AS quelle,
+                                COALESCE(bearbeiter, '') AS bearbeiter,\nCOALESCE(bearbeitet_am, erstellt_am, '') AS erstellt_am,
+                                COALESCE(status, '') AS status\nFROM tbl_abweichungs_editor
+                            WHERE COALESCE(status, '') = 'manuelle_pruefung'\nGROUP BY quelle_datei, pzn
+                            ORDER BY datetime(COALESCE(bearbeitet_am, erstellt_am)) DESC, id DESC\n""").fetchall()
+                        for r in editor_rows:
+                            item = dict(r)
+                            item["_source_table"] = "tbl_abweichungs_editor"
+                            # Nur anzeigen, wenn wenigstens eine verwertbare Zielangabe vorhanden ist.
+                            if str(item.get("pzn_nmg") or "").strip() or str(item.get("freitext_austausch") or "").strip():
+                                rows.append(item)
+                    except Exception:
+                        pass
+            except Exception as exc:
+                messagebox.showerror("Manuelle Prüfung", f"Mehrdeutige Austausche konnten nicht geladen werden:\n{exc}")
+            return rows
+
+        row_map = {}
+        def reload():
+            for iid in tree.get_children(""):
+                tree.delete(iid)
+            row_map.clear()
+            rows = load_rows()
+            for row in rows:
+                iid = tree.insert("", "end", values=tuple(row[col] if col in row.keys() else "" for col in columns))
+                row_map[iid] = dict(row)
+            pzn_count = len({str(r["pzn_alt"]) for r in rows})
+            info_var.set(f"{len(rows)} gelernte Austausch-Einträge zu {pzn_count} PZN alt mit mehreren Varianten gefunden.")
+            self.status.set(f"Manuelle Prüfung: {len(rows)} Einträge angezeigt.")
+
+        def selected_rows():
+            selected = []
+            for iid in tree.selection():
+                row = row_map.get(iid)
+                if row:
+                    selected.append(row)
+            if not selected:
+                messagebox.showinfo("Manuelle Prüfung", "Bitte zuerst einen Eintrag auswählen.")
+            return selected
+
+        def keep_selected_variant():
+            selected = selected_rows()
+            if not selected:
+                return
+            # Pro PZN alt darf genau ein Eintrag gewählt werden, damit nicht versehentlich mehrere Gruppen bereinigt werden.
+            pzn_values = {str(r.get("pzn_alt") or "").strip() for r in selected}
+            if len(pzn_values) != 1:
+                messagebox.showinfo("Manuelle Prüfung", "Bitte nur Einträge zu einer PZN alt auswählen.")
+                return
+            if len(selected) != 1:
+                messagebox.showinfo("Manuelle Prüfung", "Bitte genau den Eintrag markieren, der aktiv bleiben soll.")
+                return
+            keep = selected[0]
+            if keep.get("_source_table") != "tbl_austauschdatenbank":
+                messagebox.showinfo("Manuelle Prüfung", "Diese Zeile kommt aus dem Abweichungseditor und ist noch kein gelernter Austausch. Bitte im Abweichungseditor als Lernvorschlag speichern oder dort weiter bearbeiten.")
+                return
+            pzn_alt = str(keep.get("pzn_alt") or "").strip()
+            keep_id = int(keep.get("id"))
+            if not messagebox.askyesno(
+                "Austausch bereinigen",
+                f"Für PZN alt {pzn_alt} bleibt Eintrag {keep_id} aktiv.\n"
+                "Alle anderen aktiven Varianten zu dieser PZN werden auf inaktiv gesetzt.\n\nFortfahren?"
+            ):
+                return
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    cols = {r[1] for r in con.execute("PRAGMA table_info(tbl_austauschdatenbank)").fetchall()}
+                    assignments = "status='inaktiv'"
+                    params = []
+                    if "gueltig_bis" in cols:
+                        assignments += ", gueltig_bis=CURRENT_TIMESTAMP"
+                    if "ersetzt_durch_id" in cols:
+                        assignments += ", ersetzt_durch_id=?"
+                        params.append(keep_id)
+                    if "bearbeiter" in cols:
+                        assignments += ", bearbeiter=?"
+                        params.append(self.bearbeiter)
+                    params.extend([pzn_alt, keep_id])
+                    con.execute(
+                        f"UPDATE tbl_austauschdatenbank SET {assignments} WHERE COALESCE(status,'aktiv')='aktiv' AND pzn_alt=? AND id<>?",
+                        params,
+                    )
+                    con.commit()
+                self.status.set(f"Manuelle Prüfung: PZN {pzn_alt} bereinigt.")
+                reload()
+            except Exception as exc:
+                messagebox.showerror("Manuelle Prüfung", f"Bereinigung fehlgeschlagen:\n{exc}")
+
+        def open_schulbank_uebernommen():
+            self.show_schulbank_page("Übernommen")
+
+        def set_rows_inactive(rows_to_update, label):
+            if not rows_to_update:
+                messagebox.showinfo("Manuelle Prüfung", "Keine Einträge ausgewählt.")
+                return
+            austausch_ids = []
+            editor_ids = []
+            for row in rows_to_update:
+                try:
+                    if row.get("_source_table") == "tbl_abweichungs_editor":
+                        editor_ids.append(int(row.get("id")))
+                    else:
+                        austausch_ids.append(int(row.get("id")))
+                except Exception:
+                    pass
+            if not austausch_ids and not editor_ids:
+                messagebox.showinfo("Manuelle Prüfung", "Keine gültigen Einträge ausgewählt.")
+                return
+            if not messagebox.askyesno("Manuelle Prüfung", f"{len(austausch_ids) + len(editor_ids)} Eintrag/Einträge wirklich {label}?"):
+                return
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    if austausch_ids:
+                        cols = {r[1] for r in con.execute("PRAGMA table_info(tbl_austauschdatenbank)").fetchall()}
+                        assignments = "status='inaktiv'"
+                        params = []
+                        if "gueltig_bis" in cols:
+                            assignments += ", gueltig_bis=CURRENT_TIMESTAMP"
+                        if "bearbeiter" in cols:
+                            assignments += ", bearbeiter=?"
+                            params.append(self.bearbeiter)
+                        placeholders = ",".join("?" for _ in austausch_ids)
+                        con.execute(f"UPDATE tbl_austauschdatenbank SET {assignments} WHERE id IN ({placeholders})", params + austausch_ids)
+                    if editor_ids:
+                        placeholders = ",".join("?" for _ in editor_ids)
+                        con.execute(f"UPDATE tbl_abweichungs_editor SET status='ignoriert', bearbeitet_am=CURRENT_TIMESTAMP, bearbeiter=? WHERE id IN ({placeholders})", [self.bearbeiter] + editor_ids)
+                    con.commit()
+                self.status.set(f"Manuelle Prüfung: {len(austausch_ids) + len(editor_ids)} Einträge {label}.")
+                reload()
+            except Exception as exc:
+                messagebox.showerror("Manuelle Prüfung", f"Aktion fehlgeschlagen:\n{exc}")
+
+        def reject_selected_variants():
+            set_rows_inactive(selected_rows(), "abgelehnt/inaktiv gesetzt")
+
+        def reject_all_visible_variants():
+            set_rows_inactive(list(row_map.values()), "abgelehnt/inaktiv gesetzt")
+
+        actionbar = tk.Frame(body, bg="#ffffff")
+        actionbar.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        tk.Button(actionbar, text="✓ Gewählten behalten", command=keep_selected_variant, bg="#11823b", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=(0, 8))
+        tk.Button(actionbar, text="✗ Markierte ablehnen", command=reject_selected_variants, bg="#9b1c1c", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=8)
+        tk.Button(actionbar, text="✗ Alle sichtbaren ablehnen", command=reject_all_visible_variants, bg="#9b1c1c", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=8)
+        tk.Button(actionbar, text="Aktualisieren", command=reload, padx=14, pady=8).pack(side="left", padx=8)
+        tk.Button(actionbar, text="Zu Übernommen", command=open_schulbank_uebernommen, padx=14, pady=8).pack(side="left", padx=8)
+        reload()
+
+    def _ensure_lernvorschlaege_table(self):
+        with sqlite3.connect(DB_PATH) as con:
+            con.execute("""\nCREATE TABLE IF NOT EXISTS tbl_lernvorschlaege (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,\nprodukt_alt TEXT NOT NULL DEFAULT '',
+                    produkt_neu TEXT NOT NULL DEFAULT '',\npzn_alt TEXT,
+                    artikel_alt TEXT,\npzn_nmg TEXT,
+                    freitext_austausch TEXT,\nquelle_datei TEXT,
+                    status TEXT NOT NULL DEFAULT 'neu',\nerstellt_am TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    bearbeitet_am TEXT,\nbearbeiter TEXT,
+                    historie_ab TEXT,\nhistorie_bis TEXT,
+                    austausch_id INTEGER\n)
+            """)
+            cols = {row[1] for row in con.execute("PRAGMA table_info(tbl_lernvorschlaege)").fetchall()}
+            additions = {
+                "pzn_alt": "TEXT",
+                "artikel_alt": "TEXT",
+                "pzn_nmg": "TEXT",
+                "freitext_austausch": "TEXT",
+                "quelle_datei": "TEXT",
+                "bearbeiter": "TEXT",
+                "historie_ab": "TEXT",
+                "historie_bis": "TEXT",
+                "austausch_id": "INTEGER",
+            }
+            for col, definition in additions.items():
+                if col not in cols:
+                    con.execute(f"ALTER TABLE tbl_lernvorschlaege ADD COLUMN {col} {definition}")
+            con.execute("UPDATE tbl_lernvorschlaege SET artikel_alt = COALESCE(NULLIF(artikel_alt, ''), produkt_alt) WHERE artikel_alt IS NULL OR artikel_alt = ''")
+            con.execute("UPDATE tbl_lernvorschlaege SET freitext_austausch = COALESCE(NULLIF(freitext_austausch, ''), produkt_neu) WHERE freitext_austausch IS NULL OR freitext_austausch = ''")
+            con.commit()
+
+        try:
+            self._roadmap_mark_change_erledigt()
+        except Exception:
+            pass
+
+    def _roadmap_mark_change_erledigt(self):
+        """Hält die Roadmap zur aktuellen Schulbank-Änderung aktuell, ohne Duplikate zu erzeugen."""
+        title = "Schulbank Entscheidungsspeicher und Austauschdatenbank-Lernen"
+        rows = list_roadmap_items()
+        for row in rows:
+            if str(row["titel"]).strip().lower() == title.lower():
+                if row["status"] != "Erledigt":
+                    update_roadmap_status(int(row["id"]), "Erledigt")
+                return
+        add_roadmap_item(
+            bereich="Schulbank",
+            titel=title,
+            beschreibung=(
+                "tbl_lernvorschlaege erweitert, Bearbeiter gespeichert, Historie-Regel vorbereitet, "
+                "Lernen übernimmt direkt in tbl_austauschdatenbank und alte Austauschdatensätze werden nicht gelöscht."
+            ),
+            status="Erledigt",
+            prioritaet="Hoch",
+        )
+
+    def _roadmap_mark_schulbank_bulk_erledigt(self):
+        """Dokumentiert Mehrfachauswahl, Sammelaktionen und Dublettenschutz in der Roadmap."""
+        title = "Schulbank Mehrfachauswahl und Dublettenschutz"
+        try:
+            rows = list_roadmap_items()
+            for row in rows:
+                if str(row["titel"]).strip().lower() == title.lower():
+                    if row["status"] != "Erledigt":
+                        update_roadmap_status(int(row["id"]), "Erledigt")
+                    return
+            add_roadmap_item(
+                bereich="Schulbank",
+                titel=title,
+                beschreibung=(
+                    "Schulbank-Tabellen erlauben Mehrfachauswahl. Markierte oder alle sichtbaren Vorschläge "
+                    "können gesammelt gelernt oder abgelehnt werden. Abweichungsanalyse erzeugt keine doppelten "
+                    "Lernvorschläge mehr für bereits vorhandene Fälle."
+                ),
+                status="Erledigt",
+                prioritaet="Hoch",
+            )
+        except Exception:
+            pass
+
+    def get_lernvorschlaege(self, status_filter=None):
+        """Liest Schulbank-Einträge nach der aktuellen Fachlogik.\n
+        Neue Lernvorschläge: nur echte neue Fälle, nicht übernommen, nicht abgelehnt,\nnicht bereits aktiv gelernt und nicht in der manuellen Prüfung.
+\nÜbernommen/Abgelehnt: bleiben 7 Tage sichtbar. Danach erscheinen sie in der Historie.
+        Übernommene Fälle werden zusätzlich robust aus der Austauschdatenbank gelesen, weil\nLernen fachlich dort gespeichert wird.
+        """
+        self._ensure_lernvorschlaege_table()
+
+        def _rows(sql, params=()):
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    con.row_factory = sqlite3.Row
+                    return con.execute(sql, params).fetchall()
+            except Exception:
+                return []
+
+        def _table_cols(table):
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    return {r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()}
+            except Exception:
+                return set()
+
+        base_select = """\nSELECT id,
+                   COALESCE(produkt_alt, '') AS produkt_alt,\nCOALESCE(produkt_neu, '') AS produkt_neu,
+                   COALESCE(pzn_alt, '') AS pzn_alt,\nCOALESCE(artikel_alt, produkt_alt, '') AS artikel_alt,
+                   COALESCE(pzn_nmg, '') AS pzn_nmg,\nCOALESCE(freitext_austausch, produkt_neu, '') AS freitext_austausch,
+                   COALESCE(quelle_datei, '') AS quelle_datei,\nstatus,
+                   COALESCE(bearbeiter, '') AS bearbeiter,\nerstellt_am,
+                   bearbeitet_am,\nhistorie_ab,
+                   historie_bis,\naustausch_id
+            FROM tbl_lernvorschlaege\n"""
+        valid_filter = """\nCOALESCE(pzn_alt, '') <> ''
+            AND (COALESCE(pzn_nmg, '') <> '' OR COALESCE(freitext_austausch, produkt_neu, '') <> '')\nAND (COALESCE(pzn_nmg, '') = '' OR COALESCE(pzn_alt, '') <> COALESCE(pzn_nmg, ''))
+        """
+        recent_7 = "datetime(COALESCE(bearbeitet_am, erstellt_am)) > datetime('now', '-7 days')"
+        older_7 = "datetime(COALESCE(bearbeitet_am, erstellt_am)) <= datetime('now', '-7 days')"
+
+        def _austausch_rows(recent=None):
+            cols = _table_cols("tbl_austauschdatenbank")
+            if not cols or "pzn_alt" not in cols:
+                return []
+            def expr(col, fallback="''"):
+                return f"COALESCE({col}, '')" if col in cols else fallback
+            produkt_alt = expr("artikel_alt")
+            artikel_alt = expr("artikel_alt")
+            pzn_nmg = expr("pzn_nmg")
+            artikel_nmg = expr("artikel_nmg")
+            freitext = expr("freitext_austausch", artikel_nmg)
+            quelle = expr("quelle", "'Austauschdatenbank'")
+            bearbeiter = expr("bearbeiter")
+            date_candidates = [c for c in ("aktualisiert_am", "bearbeitet_am", "gueltig_ab", "erstellt_am") if c in cols]
+            date_expr = "COALESCE(" + ", ".join(date_candidates + ["''"]) + ")" if date_candidates else "''"
+            status_expr = "COALESCE(status, 'aktiv')" if "status" in cols else "'aktiv'"
+            date_where = ""
+            if recent is True:
+                date_where = f"AND datetime({date_expr}) > datetime('now', '-7 days')"
+            elif recent is False:
+                date_where = f"AND ({date_expr} = '' OR datetime({date_expr}) <= datetime('now', '-7 days'))"
+            sql = f"""\nSELECT id,
+                       {produkt_alt} AS produkt_alt,\nCOALESCE({freitext}, {artikel_nmg}, '') AS produkt_neu,
+                       COALESCE(pzn_alt, '') AS pzn_alt,\n{artikel_alt} AS artikel_alt,
+                       {pzn_nmg} AS pzn_nmg,\nCOALESCE({freitext}, {artikel_nmg}, '') AS freitext_austausch,
+                       {quelle} AS quelle_datei,\n'uebernommen' AS status,
+                       {bearbeiter} AS bearbeiter,\n{date_expr} AS erstellt_am,
+                       {date_expr} AS bearbeitet_am,\nNULL AS historie_ab,
+                       NULL AS historie_bis,\nid AS austausch_id
+                FROM tbl_austauschdatenbank\nWHERE {status_expr} = 'aktiv'
+                  AND COALESCE(pzn_alt, '') <> ''\nAND ({pzn_nmg} <> '' OR COALESCE({freitext}, {artikel_nmg}, '') <> '')
+                  AND ({pzn_nmg} = '' OR COALESCE(pzn_alt, '') <> {pzn_nmg})\n{date_where}
+                ORDER BY id DESC\n"""
+            return _rows(sql)
+
+        def _combine_unique(*row_lists):
+            combined = []
+            seen = set()
+            for row_list in row_lists:
+                for row in row_list:
+                    key = (
+                        str(row["status"] or "").strip(),
+                        str(row["pzn_alt"] or "").strip(),
+                        str(row["pzn_nmg"] or "").strip(),
+                        str(row["freitext_austausch"] or "").strip().lower(),
+                    )
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    combined.append(row)
+            return combined
+
+        if status_filter == "uebernommen":
+            lern_rows = _rows(base_select + f"""\nWHERE status = 'uebernommen'
+                  AND {recent_7}\nAND {valid_filter}
+                ORDER BY datetime(COALESCE(bearbeitet_am, erstellt_am)) DESC, id DESC\n""")
+            return _combine_unique(_austausch_rows(recent=True), lern_rows)
+
+        if status_filter == "abgelehnt":
+            # Abgelehnte Fälle sollen auch dann sichtbar bleiben, wenn sie fachlich unvollständig waren.
+            return _rows(base_select + f"""\nWHERE status = 'abgelehnt'
+                  AND {recent_7}\nORDER BY datetime(COALESCE(bearbeitet_am, erstellt_am)) DESC, id DESC
+            """)
+
+        if status_filter in ("historie", "historie_uebernommen"):
+            lern_rows = _rows(base_select + f"""\nWHERE status = 'uebernommen'
+                  AND {older_7}\nAND {valid_filter}
+                ORDER BY datetime(COALESCE(bearbeitet_am, erstellt_am)) DESC, id DESC\n""")
+            return _combine_unique(_austausch_rows(recent=False), lern_rows)
+
+        if status_filter == "historie_abgelehnt":
+            return _rows(base_select + f"""\nWHERE status = 'abgelehnt'
+                  AND {older_7}\nORDER BY datetime(COALESCE(bearbeitet_am, erstellt_am)) DESC, id DESC
+            """)
+
+        if status_filter == "neu":
+            return _rows(base_select + f"""\nWHERE status = 'neu'
+                  AND {valid_filter}\nAND NOT EXISTS (
+                      SELECT 1\nFROM tbl_austauschdatenbank a
+                      WHERE COALESCE(a.status, 'aktiv') = 'aktiv'\nAND COALESCE(a.pzn_alt, '') = COALESCE(tbl_lernvorschlaege.pzn_alt, '')
+                  )\nAND NOT EXISTS (
+                      WITH basis AS (\nSELECT pzn_alt,
+                                 TRIM(COALESCE(pzn_nmg, '') || '|' || COALESCE(freitext_austausch, '')) AS kombi\nFROM tbl_austauschdatenbank
+                          WHERE COALESCE(status, 'aktiv') = 'aktiv'\nAND COALESCE(pzn_alt, '') <> ''
+                            AND (COALESCE(pzn_nmg, '') <> '' OR COALESCE(freitext_austausch, '') <> '')\n), mehrfach AS (
+                          SELECT pzn_alt\nFROM basis
+                          GROUP BY pzn_alt\nHAVING COUNT(DISTINCT kombi) > 1
+                      )\nSELECT 1 FROM mehrfach m
+                      WHERE m.pzn_alt = COALESCE(tbl_lernvorschlaege.pzn_alt, '')\n)
+                ORDER BY datetime(COALESCE(bearbeitet_am, erstellt_am)) DESC, id DESC\n""")
+
+        if status_filter:
+            return _rows(base_select + f"""\nWHERE status = ?
+                  AND {valid_filter}\nORDER BY datetime(COALESCE(bearbeitet_am, erstellt_am)) DESC, id DESC
+            """, (status_filter,))
+
+        return _rows(base_select + f"""\nWHERE status = 'neu'
+              AND {valid_filter}\nORDER BY datetime(COALESCE(bearbeitet_am, erstellt_am)) DESC, id DESC
+        """)
+
+    def _normalize_pzn_input(self, value):
+        text = str(value or "").strip()
+        if text.endswith(".0") and text[:-2].isdigit():
+            text = text[:-2]
+        digits = "".join(ch for ch in text if ch.isdigit())
+        return digits.zfill(8) if digits else ""
+
+    def _find_artikelname_by_pzn(self, pzn):
+        pzn = self._normalize_pzn_input(pzn)
+        if not pzn:
+            return ""
+        with sqlite3.connect(DB_PATH) as con:
+            con.row_factory = sqlite3.Row
+            candidates = [
+                ("tbl_artikelstamm", "artikel"),
+                ("tbl_artikelstamm", "artikelname"),
+                ("tbl_pzn_basisdaten", "artikelname"),
+                ("tbl_nmg_stamm", "artikelname"),
+            ]
+            for table, col in candidates:
+                try:
+                    row = con.execute(f"SELECT {col} AS artikel FROM {table} WHERE pzn = ? LIMIT 1", (pzn,)).fetchone()
+                    if row and row["artikel"]:
+                        return str(row["artikel"]).strip()
+                except Exception:
+                    continue
+        return ""
+
+    def _roadmap_mark_lernvorschlag_form_erledigt(self):
+        """Dokumentiert die Formular-Umstellung in der Roadmap ohne doppelte Einträge."""
+        title = "Schulbank Lernvorschlag-Formular im Arbeitsbereich"
+        try:
+            rows = list_roadmap_items()
+            for row in rows:
+                if str(row["titel"]).strip().lower() == title.lower():
+                    if row["status"] != "Erledigt":
+                        update_roadmap_status(int(row["id"]), "Erledigt")
+                    return
+            add_roadmap_item(
+                bereich="Schulbank",
+                titel=title,
+                beschreibung=(
+                    "Lernvorschlag hinzufügen wurde von mehreren Einzelabfragen auf ein Formular umgestellt. "
+                    "Abgegebene PZN und PZN NMG füllen Artikelnamen automatisch aus; Austauschbar gegen ist optional, "
+                    "wenn PZN NMG vorhanden ist. Vorhandene Fälle werden vor dem Speichern geprüft."
+                ),
+                status="Erledigt",
+                prioritaet="Hoch",
+            )
+        except Exception:
+            pass
+
+    def _insert_or_update_lernvorschlag(self, pzn_alt, artikel_alt, pzn_nmg, freitext, section="Neue Lernvorschläge"):
+        self._ensure_lernvorschlaege_table()
+        pzn_alt = self._normalize_pzn_input(pzn_alt)
+        pzn_nmg = self._normalize_pzn_input(pzn_nmg)
+        artikel_alt = str(artikel_alt or "").strip()
+        freitext = str(freitext or "").strip()
+
+        if not artikel_alt and pzn_alt:
+            artikel_alt = self._find_artikelname_by_pzn(pzn_alt)
+        if not freitext and pzn_nmg:
+            freitext = self._find_artikelname_by_pzn(pzn_nmg) or f"PZN NMG: {pzn_nmg}"
+
+        if not pzn_alt:
+            messagebox.showwarning("Lernvorschlag", "Bitte eine abgegebene PZN eingeben.")
+            return False
+        if not pzn_nmg and not freitext:
+            messagebox.showwarning("Lernvorschlag", "Bitte entweder eine PZN NMG oder einen Eintrag bei 'Austauschbar gegen' eingeben.")
+            return False
+
+        with sqlite3.connect(DB_PATH) as con:
+            con.row_factory = sqlite3.Row
+            existing_suggestion = con.execute("""\nSELECT id, status, pzn_alt, artikel_alt, pzn_nmg, freitext_austausch
+                FROM tbl_lernvorschlaege\nWHERE COALESCE(pzn_alt, '') = ?
+                  AND COALESCE(pzn_nmg, '') = ?\nORDER BY id DESC
+                LIMIT 1\n""", (pzn_alt, pzn_nmg)).fetchone()
+
+            if existing_suggestion:
+                msg = (
+                    "Dieser Lernfall existiert bereits in der Schulbank.\n\n"
+                    f"Status: {existing_suggestion['status']}\n"
+                    f"PZN alt: {existing_suggestion['pzn_alt'] or ''}\n"
+                    f"PZN NMG: {existing_suggestion['pzn_nmg'] or ''}\n\n"
+                    "Soll der vorhandene Lernvorschlag überschrieben und wieder auf 'neu' gesetzt werden?"
+                )
+                if not messagebox.askyesno("Fall existiert bereits", msg):
+                    return False
+                con.execute("""\nUPDATE tbl_lernvorschlaege
+                    SET produkt_alt = ?, produkt_neu = ?, artikel_alt = ?, freitext_austausch = ?,\nquelle_datei = 'Manuell', status = 'neu', bearbeiter = ?, bearbeitet_am = CURRENT_TIMESTAMP
+                    WHERE id = ?\n""", (artikel_alt, freitext, artikel_alt, freitext, self.bearbeiter, existing_suggestion["id"]))
+                con.commit()
+                return True
+
+            existing_active = None
+            try:
+                existing_active = con.execute("""\nSELECT id, pzn_alt, pzn_nmg, freitext_austausch, quelle
+                    FROM tbl_austauschdatenbank\nWHERE status = 'aktiv'
+                      AND COALESCE(pzn_alt, '') = ?\nORDER BY id DESC
+                    LIMIT 1\n""", (pzn_alt,)).fetchone()
+            except Exception:
+                existing_active = None
+
+            if existing_active:
+                msg = (
+                    "Für diese abgegebene PZN gibt es bereits einen aktiven Eintrag in der Austauschdatenbank.\n\n"
+                    f"Aktuell: {existing_active['freitext_austausch'] or ''}\n"
+                    f"PZN NMG: {existing_active['pzn_nmg'] or ''}\n\n"
+                    "Soll trotzdem ein neuer Lernvorschlag angelegt werden? Beim späteren Lernen wird der alte Eintrag nicht gelöscht, sondern inaktiv gesetzt."
+                )
+                if not messagebox.askyesno("Austausch bereits gelernt", msg):
+                    return False
+
+            con.execute("""\nINSERT INTO tbl_lernvorschlaege (
+                    produkt_alt, produkt_neu, pzn_alt, artikel_alt, pzn_nmg,\nfreitext_austausch, quelle_datei, status, erstellt_am, bearbeiter
+                )\nVALUES (?, ?, ?, ?, ?, ?, 'Manuell', 'neu', CURRENT_TIMESTAMP, ?)
+            """, (artikel_alt, freitext, pzn_alt, artikel_alt, pzn_nmg, freitext, self.bearbeiter))
+            con.commit()
+            return True
+
+    def add_lernvorschlag(self, section="Neue Lernvorschläge"):
+        self._ensure_lernvorschlaege_table()
+        self._roadmap_mark_lernvorschlag_form_erledigt()
+
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title("Lernvorschlag hinzufügen")
+        win.geometry("720x430")
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+
+        tk.Label(win, text="Lernvorschlag hinzufügen", font=("Arial", 20, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=24, pady=(22, 4))
+        tk.Label(
+            win,
+            text="Abgegebene PZN erfassen. Artikelnamen werden automatisch aus der Datenbank gefüllt, wenn vorhanden.",
+            font=("Arial", 10), fg="#333", bg="#f5f7fb"
+        ).pack(anchor="w", padx=24, pady=(0, 14))
+
+        form = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        form.pack(fill="both", expand=True, padx=24, pady=(0, 14))
+        form.columnconfigure(1, weight=1)
+
+        pzn_alt_var = tk.StringVar()
+        artikel_alt_var = tk.StringVar()
+        pzn_nmg_var = tk.StringVar()
+        artikel_nmg_var = tk.StringVar()
+        freitext_var = tk.StringVar()
+        hint_var = tk.StringVar(value="Austauschbar gegen ist optional, sobald eine PZN NMG eingetragen ist.")
+
+        def add_row(row, label, var, readonly=False):
+            tk.Label(form, text=label, bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=row, column=0, sticky="w", padx=18, pady=(14 if row == 0 else 8, 4))
+            state = "readonly" if readonly else "normal"
+            entry = tk.Entry(form, textvariable=var, state=state, font=("Arial", 11))
+            entry.grid(row=row, column=1, sticky="ew", padx=18, pady=(14 if row == 0 else 8, 4))
+            return entry
+
+        e_pzn_alt = add_row(0, "Abgegebene PZN", pzn_alt_var)
+        add_row(1, "Artikelname abgegeben", artikel_alt_var, readonly=True)
+        e_pzn_nmg = add_row(2, "Austauschbar gegen PZN NMG", pzn_nmg_var)
+        add_row(3, "Artikelname PZN NMG", artikel_nmg_var, readonly=True)
+        e_freitext = add_row(4, "Austauschbar gegen", freitext_var)
+
+        tk.Label(form, textvariable=hint_var, bg="#ffffff", fg="#666", justify="left", wraplength=610).grid(row=5, column=0, columnspan=2, sticky="w", padx=18, pady=(10, 14))
+
+        def set_readonly_var(var, value):
+            var.set(value or "")
+
+        def refresh_alt(*_):
+            pzn = self._normalize_pzn_input(pzn_alt_var.get())
+            set_readonly_var(artikel_alt_var, self._find_artikelname_by_pzn(pzn) if pzn else "")
+
+        def refresh_nmg(*_):
+            pzn = self._normalize_pzn_input(pzn_nmg_var.get())
+            artikel = self._find_artikelname_by_pzn(pzn) if pzn else ""
+            set_readonly_var(artikel_nmg_var, artikel)
+            if pzn and not freitext_var.get().strip() and artikel:
+                freitext_var.set(artikel)
+            if pzn:
+                hint_var.set("PZN NMG ist gefüllt. 'Austauschbar gegen' darf leer bleiben; dann wird der Artikelname der PZN NMG übernommen.")
+            else:
+                hint_var.set("Keine PZN NMG eingetragen. Dann muss 'Austauschbar gegen' ausgefüllt werden.")
+
+        pzn_alt_var.trace_add("write", refresh_alt)
+        pzn_nmg_var.trace_add("write", refresh_nmg)
+
+        def save():
+            pzn_alt = self._normalize_pzn_input(pzn_alt_var.get())
+            pzn_nmg = self._normalize_pzn_input(pzn_nmg_var.get())
+            artikel_alt = artikel_alt_var.get().strip()
+            freitext = freitext_var.get().strip()
+            if not freitext and pzn_nmg:
+                freitext = artikel_nmg_var.get().strip() or self._find_artikelname_by_pzn(pzn_nmg) or f"PZN NMG: {pzn_nmg}"
+
+            if self._insert_or_update_lernvorschlag(pzn_alt, artikel_alt, pzn_nmg, freitext, section):
+                win.destroy()
+                self.show_schulbank_page(section if section != "Schulbank" else "Neue Lernvorschläge")
+
+        buttons = tk.Frame(win, bg="#f5f7fb")
+        buttons.pack(fill="x", padx=24, pady=(0, 20))
+        tk.Button(buttons, text="Abbrechen", command=win.destroy, padx=16, pady=8).pack(side="right", padx=(8, 0))
+        tk.Button(buttons, text="Speichern", command=save, bg="#0b4a86", fg="white", activebackground="#0b4a86", relief="flat", font=("Arial", 11, "bold"), padx=22, pady=9).pack(side="right")
+
+        e_pzn_alt.focus_set()
+        win.bind("<Return>", lambda _event: save())
+        self.wait_window(win)
+
+    def edit_lernvorschlag(self, item_id, section="Schulbank"):
+        if item_id is None:
+            return
+        self._ensure_lernvorschlaege_table()
+        with sqlite3.connect(DB_PATH) as con:
+            con.row_factory = sqlite3.Row
+            row = con.execute("SELECT * FROM tbl_lernvorschlaege WHERE id = ?", (item_id,)).fetchone()
+            if not row:
+                messagebox.showinfo("Schulbank", "Eintrag wurde nicht gefunden.")
+                return
+
+        pzn_alt = simpledialog.askstring("Bearbeiten", "PZN alt:", initialvalue=row["pzn_alt"] or "")
+        if pzn_alt is None:
+            return
+        artikel_alt = simpledialog.askstring("Bearbeiten", "Artikel alt:", initialvalue=row["artikel_alt"] or row["produkt_alt"] or "")
+        if artikel_alt is None:
+            return
+        pzn_nmg = simpledialog.askstring("Bearbeiten", "PZN NMG:", initialvalue=row["pzn_nmg"] or "")
+        if pzn_nmg is None:
+            return
+        freitext = simpledialog.askstring("Bearbeiten", "Austauschbar gegen:", initialvalue=row["freitext_austausch"] or row["produkt_neu"] or "")
+        if freitext is None:
+            return
+        if not freitext and pzn_nmg:
+            freitext = self._find_artikelname_by_pzn(pzn_nmg) or f"PZN NMG: {pzn_nmg}"
+
+        with sqlite3.connect(DB_PATH) as con:
+            con.execute("""\nUPDATE tbl_lernvorschlaege
+                SET pzn_alt = ?, artikel_alt = ?, pzn_nmg = ?, freitext_austausch = ?,\nprodukt_alt = ?, produkt_neu = ?, bearbeiter = ?, bearbeitet_am = CURRENT_TIMESTAMP
+                WHERE id = ?\n""", (pzn_alt.strip(), artikel_alt.strip(), pzn_nmg.strip(), freitext.strip(), artikel_alt.strip(), freitext.strip(), self.bearbeiter, item_id))
+            con.commit()
+        self.show_schulbank_page(section)
+
+    def update_lernvorschlag_status(self, item_id, status):
+        self._ensure_lernvorschlaege_table()
+        result = None
+
+        with sqlite3.connect(DB_PATH) as con:
+            con.row_factory = sqlite3.Row
+            row = con.execute("SELECT * FROM tbl_lernvorschlaege WHERE id = ?", (item_id,)).fetchone()
+            if not row:
+                raise ValueError("Lernvorschlag wurde nicht gefunden.")
+
+        pzn_alt = row["pzn_alt"] or ""
+        artikel_alt = row["artikel_alt"] or row["produkt_alt"] or ""
+        pzn_nmg = row["pzn_nmg"] or ""
+        freitext = row["freitext_austausch"] or row["produkt_neu"] or ""
+        artikel_nmg = self._find_artikelname_by_pzn(pzn_nmg) if pzn_nmg else ""
+        if status == "uebernommen":
+            if not freitext and pzn_nmg:
+                freitext = artikel_nmg or f"PZN NMG: {pzn_nmg}"
+            result = add_austausch_entry(
+                pzn_alt=pzn_alt,
+                pzn_nmg=pzn_nmg,
+                freitext_austausch=freitext,
+                quelle="Schulbank",
+                artikel_alt=artikel_alt,
+                artikel_nmg=artikel_nmg,
+                bearbeiter=self.bearbeiter,
+                bemerkung=f"Übernommen aus Schulbank-Vorschlag {item_id}",
+            )
+
+        with sqlite3.connect(DB_PATH) as con:
+            con.execute("""\nUPDATE tbl_lernvorschlaege
+                SET status = ?,\nbearbeitet_am = CURRENT_TIMESTAMP,
+                    bearbeiter = ?,\nfreitext_austausch = ?,
+                    produkt_neu = ?,\nhistorie_ab = CASE WHEN ? IN ('uebernommen', 'abgelehnt') THEN datetime('now', '+28 days') ELSE NULL END,
+                    historie_bis = CASE WHEN ? IN ('uebernommen', 'abgelehnt') THEN datetime('now', '+6 months') ELSE NULL END,\naustausch_id = COALESCE(?, austausch_id)
+                WHERE id = ?\n""", (status, self.bearbeiter, freitext, freitext, status, status, result.get("id") if result else None, item_id))
+            con.commit()
+        if result:
+            return {"austausch_id": result.get("id"), "created": result.get("created")}
+        return None
+
+    def delete_lernvorschlag(self, item_id):
+        self._ensure_lernvorschlaege_table()
+        with sqlite3.connect(DB_PATH) as con:
+            con.execute("DELETE FROM tbl_lernvorschlaege WHERE id = ?", (item_id,))
+            con.commit()
+
+    def open_schulbank(self):
+        self.show_schulbank_page("Schulbank")
+
+    def show_daten_aktualisieren_page(self):
+        self.clear_page()
+        self._page_header("Daten aktualisieren", "Importbereiche für Zukunftswerk, Partnerkonditionen, APU/HAP, NMG Artikel und Rabatte.")
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure((0, 1, 2), weight=1)
+        self._tile(body, 0, "📥", "Zukunftswerk", "ZF-Daten importieren.", "Import", self.import_zf_data, "#3867b7")
+        self._tile(body, 1, "🤝", "Partnerkonditionen", "PK-Daten importieren.", "Import", self.import_pk_data, "#0b4a86")
+        self._tile(body, 2, "💊", "APU/HAP Daten", "APU/HAP Daten importieren.", "Import", self.import_apu_data, "#11823b")
+
+        row2 = tk.Frame(body, bg="#ffffff")
+        row2.grid(row=3, column=0, columnspan=3, sticky="ew")
+        row2.columnconfigure((0, 1, 2), weight=1)
+        self._tile(row2, 0, "📋", "NMG Artikel", "NMG Artikel importieren.", "Import", self.import_nmg_articles, "#8b5a00")
+        self._tile(row2, 1, "💰", "PK Rabatte", "Partnerkonditionen-Rabatte importieren.", "Import", self.import_pk_rabatte, "#6b4fb3")
+        self._tile(row2, 2, "🔎", "Artikelstamm", "PZN-Artikelbasis importieren.", "Import", self.show_artikelstamm_page, "#0b4a86")
+
+        row3 = tk.Frame(body, bg="#ffffff")
+        row3.grid(row=4, column=0, columnspan=3, sticky="ew")
+        row3.columnconfigure((0, 1, 2), weight=1)
+        self._tile(row3, 0, "📄", "Auswertungsvorlage", "Vorlage der Ausgabe/Auswertung aktualisieren.", "Öffnen", self.show_auswertungsvorlage_page, "#3867b7")
+        self._tile(row3, 1, "📥", "Manuelle Analysen", "Manuelle PK-/ZF-Analysen importieren.", "Import", self.import_manuelle_analysen, "#11823b")
+
+    def _ask_manual_analysis_type(self):
+        """Fragt gezielt, ob manuelle Analysen als PK oder ZF importiert werden sollen."""
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title("Manuelle Analysen importieren")
+        win.geometry("460x260")
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+        choice = tk.StringVar(value="PK")
+
+        tk.Label(win, text="Analyseart auswählen", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(20, 6))
+        tk.Label(win, text="Sind die manuellen Analysen PK- oder ZF-Analysen?", bg="#f5f7fb", fg="#333").pack(anchor="w", padx=22, pady=(0, 14))
+
+        box = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        box.pack(fill="x", padx=22, pady=(0, 14))
+        tk.Radiobutton(box, text="PK / Partnerkondition", variable=choice, value="PK", bg="#ffffff", font=("Arial", 11)).pack(anchor="w", padx=16, pady=(14, 6))
+        tk.Radiobutton(box, text="ZF / Zukunftswerk", variable=choice, value="ZF", bg="#ffffff", font=("Arial", 11)).pack(anchor="w", padx=16, pady=(6, 14))
+
+        result = {"value": None}
+        def ok():
+            result["value"] = choice.get()
+            win.destroy()
+        def cancel():
+            win.destroy()
+
+        buttons = tk.Frame(win, bg="#f5f7fb")
+        buttons.pack(fill="x", padx=22, pady=(0, 18))
+        tk.Button(buttons, text="Abbrechen", command=cancel, padx=14, pady=8).pack(side="right", padx=(8, 0))
+        tk.Button(buttons, text="Weiter", command=ok, bg="#0b4a86", fg="white", relief="flat", padx=18, pady=9).pack(side="right")
+        self.wait_window(win)
+        return result["value"]
+
+    def import_manuelle_analysen(self):
+        self._log_action("datenaktualisierung", "Manuelle Analysen importieren geöffnet")
+        analyse_typ = self._ask_manual_analysis_type()
+        if not analyse_typ:
+            return
+        files = filedialog.askopenfilenames(
+            title=f"Manuelle {analyse_typ}-Analysen auswählen",
+            filetypes=SUPPORTED_DATA_FILETYPES
+        )
+        if not files:
+            return
+        if not messagebox.askyesno(
+            "Manuelle Analysen importieren",
+            f"{len(files)} Datei(en) als {analyse_typ}-Analysen importieren?\n\n"
+            "Die Dateien werden nicht neu ausgewertet. Sie werden als bereits geprüfte manuelle Analysen übernommen, "
+            "für Produkt-/Marktanalyse nutzbar gemacht und vorhandene NMG-/Austauschentscheidungen werden als Schulbank-Lernvorschläge angelegt.\n\n"
+            "Leere Lernfälle ohne PZN NMG und ohne Austauschtext werden nicht übernommen."
+        ):
+            return
+
+        try:
+            stats = import_manual_analysis_files(files, analyse_typ=analyse_typ, bearbeiter=self.bearbeiter)
+        except Exception as exc:
+            messagebox.showerror("Manuelle Analysen", str(exc))
+            return
+
+        # Wenn einzelne Dateien fehlschlagen, kann optional das bekannte Mapping geöffnet werden.
+        # Das Mapping erzeugt eine Standarddatei, die danach als manuelle Analyse importiert wird.
+        if stats.get("failed"):
+            retry_errors = list(stats.get("errors", []))
+            if messagebox.askyesno(
+                "Dateiformat nicht erkannt",
+                "Einige Dateien konnten nicht automatisch erkannt werden.\n\n"
+                "Soll für diese Dateien der Rohdaten-Formatassistent geöffnet werden?"
+            ):
+                failed_names = {e.split(":", 1)[0] for e in retry_errors}
+                mapped_temp_files = []
+                for file in files:
+                    if Path(file).name not in failed_names:
+                        continue
+                    mapping = self._open_rohdaten_format_assistent(file, "Manuelle Analyse konnte nicht automatisch erkannt werden.")
+                    if not mapping:
+                        continue
+                    try:
+                        mapped = self._create_standard_rohdaten_from_mapping(file, mapping)
+                        mapped_temp_files.append(str(mapped))
+                    except Exception as mapped_exc:
+                        stats.setdefault("errors", []).append(f"{Path(file).name} Mapping: {mapped_exc}")
+                if mapped_temp_files:
+                    retry_stats = import_manual_analysis_files(mapped_temp_files, analyse_typ=analyse_typ, bearbeiter=self.bearbeiter)
+                    for key in ("selected", "imported", "duplicates", "failed", "positions", "learning_suggestions"):
+                        stats[key] = int(stats.get(key, 0) or 0) + int(retry_stats.get(key, 0) or 0)
+                    stats.setdefault("duplicate_files", []).extend(retry_stats.get("duplicate_files", []))
+                    stats.setdefault("errors", []).extend(retry_stats.get("errors", []))
+
+        msg = (
+            f"Manuelle {analyse_typ}-Analysen importiert.\n\n"
+            f"Ausgewählt: {stats.get('selected', 0)}\n"
+            f"Neu übernommen: {stats.get('imported', 0)}\n"
+            f"Bereits verarbeitet: {stats.get('duplicates', 0)}\n"
+            f"Fehler: {stats.get('failed', 0)}\n\n"
+            f"Positionen für Produkt-/Marktanalyse: {stats.get('positions', 0)}\n"
+            f"Neue Schulbank-Lernvorschläge: {stats.get('learning_suggestions', 0)}"
+        )
+        if stats.get("duplicates"):
+            msg += "\n\nHinweis: " + str(stats.get("duplicates")) + " Analyse(n) wurden schon einmal verarbeitet."
+        if stats.get("errors"):
+            msg += "\n\nFehlerdetails:\n" + "\n".join(stats.get("errors", [])[:8])
+        try:
+            add_roadmap_item(
+                bereich="Import / Analyse",
+                titel="Manuelle Analysen importieren für Schulbank und Markt-/Produktanalyse",
+                beschreibung=(
+                    "Manuelle PK-/ZF-Analysen können per Mehrfachauswahl importiert werden. "
+                    "Dubletten werden per SHA256 erkannt; vorhandene NMG-/Austauschentscheidungen werden "
+                    "als Schulbank-Lernvorschläge angelegt. Leere Lernfälle werden nicht übernommen."
+                ),
+                status="Erledigt",
+                prioritaet="Hoch",
+            )
+        except Exception:
+            pass
+        self.status.set(msg)
+        messagebox.showinfo("Manuelle Analysen", msg)
+
+
+    def open_admin_auswertungen_loeschen(self):
+        """Admin-Funktion: einzelne oder alle gespeicherten Auswertungen aus der DB löschen.
+
+        Es werden nur Datenbankeinträge gelöscht: tbl_auswertungspositionen, tbl_auswertungen
+        und optionale Import-Verweise. Ausgabedateien bleiben erhalten, damit nichts außerhalb
+        der DB versehentlich verloren geht.
+        """
+        password = simpledialog.askstring("Admin – Auswertungen löschen", "Admin-Passwort eingeben:", show="*")
+        if password is None:
+            return
+        if password != ADMIN_DB_PASSWORD:
+            messagebox.showerror("Admin", "Passwort ist falsch.")
+            return
+
+        try:
+            with sqlite3.connect(DB_PATH) as con:
+                con.row_factory = sqlite3.Row
+                rows = con.execute("""
+                    SELECT id, datum, apotheke, quelldatei, ausgabedatei,
+                           anzahl_positionen, COALESCE(datenquelle,'NMG') AS datenquelle
+                    FROM tbl_auswertungen
+                    ORDER BY datetime(datum) DESC, id DESC
+                """).fetchall()
+        except Exception as exc:
+            messagebox.showerror("Admin", f"Auswertungen konnten nicht gelesen werden:\n{exc}")
+            return
+
+        if not rows:
+            messagebox.showinfo("Admin", "Keine gespeicherten Auswertungen vorhanden.")
+            return
+
+        win = tk.Toplevel(self)
+        win.title("Admin – Auswertungen löschen")
+        win.geometry("980x620")
+        win.minsize(850, 500)
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+        win.columnconfigure(0, weight=1)
+        win.rowconfigure(2, weight=1)
+
+        tk.Label(win, text="Admin – einzelne oder alle Auswertungen löschen", font=("Arial", 17, "bold"), fg="#0b4a86", bg="#f5f7fb").grid(row=0, column=0, sticky="w", padx=18, pady=(16, 4))
+        tk.Label(win, text="Es werden nur Datenbankeinträge gelöscht. Ausgabedateien bleiben erhalten. Vor dem Löschen wird automatisch ein Backup erstellt.", bg="#f5f7fb", fg="#333", justify="left").grid(row=1, column=0, sticky="w", padx=18, pady=(0, 10))
+
+        frame = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        frame.grid(row=2, column=0, sticky="nsew", padx=18, pady=(0, 10))
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=1)
+
+        cols = ("id", "datum", "typ", "name", "positionen", "datei")
+        tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="extended")
+        heads = {"id":"ID", "datum":"Datum", "typ":"Typ", "name":"Auswertung", "positionen":"Pos.", "datei":"Datei"}
+        widths = {"id":70, "datum":135, "typ":60, "name":280, "positionen":70, "datei":320}
+        for c in cols:
+            tree.heading(c, text=heads[c])
+            tree.column(c, width=widths[c], anchor="w")
+        tree.grid(row=0, column=0, sticky="nsew")
+        sb = tk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        sb.grid(row=0, column=1, sticky="ns")
+        tree.configure(yscrollcommand=sb.set)
+
+        id_map = {}
+        for row in rows:
+            dq = "PK" if str(row["datenquelle"] or "NMG") == "NMG" else str(row["datenquelle"] or "")
+            iid = tree.insert("", "end", values=(row["id"], str(row["datum"] or "")[:16], dq, str(row["apotheke"] or ""), row["anzahl_positionen"] or 0, Path(str(row["ausgabedatei"] or "")).name))
+            id_map[iid] = int(row["id"])
+
+        buttons = tk.Frame(win, bg="#f5f7fb")
+        buttons.grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 14))
+
+        def select_all():
+            tree.selection_set(tree.get_children())
+
+        def clear_selection():
+            tree.selection_remove(tree.selection())
+
+        def delete_selected():
+            selected = list(tree.selection())
+            if not selected:
+                messagebox.showinfo("Admin", "Bitte mindestens eine Auswertung auswählen.")
+                return
+            ids = [id_map[iid] for iid in selected if iid in id_map]
+            if not ids:
+                return
+            ok = messagebox.askyesno(
+                "Auswertungen löschen?",
+                f"{len(ids)} Auswertung(en) werden aus der Datenbank gelöscht.\n\n"
+                "Vorher wird automatisch ein Backup erstellt. Ausgabedateien bleiben erhalten. Fortfahren?"
+            )
+            if not ok:
+                return
+            confirm = simpledialog.askstring("Sicherheitsabfrage", "Zum endgültigen Löschen bitte AUSWERTUNGEN LÖSCHEN eingeben:")
+            if confirm != "AUSWERTUNGEN LÖSCHEN":
+                messagebox.showinfo("Admin", "Löschvorgang abgebrochen.")
+                return
+            try:
+                backup_path = backup_erstellen()
+                placeholders = ",".join("?" for _ in ids)
+                with sqlite3.connect(DB_PATH) as con:
+                    con.execute("PRAGMA foreign_keys = ON")
+                    pos_count = con.execute(f"SELECT COUNT(*) FROM tbl_auswertungspositionen WHERE auswertung_id IN ({placeholders})", ids).fetchone()[0]
+                    con.execute(f"DELETE FROM tbl_auswertungspositionen WHERE auswertung_id IN ({placeholders})", ids)
+                    try:
+                        con.execute(f"DELETE FROM tbl_importierte_analysen WHERE auswertung_id IN ({placeholders})", ids)
+                    except Exception:
+                        pass
+                    con.execute(f"DELETE FROM tbl_auswertungen WHERE id IN ({placeholders})", ids)
+                    con.commit()
+                for iid in selected:
+                    try:
+                        tree.delete(iid)
+                    except Exception:
+                        pass
+                self.status.set(f"Admin: {len(ids)} Auswertung(en) und {pos_count} Positionen gelöscht. Backup: {backup_path}")
+                messagebox.showinfo("Admin", f"Gelöscht: {len(ids)} Auswertung(en)\nPositionen: {pos_count}\nBackup:\n{backup_path}")
+            except Exception as exc:
+                messagebox.showerror("Admin", f"Auswertungen konnten nicht gelöscht werden:\n{exc}")
+
+        tk.Button(buttons, text="Alle markieren", command=select_all, padx=12, pady=7).pack(side="left")
+        tk.Button(buttons, text="Auswahl aufheben", command=clear_selection, padx=12, pady=7).pack(side="left", padx=(8, 0))
+        tk.Button(buttons, text="Ausgewählte löschen", command=delete_selected, bg="#9b1c1c", fg="white", relief="flat", font=("Arial", 10, "bold"), padx=16, pady=8).pack(side="right")
+        tk.Button(buttons, text="Schließen", command=win.destroy, padx=12, pady=7).pack(side="right", padx=(0, 8))
+
+    def show_import_page(self, title, command):
+        self._action_page(
+            title,
+            "Dieser Importbereich wird im mittleren Arbeitsbereich angezeigt. Der eigentliche Import startet über den Button.",
+            f"{title} importieren  →",
+            command,
+            "#0b4a86"
+        )
+
+    def show_update_backup_page(self):
+        self.clear_page()
+        self._page_header("Update / Backup", "Versionsinfo, Updates, Backup erstellen und Backup wiederherstellen.")
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure((0, 1, 2), weight=1)
+        self._tile(body, 0, "ℹ️", "Versionsinfo", "Aktuelle Programm- und Datenbankversion anzeigen.", "Anzeigen", self.show_version, "#0b4a86")
+        self._tile(body, 1, "⬆️", "Update suchen", "Online-Updateprüfung vorbereiteter Bereich.", "Suchen", self.check_online_update, "#3867b7")
+        self._tile(body, 2, "📦", "Update installieren", "Lokales .nmgupdate-Paket installieren.", "Installieren", self.install_update_dialog, "#8b5a00")
+
+        row2 = tk.Frame(body, bg="#ffffff")
+        row2.grid(row=3, column=0, columnspan=3, sticky="ew")
+        row2.columnconfigure((0, 1), weight=1)
+        self._tile(row2, 0, "💾", "Backup erstellen", "Manuelles Backup erstellen.", "Erstellen", self.create_backup, "#11823b")
+        self._tile(row2, 1, "♻️", "Backup wiederherstellen", "Backup auswählen und zurückspielen.", "Wiederherstellen", self.restore_backup, "#6b4fb3")
+    
+    def show_datenbankuebersicht_page(self):
+        self.clear_page()
+        self._page_header(
+            "Datenbankübersicht",
+            "Alle Tabellen der NMG-Datenbank mit Datensatzanzahl, Zweck und Inhalt."
+        )
+
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(2, weight=1)
+
+        try:
+            overview = get_database_overview()
+        except Exception as exc:
+            tk.Label(
+                body,
+                text=f"Datenbankübersicht konnte nicht geladen werden:\n{exc}",
+                bg="#ffffff",
+                fg="#a00000",
+                justify="left"
+            ).grid(row=0, column=0, sticky="w")
+            return
+
+        summary = (
+            f"Datenbank: {overview.get('db_path')}\n"
+            f"Größe: {format_size(overview.get('db_size_bytes', 0))}\n"
+            f"Tabellen: {overview.get('total_tables', 0)} | Datensätze gesamt: {overview.get('total_rows', 0):,}".replace(",", ".")
+        )
+        tk.Label(
+            body,
+            text=summary,
+            bg="#f8fbff",
+            fg="#0b4a86",
+            justify="left",
+            anchor="w",
+            font=("Arial", 10, "bold"),
+            padx=12,
+            pady=10,
+            highlightbackground="#d8e2ee",
+            highlightthickness=1
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 10))
+
+        columns = ("table", "rows", "purpose", "content")
+        tree = ttk.Treeview(body, columns=columns, show="headings", selectmode="browse")
+        tree.grid(row=2, column=0, sticky="nsew")
+
+        overview_headings = {"table": "Tabelle", "rows": "Datensätze", "purpose": "Zweck", "content": "Inhalt"}
+        tree.heading("table", text="Tabelle")
+        tree.heading("rows", text="Datensätze")
+        tree.heading("purpose", text="Zweck")
+        tree.heading("content", text="Inhalt")
+        self._make_tree_sortable(tree, columns, overview_headings)
+
+        tree.column("table", width=190, anchor="w")
+        tree.column("rows", width=95, anchor="e")
+        tree.column("purpose", width=300, anchor="w")
+        tree.column("content", width=360, anchor="w")
+
+        scrollbar = tk.Scrollbar(body, orient="vertical", command=tree.yview)
+        scrollbar.grid(row=2, column=0, sticky="nse")
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        detail = tk.StringVar(value="Tabelle auswählen, um Spalten anzuzeigen.")
+        tk.Label(
+            body,
+            textvariable=detail,
+            bg="#ffffff",
+            fg="#333",
+            justify="left",
+            anchor="w",
+            wraplength=850
+        ).grid(row=3, column=0, sticky="ew", pady=(10, 0))
+
+        table_rows = overview.get("tables", [])
+        item_to_table = {}
+        for item in table_rows:
+            row_count = f"{int(item.get('rows', 0)):,}".replace(",", ".")
+            iid = tree.insert(
+                "",
+                "end",
+                values=(
+                    item.get("table", ""),
+                    row_count,
+                    item.get("purpose", ""),
+                    item.get("content", ""),
+                )
+            )
+            item_to_table[iid] = item
+
+        def on_select(event=None):
+            sel = tree.selection()
+            if not sel:
+                detail.set("Tabelle auswählen, um Spalten anzuzeigen.")
+                return
+            item = item_to_table.get(sel[0], {})
+            cols = item.get("columns", [])
+            detail.set(
+                f"{item.get('display_name', item.get('table', ''))}\n"
+                f"Spalten: {', '.join(cols) if cols else 'keine Spalten erkannt'}"
+            )
+
+        tree.bind("<<TreeviewSelect>>", on_select)
+
+        toolbar = tk.Frame(body, bg="#ffffff")
+        toolbar.grid(row=1, column=0, sticky="w", pady=(0, 8))
+
+        tk.Button(
+            toolbar,
+            text="Aktualisieren",
+            command=self.show_datenbankuebersicht_page,
+            bg="#0b4a86",
+            fg="white",
+            relief="flat",
+            font=("Arial", 10, "bold"),
+            padx=14,
+            pady=7
+        ).pack(side="left")
+
+        tk.Button(
+            toolbar,
+            text="🔐 Admin",
+            command=self.open_admin_database_clear,
+            bg="#8b5a00",
+            fg="white",
+            relief="flat",
+            font=("Arial", 10, "bold"),
+            padx=14,
+            pady=7
+        ).pack(side="left", padx=(8, 0))
+        tk.Button(
+            admin_bar,
+            text="🔐 Auswertungen löschen",
+            command=self.open_admin_auswertungen_loeschen,
+            bg="#9b1c1c",
+            fg="white",
+            relief="flat",
+            font=("Arial", 10, "bold"),
+            padx=14,
+            pady=7
+        ).pack(side="left", padx=(8, 0))
+
+    def _table_exists(self, table_name):
+        with sqlite3.connect(DB_PATH) as con:
+            row = con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table_name,)
+            ).fetchone()
+            return row is not None
+
+    def _table_count(self, table_name):
+        if not self._table_exists(table_name):
+            return None
+        with sqlite3.connect(DB_PATH) as con:
+            return con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+
+    def _mark_roadmap_admin_clear(self, beschreibung):
+        """Roadmap ohne Pflichtabhängigkeit aktualisieren: keine Fehlermeldung, falls Roadmap nicht erreichbar ist."""
+        try:
+            ensure_roadmap_table()
+            titel = "Admin-Funktion Datenbankinhalte gezielt leeren"
+            existing = None
+            for row in list_roadmap_items():
+                if row["titel"] == titel:
+                    existing = row
+                    break
+            if existing:
+                update_roadmap_status(existing["id"], "Erledigt")
+            else:
+                add_roadmap_item(
+                    bereich="Datenbank",
+                    titel=titel,
+                    beschreibung=beschreibung,
+                    status="Erledigt",
+                    prioritaet="Hoch"
+                )
+        except Exception:
+            pass
+
+    def open_admin_database_clear(self):
+        password = simpledialog.askstring(
+            "Admin-Bereich",
+            "Admin-Passwort eingeben:",
+            show="*"
+        )
+        if password is None:
+            return
+        if password != ADMIN_DB_PASSWORD:
+            messagebox.showerror("Admin-Bereich", "Passwort ist falsch.")
+            return
+
+        available = []
+        for table_name, label in ADMIN_CLEAR_TABLES:
+            count = self._table_count(table_name)
+            if count is not None:
+                available.append((table_name, label, count))
+
+        if not available:
+            messagebox.showinfo("Admin-Bereich", "Keine der vorgesehenen Tabellen wurde gefunden.")
+            return
+
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title("Admin – Datenbankinhalte leeren")
+        win.geometry("660x470")
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+        win.columnconfigure(0, weight=1)
+
+        tk.Label(
+            win,
+            text="Admin – Datenbankinhalte leeren",
+            font=("Arial", 18, "bold"),
+            fg="#0b4a86",
+            bg="#f5f7fb"
+        ).grid(row=0, column=0, sticky="w", padx=22, pady=(20, 6))
+
+        tk.Label(
+            win,
+            text="Es werden nur Inhalte gelöscht, nicht die Tabellenstruktur. Vor dem Löschen wird automatisch ein Backup erstellt.",
+            bg="#f5f7fb",
+            fg="#333",
+            wraplength=600,
+            justify="left"
+        ).grid(row=1, column=0, sticky="w", padx=22, pady=(0, 14))
+
+        box = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        box.grid(row=2, column=0, sticky="nsew", padx=22, pady=(0, 14))
+        box.columnconfigure(0, weight=1)
+
+        selections = {}
+        for idx, (table_name, label, count) in enumerate(available):
+            var = tk.BooleanVar(value=True)
+            selections[table_name] = var
+            text = f"{label}  |  {table_name}  |  {count:,} Datensätze".replace(",", ".")
+            tk.Checkbutton(
+                box,
+                text=text,
+                variable=var,
+                bg="#ffffff",
+                anchor="w",
+                justify="left",
+                font=("Arial", 10)
+            ).grid(row=idx, column=0, sticky="ew", padx=14, pady=(10 if idx == 0 else 4, 4))
+
+        warn = tk.Label(
+            win,
+            text="Wichtig: Jede Löschung erstellt vorher automatisch ein Backup. Roadmap-Einträge und System-Logs werden nicht gelöscht.",
+            bg="#fff7e6",
+            fg="#8b5a00",
+            justify="left",
+            anchor="w",
+            padx=12,
+            pady=10,
+            wraplength=600,
+            highlightbackground="#efd39a",
+            highlightthickness=1
+        )
+        warn.grid(row=3, column=0, sticky="ew", padx=22, pady=(0, 14))
+
+        buttons = tk.Frame(win, bg="#f5f7fb")
+        buttons.grid(row=4, column=0, sticky="e", padx=22, pady=(0, 18))
+
+        def do_clear():
+            chosen = [table for table, var in selections.items() if var.get()]
+            if not chosen:
+                messagebox.showinfo("Admin-Bereich", "Bitte mindestens eine Tabelle auswählen.")
+                return
+            names = "\n".join(f"- {table}" for table in chosen)
+            ok = messagebox.askyesno(
+                "Inhalte wirklich löschen?",
+                "Folgende Tabelleninhalte werden geleert:\n\n"
+                f"{names}\n\n"
+                "Die Tabellen bleiben bestehen. Vorher wird automatisch ein Backup erstellt. Fortfahren?"
+            )
+            if not ok:
+                return
+            confirm = simpledialog.askstring(
+                "Sicherheitsabfrage",
+                "Zum endgültigen Löschen bitte LEEREN eingeben:"
+            )
+            if confirm != "LEEREN":
+                messagebox.showinfo("Admin-Bereich", "Löschvorgang abgebrochen.")
+                return
+            try:
+                backup_path = backup_erstellen()
+                deleted = {}
+                with sqlite3.connect(DB_PATH) as con:
+                    for table in chosen:
+                        count = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                        con.execute(f"DELETE FROM {table}")
+                        deleted[table] = count
+                    for table in chosen:
+                        con.execute("DELETE FROM sqlite_sequence WHERE name=?", (table,))
+                    con.commit()
+                details = "\n".join(
+                    f"{table}: {count:,} gelöscht".replace(",", ".")
+                    for table, count in deleted.items()
+                )
+                self._mark_roadmap_admin_clear(
+                    "Admin-Schaltfläche in der Datenbankübersicht ergänzt. "
+                    "Ausgewählte Tabelleninhalte können nach Passwortprüfung und automatischem Backup geleert werden."
+                )
+                self.status.set(f"Admin-Bereinigung abgeschlossen. Backup: {backup_path}")
+                messagebox.showinfo(
+                    "Admin-Bereinigung abgeschlossen",
+                    f"Backup erstellt:\n{backup_path}\n\nGelöschte Inhalte:\n{details}"
+                )
+                win.destroy()
+                self.show_datenbankuebersicht_page()
+            except Exception as exc:
+                messagebox.showerror("Admin-Bereich", f"Daten konnten nicht geleert werden:\n{exc}")
+
+        tk.Button(buttons, text="Abbrechen", command=win.destroy, padx=16, pady=8).pack(side="right", padx=(8, 0))
+        tk.Button(
+            buttons,
+            text="Backup erstellen und Inhalte leeren",
+            command=do_clear,
+            bg="#9b1c1c",
+            fg="white",
+            relief="flat",
+            font=("Arial", 10, "bold"),
+            padx=18,
+            pady=9
+        ).pack(side="right")
+
+    def _auswertungsvorlage_paths(self):
+        vorlagen_dir = DATA_DIR / "vorlagen"
+        target = vorlagen_dir / "Auswertungsvorlage.xlsx"
+        backup_dir = vorlagen_dir / "backups"
+        return vorlagen_dir, target, backup_dir
+
+    def _roadmap_mark_auswertungsvorlage_erledigt(self):
+        try:
+            ensure_roadmap_table()
+            titel = "Auswertungsvorlagen-Verwaltung mit Auswahl und Vorschau"
+            for row in list_roadmap_items():
+                if row["titel"] == titel:
+                    update_roadmap_status(int(row["id"]), "Erledigt")
+                    return
+            add_roadmap_item(
+                bereich="Daten aktualisieren",
+                titel=titel,
+                beschreibung=(
+                    "Auswertungsvorlagen können jetzt in bis zu drei Slots hinterlegt werden. "
+                    "In Neue Auswertung kann eine Vorlage ausgewählt und als Standard gespeichert werden. "
+                    "Beim Export werden Layout, Farben, Spaltenbreiten und Kopfzeile übernommen; Datenzeilen der Vorlage werden nicht übernommen."
+                ),
+                status="Erledigt",
+                prioritaet="Hoch"
+            )
+        except Exception:
+            pass
+
+    def _selected_template_from_tree(self, tree):
+        sel = tree.selection()
+        if not sel:
+            messagebox.showinfo("Auswertungsvorlage", "Bitte zuerst eine Vorlage auswählen.")
+            return None
+        values = tree.item(sel[0], "values")
+        try:
+            return int(values[0])
+        except Exception:
+            return None
+
+    def show_auswertungsvorlage_page(self):
+        self.clear_page()
+        self._page_header(
+            "Auswertungsvorlagen verwalten",
+            "Bis zu 3 Vorlagen hochladen. Übernommen werden Layout, Farben, Spaltenbreiten und Spaltenüberschriften – keine Dateninhalte."
+        )
+
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+
+        info = (
+            "Regel: Maximal 3 Auswertungsvorlagen. In 'Neue Auswertung' kann die Vorlage ausgewählt werden.\n"
+            "Die Auswahl wird gespeichert. Daten aus der Vorlage werden nicht übernommen; nur Optik, Kopfzeile und Tabellenformat."
+        )
+        tk.Label(body, text=info, justify="left", bg="#ffffff", fg="#333").grid(row=0, column=0, sticky="w", pady=(0, 10))
+
+        columns = ("slot", "name", "datei", "status", "aktualisiert")
+        tree = ttk.Treeview(body, columns=columns, show="headings", selectmode="browse", height=7)
+        tree.grid(row=1, column=0, sticky="nsew")
+        headings = {"slot": "Slot", "name": "Name", "datei": "Datei", "status": "Status", "aktualisiert": "Aktualisiert"}
+        widths = {"slot": 55, "name": 220, "datei": 280, "status": 130, "aktualisiert": 150}
+        for col in columns:
+            tree.heading(col, text=headings[col])
+            tree.column(col, width=widths[col], anchor="w")
+        self._make_tree_sortable(tree, columns, headings)
+
+        selected_slot = self._get_selected_auswertungsvorlage_slot()
+        templates_by_slot = {t["slot"]: t for t in self._list_auswertungsvorlagen()}
+        for slot in (1, 2, 3):
+            item = templates_by_slot.get(slot)
+            if item:
+                status = "Standard" if selected_slot == slot else "hinterlegt"
+                tree.insert("", "end", values=(slot, item["name"], Path(item["path"]).name, status, item.get("updated", "")))
+            else:
+                tree.insert("", "end", values=(slot, f"Vorlage {slot}", "", "frei", ""))
+
+        preview = tk.StringVar(value="Vorlage auswählen, um die Vorschau zu sehen.")
+        tk.Label(
+            body,
+            textvariable=preview,
+            justify="left",
+            bg="#f8fbff",
+            fg="#222",
+            anchor="w",
+            padx=12,
+            pady=10,
+            wraplength=850,
+            highlightbackground="#d8e2ee",
+            highlightthickness=1,
+        ).grid(row=2, column=0, sticky="ew", pady=(10, 10))
+
+        def refresh_preview(event=None):
+            slot = self._selected_template_from_tree(tree) if tree.selection() else None
+            if not slot:
+                preview.set("Vorlage auswählen, um die Vorschau zu sehen.")
+                return
+            path = self._get_auswertungsvorlage_path(slot)
+            if not path:
+                preview.set(f"Slot {slot} ist frei.")
+                return
+            preview.set(self._preview_auswertungsvorlage_text(path))
+
+        tree.bind("<<TreeviewSelect>>", refresh_preview)
+
+        actions = tk.Frame(body, bg="#ffffff")
+        actions.grid(row=3, column=0, sticky="w", pady=(4, 0))
+
+        def upload_template():
+            slot = self._selected_template_from_tree(tree)
+            if not slot:
+                return
+            file = filedialog.askopenfilename(
+                title=f"Auswertungsvorlage für Slot {slot} auswählen",
+                filetypes=[("Excel-Vorlagen", "*.xlsx *.xlsm"), ("Excel", "*.xlsx"), ("Excel mit Makros", "*.xlsm"), ("Alle Dateien", "*.*")]
+            )
+            if not file:
+                return
+            source = Path(file)
+            if source.suffix.lower() not in {".xlsx", ".xlsm"}:
+                messagebox.showwarning("Auswertungsvorlage", "Bitte eine Excel-Datei (*.xlsx oder *.xlsm) auswählen.")
+                return
+            name = simpledialog.askstring("Vorlagenname", "Name für diese Auswertungsvorlage:", initialvalue=source.stem)
+            if not name:
+                return
+            target_dir = self._auswertungsvorlagen_dir()
+            target = target_dir / f"Auswertungsvorlage_{slot}{source.suffix.lower()}"
+            # Altes Slot-File sichern, wenn vorhanden.
+            old_path = self._get_auswertungsvorlage_path(slot)
+            if old_path:
+                backup_dir = target_dir / "backups"
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                backup = backup_dir / f"Auswertungsvorlage_{slot}_{datetime.now():%Y%m%d_%H%M%S}{old_path.suffix}"
+                try:
+                    shutil.copy2(old_path, backup)
+                except Exception:
+                    pass
+            # Falls vorher ein anderer Dateityp im Slot lag, entfernen.
+            for suffix in (".xlsx", ".xlsm"):
+                other = target_dir / f"Auswertungsvorlage_{slot}{suffix}"
+                if other.exists() and other != target:
+                    try:
+                        other.unlink()
+                    except Exception:
+                        pass
+            shutil.copy2(source, target)
+            with sqlite3.connect(DB_PATH) as con:
+                con.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?, ?)", (self._template_meta_key(slot, "path"), str(target)))
+                con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?, ?)", (self._template_meta_key(slot, "name"), name.strip()))
+                con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?, ?)", (self._template_meta_key(slot, "source"), source.name))
+                con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?, CURRENT_TIMESTAMP)", (self._template_meta_key(slot, "updated"),))
+                con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('auswertungsvorlage_selected_slot', ?)", (str(slot),))
+                con.commit()
+            self._roadmap_mark_auswertungsvorlage_erledigt()
+            self.status.set(f"Auswertungsvorlage Slot {slot} gespeichert: {name}")
+            messagebox.showinfo("Auswertungsvorlage", f"Vorlage gespeichert und als Standard gesetzt:\n{name}")
+            self.show_auswertungsvorlage_page()
+
+        def set_default():
+            slot = self._selected_template_from_tree(tree)
+            if not slot:
+                return
+            if not self._get_auswertungsvorlage_path(slot):
+                messagebox.showinfo("Auswertungsvorlage", "Dieser Slot ist leer und kann nicht als Standard gesetzt werden.")
+                return
+            self._set_selected_auswertungsvorlage_slot(slot)
+            self.status.set(f"Auswertungsvorlage Slot {slot} als Standard gespeichert.")
+            self.show_auswertungsvorlage_page()
+
+        def delete_template():
+            slot = self._selected_template_from_tree(tree)
+            if not slot:
+                return
+            path = self._get_auswertungsvorlage_path(slot)
+            if not path:
+                messagebox.showinfo("Auswertungsvorlage", "Dieser Slot ist bereits frei.")
+                return
+            if not messagebox.askyesno("Auswertungsvorlage löschen", f"Vorlage in Slot {slot} entfernen?\n\nDie Datei wird aus der Vorlagenverwaltung entfernt, Auswertungen bleiben unverändert."):
+                return
+            try:
+                path.unlink()
+            except Exception:
+                pass
+            with sqlite3.connect(DB_PATH) as con:
+                for suffix in ("path", "name", "source", "updated"):
+                    con.execute("DELETE FROM meta WHERE key=?", (self._template_meta_key(slot, suffix),))
+                if self._get_selected_auswertungsvorlage_slot() == slot:
+                    con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('auswertungsvorlage_selected_slot','')")
+                con.commit()
+            self.status.set(f"Auswertungsvorlage Slot {slot} entfernt.")
+            self.show_auswertungsvorlage_page()
+
+        tk.Button(actions, text="Vorlage hochladen/ersetzen", command=upload_template, bg="#0b4a86", fg="white", relief="flat", font=("Arial", 11, "bold"), padx=16, pady=8).pack(side="left", padx=(0, 8))
+        tk.Button(actions, text="Als Standard verwenden", command=set_default, padx=14, pady=8).pack(side="left", padx=8)
+        tk.Button(actions, text="Vorlage entfernen", command=delete_template, padx=14, pady=8).pack(side="left", padx=8)
+        tk.Button(actions, text="Vorlagenordner öffnen", command=lambda: _open_folder(self._auswertungsvorlagen_dir()), padx=14, pady=8).pack(side="left", padx=8)
+
+    def update_auswertungsvorlage(self):
+        """Kompatibilitätsfunktion: alter Button ruft neue Vorlagenverwaltung auf."""
+        self.show_auswertungsvorlage_page()
+
+    def show_artikelstamm_page(self):
+        self.clear_page()
+        self._page_header(
+            "Artikelstamm / PZN-Basis",
+            "Zentrale Artikelbasis für alle Dateien, in denen eine PZN vorkommt."
+        )
+
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+
+        try:
+            count = count_artikelstamm()
+        except Exception:
+            count = 0
+
+        info = (
+            f"Gespeicherte Artikel: {count}\n\n"
+            "Erwartete Excel-Spalten:\n"
+            "- PZN / Pharmazentralnummer\n"
+            "- Artikel / Artikelname / Artikelbez.\n"
+            "- DF / DAR\n"
+            "- PCK / Packung\n"
+            "- Herst / Hersteller\n\n"
+            "PZN ist der feste Schlüssel. Bestehende PZN werden aktualisiert."
+        )
+
+        tk.Label(
+            body,
+            text=info,
+            justify="left",
+            bg="#ffffff",
+            fg="#222",
+            font=("Arial", 11)
+        ).pack(anchor="w", pady=(0, 16))
+
+        tk.Button(
+            body,
+            text="Artikelstamm importieren  →",
+            command=self.import_artikelstamm,
+            bg="#0b4a86",
+            fg="white",
+            relief="flat",
+            font=("Arial", 12, "bold"),
+            padx=18,
+            pady=9
+        ).pack(anchor="w")
+
+    def import_artikelstamm(self):
+        file = filedialog.askopenfilename(
+            title="Artikelstamm / PZN-Basis auswählen",
+            filetypes=SUPPORTED_DATA_FILETYPES
+        )
+        if not file:
+            return
+
+        self.status.set("Artikelstamm-Import gestartet. Bitte Programm geöffnet lassen...")
+
+        def progress(done, total):
+            def update_status():
+                if total:
+                    pct = int((done / total) * 100)
+                    self.status.set(f"Artikelstamm-Import läuft: {done:,} / {total:,} Zeilen ({pct} %)".replace(",", "."))
+                else:
+                    self.status.set(f"Artikelstamm-Import läuft: {done:,} Zeilen".replace(",", "."))
+            self.after(0, update_status)
+
+        def worker():
+            try:
+                result = import_artikelstamm_excel(file, quelle="GUI-Import", progress_callback=progress)
+                total = count_artikelstamm()
+                msg = (
+    "Artikelstamm importiert.\n\n"
+    f"Importiert/aktualisiert: {result.get('imported_or_updated', result.get('inserted', 0))}\n"
+    f"Übersprungen: {result.get('skipped', 0)}\n\n"
+    f"Artikel gesamt: {total}"
+)
+                def done():
+                    self.status.set(msg)
+                    messagebox.showinfo("Artikelstamm", msg)
+                    self.show_artikelstamm_page()
+                self.after(0, done)
+            except Exception as exc:
+                def failed():
+                    self.status.set(f"Artikelstamm-Import abgebrochen: {exc}")
+                    messagebox.showerror("Artikelstamm", str(exc))
+                self.after(0, failed)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def show_austauschdatenbank_page(self):
+        self.clear_page()
+        self._page_header(
+            "Austauschdatenbank",
+            "Bekannte Austauschbeziehungen importieren und später über die Schulbank erweitern."
+        )
+
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+
+        try:
+            count = count_austauschdatenbank()
+        except Exception:
+            count = 0
+
+        info = (
+            f"Aktive Einträge: {count}\n\n"
+            "Erwartete Excel-Spalten:\n"
+            "- PZN\n"
+            "- PZN NMG\n"
+            "- austauschbar gegen\n\n"
+            "Hinweis:\n"
+            "Wenn keine PZN NMG vorhanden ist, wird der Freitext trotzdem gespeichert."
+        )
+
+        tk.Label(
+            body,
+            text=info,
+            justify="left",
+            bg="#ffffff",
+            fg="#222",
+            font=("Arial", 11)
+        ).pack(anchor="w", pady=(0, 16))
+
+        tk.Button(
+            body,
+            text="Austauschdatenbank importieren  →",
+            command=self.import_austauschdatenbank,
+            bg="#0b4a86",
+            fg="white",
+            relief="flat",
+            font=("Arial", 12, "bold"),
+            padx=18,
+            pady=9
+        ).pack(anchor="w")
+
+    def import_austauschdatenbank(self):
+        file = filedialog.askopenfilename(
+            title="Austauschdatenbank auswählen",
+            filetypes=SUPPORTED_DATA_FILETYPES
+        )
+        if not file:
+            return
+
+        try:
+            result = import_austausch_excel(file, quelle="GUI-Import")
+            msg = (
+                "Austauschdatenbank importiert.\n\n"
+                f"Neu angelegt: {result.get('inserted', 0)}\n"
+                f"Aktualisiert: {result.get('updated', 0)}\n"
+                f"Übersprungen: {result.get('skipped', 0)}\n\n"
+                f"Aktive Einträge gesamt: {count_austauschdatenbank()}"
+            )
+            self.status.set(msg)
+            messagebox.showinfo("Austauschdatenbank", msg)
+            self.show_austauschdatenbank_page()
+        except Exception as exc:
+            messagebox.showerror("Austauschdatenbank", str(exc))
+
+    # ── GENERISCHER IMPORT-ASSISTENT ────────────────────────────────────────────
+    def _import_assistent(self, title, ziel_tabelle, pflicht_spalten, optionale_spalten,
+                           insert_sql, mapping_key, beschreibung=""):
+        """Generischer Import-Assistent: xlsx/csv/txt → Datenbank.
+        Erkennt Spalten automatisch, bietet Mapping-Dialog bei Unklarheit.
+        """
+        from .file_loader import load_table, SUPPORTED_DATA_FILETYPES, find_column, normalize_header
+        from tkinter import filedialog
+
+        files = filedialog.askopenfilenames(
+            title=f"{title} – Datei(en) auswählen",
+            filetypes=SUPPORTED_DATA_FILETYPES + [("PDF", "*.pdf"), ("Alle Dateien", "*.*")]
+        )
+        if not files:
+            return
+
+        gesamt_neu = 0
+        gesamt_aktualisiert = 0
+        fehler = []
+
+        for filepath in files:
+            try:
+                table = load_table(filepath)
+            except Exception as exc:
+                fehler.append(f"{Path(filepath).name}: {exc}")
+                continue
+
+            headers = table.headers
+            header_norm = [normalize_header(h) for h in headers]
+
+            # Auto-Mapping
+            mapping = {}
+            for ziel_col, aliases, contains in (pflicht_spalten + optionale_spalten):
+                idx = find_column(headers, aliases, contains)
+                if idx is not None:
+                    mapping[ziel_col] = idx
+
+            # Prüfe Pflichtfelder
+            missing = [col for col, *_ in pflicht_spalten if col not in mapping]
+            if missing:
+                # Gespeichertes Mapping prüfen
+                saved = self._get_meta_value(f"{mapping_key}_{Path(filepath).stem[:20]}", "")
+                if saved:
+                    try:
+                        import json
+                        mapping = json.loads(saved)
+                        missing = [col for col, *_ in pflicht_spalten if col not in mapping]
+                    except Exception:
+                        pass
+
+            if missing:
+                # Mapping-Dialog
+                mapping = self._mapping_dialog(
+                    title=f"{title} – Spalten zuordnen",
+                    filepath=filepath,
+                    headers=headers,
+                    pflicht=pflicht_spalten,
+                    optional=optionale_spalten,
+                    current_mapping=mapping,
+                    beschreibung=beschreibung,
+                )
+                if not mapping:
+                    continue
+                # Mapping speichern
+                try:
+                    import json
+                    self._set_meta_value(f"{mapping_key}_{Path(filepath).stem[:20]}", json.dumps(mapping))
+                except Exception:
+                    pass
+
+            # Importieren
+            neu = 0
+            aktualisiert = 0
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    for row_data in table.rows:
+                        record = {}
+                        for col_name, col_idx in mapping.items():
+                            if isinstance(col_idx, int) and col_idx < len(row_data):
+                                record[col_name] = row_data[col_idx]
+                            else:
+                                record[col_name] = None
+                        record["importdatum"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        record["quelle"] = Path(filepath).name
+                        try:
+                            con.execute(insert_sql, record)
+                            neu += 1
+                        except sqlite3.IntegrityError:
+                            # Update bei Duplikat
+                            set_parts = ", ".join(f"{k}=:{k}" for k in record if k not in ("pzn", "kundennummer"))
+                            try:
+                                pk_col = "pzn" if "pzn" in record else "kundennummer"
+                                con.execute(f"UPDATE {ziel_tabelle} SET {set_parts} WHERE {pk_col}=:{pk_col}", record)
+                                aktualisiert += 1
+                                neu = max(0, neu - 1)
+                            except Exception:
+                                pass
+                    con.commit()
+                gesamt_neu += neu
+                gesamt_aktualisiert += aktualisiert
+            except Exception as exc:
+                fehler.append(f"{Path(filepath).name}: {exc}")
+
+        msg = (f"{title} abgeschlossen.\n\nNeu importiert: {gesamt_neu}\nAktualisiert: {gesamt_aktualisiert}")
+        if fehler:
+            msg += f"\nFehler ({len(fehler)}):\n" + "\n".join(fehler[:5])
+        messagebox.showinfo(title, msg)
+        self.status.set(f"{title}: {gesamt_neu} neu, {gesamt_aktualisiert} aktualisiert.")
+        try:
+            log_event("import", title, msg, user=self.bearbeiter)
+        except Exception:
+            pass
+
+    def _mapping_dialog(self, title, filepath, headers, pflicht, optional, current_mapping, beschreibung=""):
+        """Dialog: Benutzer ordnet Spalten manuell zu. Gibt mapping-dict zurück oder None."""
+        result = {"mapping": None}
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title(title)
+        win.geometry("700x560")
+        win.minsize(600, 460)
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+
+        tk.Label(win, text=title, font=("Arial", 14, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(16, 4))
+        tk.Label(win, text=f"Datei: {Path(filepath).name}", font=("Arial", 9), fg="#555", bg="#f5f7fb").pack(anchor="w", padx=20)
+        if beschreibung:
+            tk.Label(win, text=beschreibung, font=("Arial", 9), fg="#888", bg="#f5f7fb", justify="left", wraplength=640).pack(anchor="w", padx=20, pady=(2, 0))
+        tk.Label(win, text="Spalten aus der Datei den Feldern zuordnen. Pflichtfelder (*) müssen belegt sein.",
+                 font=("Arial", 9), fg="#666", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(4, 10))
+
+        form = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        form.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        form.columnconfigure(1, weight=1)
+
+        header_choices = ["– nicht zuordnen –"] + [f"[{i}] {h}" for i, h in enumerate(headers)]
+        combos = {}
+
+        all_fields = [(col, aliases, contains, True) for col, aliases, contains in pflicht] +                      [(col, aliases, contains, False) for col, aliases, contains in optional]
+
+        for r, (col_name, aliases, _, required) in enumerate(all_fields):
+            label_text = f"{aliases[0]} {'*' if required else ''}".strip()
+            color = "#c00" if required else "#0b4a86"
+            tk.Label(form, text=label_text, bg="#ffffff", fg=color, font=("Arial", 10, "bold"),
+                     anchor="w").grid(row=r, column=0, sticky="w", padx=12, pady=5)
+            var = tk.StringVar()
+            if col_name in current_mapping:
+                idx = current_mapping[col_name]
+                if isinstance(idx, int) and idx < len(headers):
+                    var.set(f"[{idx}] {headers[idx]}")
+                else:
+                    var.set(header_choices[0])
+            else:
+                var.set(header_choices[0])
+            combos[col_name] = var
+            cb = ttk.Combobox(form, textvariable=var, values=header_choices, state="readonly")
+            cb.grid(row=r, column=1, sticky="ew", padx=12, pady=5)
+
+        def save():
+            mapping = {}
+            for col_name, var in combos.items():
+                val = var.get()
+                if val.startswith("["):
+                    try:
+                        idx = int(val.split("]")[0][1:])
+                        mapping[col_name] = idx
+                    except Exception:
+                        pass
+            # Pflichtfelder prüfen
+            missing = [col for col, *_ in pflicht if col not in mapping]
+            if missing:
+                messagebox.showinfo(title, f"Pflichtfelder nicht belegt: {', '.join(missing)}")
+                return
+            result["mapping"] = mapping
+            win.destroy()
+
+        bar = tk.Frame(win, bg="#f5f7fb")
+        bar.pack(fill="x", padx=20, pady=(0, 14))
+        tk.Button(bar, text="Abbrechen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8, 0))
+        tk.Button(bar, text="✔  Importieren", command=save, bg="#0b4a86", fg="white",
+                  relief="flat", font=("Arial", 11, "bold"), padx=16, pady=7).pack(side="right")
+        self.wait_window(win)
+        return result["mapping"]
+
+    def _ensure_import_tables(self):
+        """Erstellt Import-Zieltabellen falls noch nicht vorhanden."""
+        with sqlite3.connect(DB_PATH) as con:
+            con.execute("""CREATE TABLE IF NOT EXISTS tbl_nmg_stamm_import (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pzn TEXT UNIQUE,
+                artikelname TEXT, hersteller TEXT, darreichungsform TEXT,
+                packungsgroesse TEXT, apu REAL, taxe_ek REAL, taxe_vk REAL,
+                importdatum TEXT, quelle TEXT
+            )""")
+            con.execute("""CREATE TABLE IF NOT EXISTS tbl_pk_rabatte_import (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pzn TEXT UNIQUE,
+                artikelname TEXT, hersteller TEXT, rabatt_prozent REAL,
+                rabatt_euro REAL, gueltigkeit TEXT,
+                importdatum TEXT, quelle TEXT
+            )""")
+            con.execute("""CREATE TABLE IF NOT EXISTS tbl_apu_hap_import (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pzn TEXT UNIQUE,
+                artikelname TEXT, apu REAL, hap REAL, hersteller TEXT,
+                importdatum TEXT, quelle TEXT
+            )""")
+            con.execute("""CREATE TABLE IF NOT EXISTS tbl_pk_konditionen_import (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kundennummer TEXT,
+                kundenname TEXT, pzn TEXT, rabatt_prozent REAL,
+                gueltigkeit TEXT,
+                importdatum TEXT, quelle TEXT
+            )""")
+            con.commit()
+
+    def import_nmg_articles(self):
+        self._ensure_import_tables()
+        self._import_assistent(
+            title="NMG Artikel importieren",
+            ziel_tabelle="tbl_nmg_stamm_import",
+            pflicht_spalten=[
+                ("pzn", ["PZN", "PZN-Code", "Artikel-PZN"], ["pzn"]),
+            ],
+            optionale_spalten=[
+                ("artikelname", ["Artikelname", "Bezeichnung", "Name", "Artikel"], ["artikel", "name", "bezeichn"]),
+                ("hersteller", ["Hersteller", "Lieferant", "Firma"], ["herst", "liefer"]),
+                ("darreichungsform", ["Darreichungsform", "DF", "Form"], ["darreich", " df "]),
+                ("packungsgroesse", ["Packungsgröße", "Packung", "PG", "Menge"], ["packung", " pg ", " menge"]),
+                ("apu", ["APU", "Apotheken-PU", "Einkaufspreis"], ["apu", "ek", "einkauf"]),
+                ("taxe_ek", ["Taxe EK", "HAP", "Großhandelspreis"], ["taxe", "hap", "gross"]),
+                ("taxe_vk", ["Taxe VK", "Apothekenverkaufspreis", "AVP"], ["avp", "taxe vk", "vk"]),
+            ],
+            insert_sql="""INSERT OR REPLACE INTO tbl_nmg_stamm_import(pzn,artikelname,hersteller,darreichungsform,packungsgroesse,apu,taxe_ek,taxe_vk,importdatum,quelle)
+                VALUES(:pzn,:artikelname,:hersteller,:darreichungsform,:packungsgroesse,:apu,:taxe_ek,:taxe_vk,:importdatum,:quelle)""",
+            mapping_key="nmg_artikel",
+            beschreibung="NMG-Artikelstamm importieren. Erwartet mindestens eine PZN-Spalte."
+        )
+
+    def import_pk_rabatte(self):
+        self._ensure_import_tables()
+        self._import_assistent(
+            title="PK Rabatte importieren",
+            ziel_tabelle="tbl_pk_rabatte_import",
+            pflicht_spalten=[
+                ("pzn", ["PZN", "PZN-Code", "Artikel-PZN"], ["pzn"]),
+            ],
+            optionale_spalten=[
+                ("artikelname", ["Artikelname", "Bezeichnung", "Name", "Artikel"], ["artikel", "name", "bezeichn"]),
+                ("hersteller", ["Hersteller", "Lieferant"], ["herst", "liefer"]),
+                ("rabatt_prozent", ["Rabatt %", "Rabatt Prozent", "Prozent", "PK-Rabatt"], ["rabatt", "prozent", " %"]),
+                ("rabatt_euro", ["Rabatt €", "Rabatt Euro", "Abschlag"], ["euro", "rabatt eur", "abschlag"]),
+                ("gueltigkeit", ["Gültigkeit", "Gültig bis", "Gültig ab", "Laufzeit"], ["gueltig", "laufzeit"]),
+            ],
+            insert_sql="""INSERT OR REPLACE INTO tbl_pk_rabatte_import(pzn,artikelname,hersteller,rabatt_prozent,rabatt_euro,gueltigkeit,importdatum,quelle)
+                VALUES(:pzn,:artikelname,:hersteller,:rabatt_prozent,:rabatt_euro,:gueltigkeit,:importdatum,:quelle)""",
+            mapping_key="pk_rabatte",
+            beschreibung="Partnerkonditionen-Rabatte importieren. Erwartet PZN und Rabattspalte(n)."
+        )
+
+    def import_apu_data(self):
+        self._ensure_import_tables()
+        self._import_assistent(
+            title="APU/HAP Daten importieren",
+            ziel_tabelle="tbl_apu_hap_import",
+            pflicht_spalten=[
+                ("pzn", ["PZN", "PZN-Code", "Artikel-PZN"], ["pzn"]),
+            ],
+            optionale_spalten=[
+                ("artikelname", ["Artikelname", "Bezeichnung", "Name", "Artikel"], ["artikel", "name"]),
+                ("apu", ["APU", "Apotheken-PU", "APU-Preis"], ["apu"]),
+                ("hap", ["HAP", "Großhandelspreis", "Handelspreis", "HEP"], ["hap", "gross", " hep"]),
+                ("hersteller", ["Hersteller", "Lieferant"], ["herst", "liefer"]),
+            ],
+            insert_sql="""INSERT OR REPLACE INTO tbl_apu_hap_import(pzn,artikelname,apu,hap,hersteller,importdatum,quelle)
+                VALUES(:pzn,:artikelname,:apu,:hap,:hersteller,:importdatum,:quelle)""",
+            mapping_key="apu_hap",
+            beschreibung="APU/HAP-Preisdaten importieren. Erwartet PZN, APU- und/oder HAP-Spalten."
+        )
+
+    def import_pk_data(self):
+        self._ensure_import_tables()
+        self._import_assistent(
+            title="Partnerkonditionen importieren",
+            ziel_tabelle="tbl_pk_konditionen_import",
+            pflicht_spalten=[
+                ("kundennummer", ["Kundennummer", "KD-Nr", "Kunden-ID", "KundNr"], ["kundennr", "kd-nr", "kd nr"]),
+            ],
+            optionale_spalten=[
+                ("kundenname", ["Kundenname", "Apotheke", "Name"], ["kundenname", "apotheke"]),
+                ("pzn", ["PZN", "Artikel-PZN"], ["pzn"]),
+                ("rabatt_prozent", ["Rabatt %", "Rabatt Prozent", "PK-Rabatt"], ["rabatt", "prozent"]),
+                ("gueltigkeit", ["Gültigkeit", "Gültig bis", "Laufzeit"], ["gueltig", "laufzeit"]),
+            ],
+            insert_sql="""INSERT INTO tbl_pk_konditionen_import(kundennummer,kundenname,pzn,rabatt_prozent,gueltigkeit,importdatum,quelle)
+                VALUES(:kundennummer,:kundenname,:pzn,:rabatt_prozent,:gueltigkeit,:importdatum,:quelle)""",
+            mapping_key="pk_konditionen",
+            beschreibung="Partnerkonditionen importieren. Erwartet Kundennummer-Spalte."
+        )
+
+    def check_online_update(self):
+        messagebox.showinfo(
+            "Online Update",
+            "Online-Updateprüfung folgt in Version 4.0."
+        )
+
+    def show_roadmap_page(self):
+        self.clear_page()
+        self._page_header(
+            "Roadmap",
+            "Wünsche, Ideen, offene Punkte, begonnene Arbeiten und erledigte Aufgaben."
+        )
+
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+
+        top = tk.Frame(body, bg="#ffffff")
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+
+        tk.Button(
+            top,
+            text="➕ Neuer Wunsch",
+            command=self.add_roadmap_wunsch,
+            bg="#0b4a86",
+            fg="white",
+            relief="flat",
+            padx=14,
+            pady=8
+        ).pack(side="left", padx=(0, 8))
+
+        tk.Button(
+            top,
+            text="Aktualisieren",
+            command=self.show_roadmap_page,
+            padx=14,
+            pady=8
+        ).pack(side="left")
+
+        columns = ("id", "status", "bereich", "titel", "prioritaet", "erstellt")
+        tree = ttk.Treeview(body, columns=columns, show="headings", selectmode="browse")
+        tree.grid(row=1, column=0, sticky="nsew")
+
+        headings = {
+            "id": "ID",
+            "status": "Status",
+            "bereich": "Bereich",
+            "titel": "Titel",
+            "prioritaet": "Priorität",
+            "erstellt": "Erstellt",
+        }
+    
+        widths = {
+            "id": 55,
+            "status": 100,
+            "bereich": 150,
+            "titel": 360,
+            "prioritaet": 90,
+            "erstellt": 150,
+        }
+
+        for col in columns:
+            tree.heading(col, text=headings[col])
+            tree.column(col, width=widths[col], anchor="w")
+        self._make_tree_sortable(tree, columns, headings)
+
+        scrollbar = tk.Scrollbar(body, orient="vertical", command=tree.yview)
+        scrollbar.grid(row=1, column=0, sticky="nse")
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        detail = tk.StringVar(value="Eintrag auswählen, um Beschreibung zu sehen.")
+        tk.Label(
+            body,
+            textvariable=detail,
+            bg="#ffffff",
+            fg="#333",
+            justify="left",
+            anchor="w",
+            wraplength=850
+        ).grid(row=2, column=0, sticky="ew", pady=(10, 0))
+
+        rows = list_roadmap_items()
+        item_map = {}
+
+        for row in rows:
+            iid = tree.insert(
+                "",
+                "end",
+                values=(
+                    row["id"],
+                    row["status"],
+                    row["bereich"],
+                    row["titel"],
+                    row["prioritaet"],
+                    row["erstellt_am"],
+                )
+            )
+            item_map[iid] = row
+
+        def selected_id():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Roadmap", "Bitte zuerst einen Roadmap-Eintrag auswählen.")
+                return None
+            return int(tree.item(sel[0], "values")[0])
+
+        def on_select(event=None):
+            sel = tree.selection()
+            if not sel:
+                detail.set("Eintrag auswählen, um Beschreibung zu sehen.")
+                return
+            row = item_map.get(sel[0])
+            if not row:
+                return
+            text = (
+                f"{row['titel']}\n"
+                f"Bereich: {row['bereich']} | Status: {row['status']} | Priorität: {row['prioritaet']}\n\n"
+                f"{row['beschreibung'] or ''}"
+            )
+            detail.set(text)
+
+        tree.bind("<<TreeviewSelect>>", on_select)
+
+        actionbar = tk.Frame(body, bg="#ffffff")
+        actionbar.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+
+        def set_status(status):
+            item_id = selected_id()
+            if item_id is None:
+                return
+            update_roadmap_status(item_id, status)
+            self.show_roadmap_page()
+
+        tk.Button(actionbar, text="💡 Idee", command=lambda: set_status("Idee"), padx=12, pady=7).pack(side="left", padx=(0, 6))
+        tk.Button(actionbar, text="⬜ Offen", command=lambda: set_status("Offen"), padx=12, pady=7).pack(side="left", padx=6)
+        tk.Button(actionbar, text="🔄 Begonnen", command=lambda: set_status("Begonnen"), padx=12, pady=7).pack(side="left", padx=6)
+        tk.Button(actionbar, text="✅ Erledigt", command=lambda: set_status("Erledigt"), padx=12, pady=7).pack(side="left", padx=6)
+
+        self.status.set(f"Roadmap: {len(rows)} Einträge angezeigt.")
+
+
+    def add_roadmap_wunsch(self):
+        win = tk.Toplevel(self)
+        win.resizable(True, True)
+        win.title("Neuer Wunsch")
+        win.geometry("560x430")
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+
+        tk.Label(win, text="Neuer Wunsch", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 8))
+
+        form = tk.Frame(win, bg="#f5f7fb")
+        form.pack(fill="both", expand=True, padx=22, pady=8)
+
+        tk.Label(form, text="Bereich", bg="#f5f7fb").grid(row=0, column=0, sticky="w")
+        bereich_var = tk.StringVar(value="Sonstiges")
+        bereich = ttk.Combobox(
+            form,
+            textvariable=bereich_var,
+            values=["GUI", "Analyse", "Schulbank", "Datenbank", "Import", "Export", "Kundenverwaltung", "E-Mail", "Roadmap", "Sonstiges"],
+            state="readonly",
+            width=35
+        )
+        bereich.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+
+        tk.Label(form, text="Titel / Headline", bg="#f5f7fb").grid(row=2, column=0, sticky="w")
+        titel_var = tk.StringVar()
+        tk.Entry(form, textvariable=titel_var, width=54).grid(row=3, column=0, sticky="ew", pady=(0, 10))
+    
+        tk.Label(form, text="Beschreibung / Freitext", bg="#f5f7fb").grid(row=4, column=0, sticky="w")
+        text = tk.Text(form, height=9, width=54)
+        text.grid(row=5, column=0, sticky="nsew", pady=(0, 10))
+    
+        form.columnconfigure(0, weight=1)
+        form.rowconfigure(5, weight=1)
+    
+        def save():
+            try:
+                add_roadmap_item(
+                    bereich=bereich_var.get(),
+                    titel=titel_var.get(),
+                    beschreibung=text.get("1.0", "end").strip(),
+                    status="Idee",
+                    prioritaet="Normal"
+                )
+                win.destroy()
+                self.show_roadmap_page()
+            except Exception as exc:
+                messagebox.showerror("Roadmap", str(exc))
+
+        buttons = tk.Frame(win, bg="#f5f7fb")
+        buttons.pack(fill="x", padx=22, pady=(0, 18))
+        tk.Button(buttons, text="Abbrechen", command=win.destroy, padx=14, pady=8).pack(side="right", padx=(8, 0))
+        tk.Button(buttons, text="Speichern", command=save, bg="#0b4a86", fg="white", relief="flat", padx=18, pady=9).pack(side="right")
+
+    def show_help_center(self):
+        self.clear_page()
+        self._page_header("Hilfe-Center", "Direkt im Programm. Keine PDF, kein separates Hilfefenster.")
+
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+
+        help_text = (
+            "Erste Schritte\n"
+            "Neue Auswertung\n"
+            "Produktanalyse\n"
+            "Marktanalyse\n"
+            "Schulbank\n"
+            "Daten aktualisieren\n"
+            "Backup & Update\n"
+            "FAQ\n\n"
+            "Die Inhalte werden in Version 4.0 hier im mittleren Arbeitsbereich ausgebaut."
+        )
+        tk.Label(body, text=help_text, justify="left", bg="#ffffff", fg="#222", font=("Arial", 11)).pack(anchor="w")
+
+
+
+def main():
+    app = NMGApp()
+    app.mainloop()

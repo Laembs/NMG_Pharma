@@ -1,0 +1,402 @@
+from pathlib import Path
+from datetime import datetime
+import sqlite3
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+from .config import DB_PATH, OUTPUT_DIR
+from .db import init_db
+
+
+def _safe_num(value):
+    try:
+        return float(value or 0)
+    except Exception:
+        return 0.0
+
+
+def _norm_source(datenquelle: str | None) -> str:
+    dq = (datenquelle or "ALLE").upper().strip()
+    # PK ist die neue fachliche Bezeichnung für die bisherigen NMG-/Partnerkonditions-Auswertungen.
+    # Intern bleiben bestehende Altdaten aus Kompatibilitätsgründen als NMG gespeichert.
+    if dq == "PK":
+        return "NMG"
+    return dq if dq in {"NMG", "ZF", "ALLE"} else "ALLE"
+
+
+def _source_label(dq: str) -> str:
+    if dq == "NMG":
+        return "PK"
+    if dq == "ZF":
+        return "ZF"
+    return "PK + ZF"
+
+
+def export_marktanalyse_nicht_nmg(limit: int = 200, min_apotheken: int = 1, datenquelle: str = "ALLE", auswertung_id: int | None = None) -> Path:
+    """Exportiert eine Marktanalyse über gespeicherte Auswertungen.
+
+    Ziel: Produkte finden, die keine NMG-Zuordnung haben und bei Kunden hohe Abverkäufe haben.
+    Gruppierung erfolgt über PZN. Sortierung: Gesamtabsatz absteigend, dann Anzahl Apotheken.
+    """
+    if not DB_PATH.exists():
+        init_db(DB_PATH)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    dq = _norm_source(datenquelle)
+    scope = f"AUSWERTUNG_{auswertung_id}_" if auswertung_id else ""
+    out = OUTPUT_DIR / f"Marktanalyse_{scope}Nicht_NMG_{dq}_Top_Absatz_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+
+    with sqlite3.connect(DB_PATH) as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            """
+            SELECT
+                p.pzn,
+                COALESCE(MAX(NULLIF(p.artikelname, '')), '') AS artikelname,
+                COALESCE(MAX(NULLIF(p.df, '')), '') AS df,
+                COALESCE(MAX(NULLIF(p.pck, '')), '') AS pck,
+                COALESCE(MAX(NULLIF(p.herstellerkuerzel, '')), '') AS hersteller,
+                COUNT(DISTINCT a.apotheke) AS apotheken,
+                COUNT(*) AS vorkommen,
+                SUM(COALESCE(p.absatz_6m, 0)) AS gesamt_absatz_6m,
+                AVG(NULLIF(p.absatz_6m, 0)) AS durchschnitt_absatz_6m,
+                SUM(COALESCE(p.umsatz, 0)) AS gesamt_umsatz,
+                MAX(COALESCE(p.absatz_6m, 0)) AS hoechster_einzel_absatz,
+                GROUP_CONCAT(DISTINCT a.apotheke) AS apotheken_liste
+            FROM tbl_auswertungspositionen p
+            JOIN tbl_auswertungen a ON a.id = p.auswertung_id
+            WHERE COALESCE(p.ist_nmg_treffer, 0) = 0
+              AND COALESCE(p.absatz_6m, 0) > 0
+              AND p.pzn IS NOT NULL AND p.pzn <> ''
+              AND p.pzn NOT IN (SELECT pzn FROM tbl_nmg_stamm)
+              AND (? = 'ALLE' OR COALESCE(a.datenquelle, 'NMG') = ?)
+              AND (? IS NULL OR a.id = ?)
+            GROUP BY p.pzn
+            HAVING COUNT(DISTINCT a.apotheke) >= ?
+            ORDER BY gesamt_absatz_6m DESC, apotheken DESC, vorkommen DESC
+            LIMIT ?
+            """,
+            (dq, dq, auswertung_id, auswertung_id, int(min_apotheken), int(limit)),
+        ).fetchall()
+
+        summary = con.execute(
+            """
+            SELECT COUNT(*) AS auswertungen,
+                   COALESCE(SUM(anzahl_positionen), 0) AS positionen,
+                   COALESCE(SUM(nicht_nmg), 0) AS nicht_nmg,
+                   COALESCE(SUM(nmg_treffer), 0) AS nmg_treffer
+            FROM tbl_auswertungen
+            WHERE (? = 'ALLE' OR COALESCE(datenquelle, 'NMG') = ?)
+              AND (? IS NULL OR id = ?)
+            """, (dq, dq, auswertung_id, auswertung_id)
+        ).fetchone()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Nicht-PK Top Absatz"
+
+    title = f"Marktanalyse: Nicht-PK-Produkte mit hohem Absatz ({_source_label(dq)})"
+    ws["A1"] = title
+    ws["A1"].font = Font(bold=True, size=14)
+    ws.merge_cells("A1:L1")
+    ws["A2"] = f"Basis: {summary['auswertungen']} gespeicherte Auswertungen, {summary['positionen']} Positionen, {summary['nicht_nmg']} Nicht-PK-Positionen"
+    ws.merge_cells("A2:L2")
+    ws["A3"] = "Hinweis: EK wird nur aus Rohdaten/Fallback verwendet; diese Analyse dient als Kandidatenliste für mögliche neue Produkte."
+    ws.merge_cells("A3:L3")
+
+    headers = [
+        "Rang", "PZN", "Artikelname", "DF", "PCK", "Hersteller", "Apotheken",
+        "Vorkommen", "Gesamtabsatz 6M", "Ø Absatz 6M", "Gesamtumsatz", "Apothekenliste"
+    ]
+    for col, header in enumerate(headers, start=1):
+        cell = ws.cell(5, col, header)
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="D9EAF7")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    for idx, row in enumerate(rows, start=1):
+        r = idx + 5
+        values = [
+            idx, row["pzn"], row["artikelname"], row["df"], row["pck"], row["hersteller"],
+            row["apotheken"], row["vorkommen"], _safe_num(row["gesamt_absatz_6m"]),
+            _safe_num(row["durchschnitt_absatz_6m"]), _safe_num(row["gesamt_umsatz"]),
+            row["apotheken_liste"] or "",
+        ]
+        for c, value in enumerate(values, start=1):
+            ws.cell(r, c, value)
+
+    last_row = max(5, len(rows) + 5)
+    thin = Side(style="thin", color="B7B7B7")
+    for row in ws.iter_rows(min_row=5, max_row=last_row, min_col=1, max_col=len(headers)):
+        for cell in row:
+            cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    for col in [9, 10, 11]:
+        for r in range(6, last_row + 1):
+            ws.cell(r, col).number_format = '#,##0.00'
+    widths = [8, 12, 42, 8, 10, 14, 10, 10, 16, 14, 14, 50]
+    for idx, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
+    ws.freeze_panes = "A6"
+    ws.auto_filter.ref = f"A5:L{last_row}"
+
+    # Zweites Blatt: gespeicherte Auswertungen als Nachweis.
+    ws2 = wb.create_sheet("Gespeicherte Auswertungen")
+    with sqlite3.connect(DB_PATH) as con:
+        con.row_factory = sqlite3.Row
+        auswertungen = con.execute(
+            """SELECT datum, apotheke, quelldatei, anzahl_positionen, nmg_treffer, nicht_nmg, gesamt_absatz
+                   FROM tbl_auswertungen
+                   WHERE (? = 'ALLE' OR COALESCE(datenquelle, 'NMG') = ?)
+                     AND (? IS NULL OR id = ?)
+                   ORDER BY datum DESC""", (dq, dq, auswertung_id, auswertung_id)
+        ).fetchall()
+    headers2 = ["Datum", "Apotheke", "Quelldatei", "Positionen", "PK Treffer", "Nicht-PK", "Gesamtabsatz"]
+    for c, h in enumerate(headers2, start=1):
+        ws2.cell(1, c, h).font = Font(bold=True)
+    for r_idx, row in enumerate(auswertungen, start=2):
+        for c_idx, key in enumerate(["datum", "apotheke", "quelldatei", "anzahl_positionen", "nmg_treffer", "nicht_nmg", "gesamt_absatz"], start=1):
+            ws2.cell(r_idx, c_idx, row[key])
+    for idx, width in enumerate([20, 28, 42, 12, 12, 12, 14], start=1):
+        ws2.column_dimensions[get_column_letter(idx)].width = width
+    ws2.auto_filter.ref = f"A1:G{max(1, len(auswertungen)+1)}"
+    wb.save(out)
+    return out
+
+
+
+
+def export_marktanalyse_produktchancen(limit: int = 500, min_apotheken: int = 1, datenquelle: str = "ALLE", auswertung_id: int | None = None) -> Path:
+    """Erweiterte Marktanalyse für Produktentwicklung.
+
+    Unterscheidet gespeicherte Positionen in:
+    - Bereits im NMG-Sortiment
+    - NMG-Ersatz vorhanden (Austauschartikel)
+    - Neue Produktchance (nicht NMG, kein bekannter Ersatz)
+    """
+    if not DB_PATH.exists():
+        init_db(DB_PATH)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    dq = _norm_source(datenquelle)
+    scope = f"AUSWERTUNG_{auswertung_id}_" if auswertung_id else ""
+    out = OUTPUT_DIR / f"Marktanalyse_Produktchancen_{scope}{dq}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+
+    base_sql = """
+        WITH gruppiert AS (
+            SELECT
+                p.pzn,
+                COALESCE(MAX(NULLIF(p.artikelname, '')), '') AS artikelname,
+                COALESCE(MAX(NULLIF(p.df, '')), '') AS df,
+                COALESCE(MAX(NULLIF(p.pck, '')), '') AS pck,
+                COALESCE(MAX(NULLIF(p.herstellerkuerzel, '')), '') AS hersteller,
+                COUNT(DISTINCT a.apotheke) AS apotheken,
+                COUNT(*) AS vorkommen,
+                SUM(COALESCE(p.absatz_6m, 0)) AS gesamt_absatz_6m,
+                AVG(NULLIF(p.absatz_6m, 0)) AS durchschnitt_absatz_6m,
+                SUM(COALESCE(p.umsatz, 0)) AS gesamt_umsatz,
+                MAX(COALESCE(p.absatz_6m, 0)) AS hoechster_einzel_absatz,
+                GROUP_CONCAT(DISTINCT a.apotheke) AS apotheken_liste,
+                MAX(COALESCE(p.pzn_nmg, '')) AS pzn_nmg_auswertung,
+                MAX(COALESCE(p.austauschbar_gegen, '')) AS austausch_auswertung
+            FROM tbl_auswertungspositionen p
+            JOIN tbl_auswertungen a ON a.id = p.auswertung_id
+            WHERE COALESCE(p.absatz_6m, 0) > 0
+              AND p.pzn IS NOT NULL AND p.pzn <> ''
+              AND (:datenquelle = 'ALLE' OR COALESCE(a.datenquelle, 'NMG') = :datenquelle)
+              AND (:auswertung_id IS NULL OR a.id = :auswertung_id)
+            GROUP BY p.pzn
+            HAVING COUNT(DISTINCT a.apotheke) >= :min_apotheken
+        )
+        SELECT
+            g.*,
+            ns.pzn AS nmg_sortiment_pzn,
+            ns.artikelname AS nmg_sortiment_artikel,
+            aa.nmg_pzn AS austausch_nmg_pzn,
+            aa.austauschbar_gegen AS austausch_nmg_artikel,
+            aa.bemerkung AS austausch_bemerkung,
+            CASE
+                WHEN ns.pzn IS NOT NULL THEN 'Bereits im PK-/NMG-Sortiment'
+                WHEN NULLIF(COALESCE(aa.nmg_pzn, g.pzn_nmg_auswertung), '') IS NOT NULL
+                     OR NULLIF(COALESCE(aa.austauschbar_gegen, g.austausch_auswertung), '') IS NOT NULL
+                    THEN 'PK-/NMG-Ersatz vorhanden'
+                ELSE 'Neue Produktchance'
+            END AS status,
+            CASE
+                WHEN ns.pzn IS NOT NULL THEN 0
+                WHEN NULLIF(COALESCE(aa.nmg_pzn, g.pzn_nmg_auswertung), '') IS NOT NULL
+                     OR NULLIF(COALESCE(aa.austauschbar_gegen, g.austausch_auswertung), '') IS NOT NULL
+                    THEN 25
+                ELSE 100
+            END
+            + COALESCE(g.gesamt_absatz_6m, 0)
+            + (COALESCE(g.apotheken, 0) * 10) AS produktchancen_score
+        FROM gruppiert g
+        LEFT JOIN tbl_nmg_stamm ns ON ns.pzn = g.pzn
+        LEFT JOIN tbl_austauschartikel aa ON aa.original_pzn = g.pzn
+    """
+
+    with sqlite3.connect(DB_PATH) as con:
+        con.row_factory = sqlite3.Row
+        rows_all = con.execute(
+            base_sql + " ORDER BY produktchancen_score DESC, gesamt_absatz_6m DESC LIMIT :limit",
+            {"min_apotheken": int(min_apotheken), "limit": int(limit), "datenquelle": dq, "auswertung_id": auswertung_id},
+        ).fetchall()
+        rows_chancen = [r for r in rows_all if r["status"] == "Neue Produktchance"]
+        rows_ersatz = [r for r in rows_all if r["status"] == "PK-/NMG-Ersatz vorhanden"]
+        rows_sortiment = [r for r in rows_all if r["status"] == "Bereits im PK-/NMG-Sortiment"]
+
+        hersteller = con.execute(
+            """
+            WITH produktstatus AS (
+                """ + base_sql + """
+            )
+            SELECT
+                COALESCE(NULLIF(hersteller, ''), '(unbekannt)') AS hersteller,
+                COUNT(*) AS produkte,
+                SUM(gesamt_absatz_6m) AS gesamt_absatz_6m,
+                SUM(apotheken) AS apotheken_summe,
+                SUM(CASE WHEN status='Neue Produktchance' THEN 1 ELSE 0 END) AS neue_chancen,
+                SUM(CASE WHEN status='PK-/NMG-Ersatz vorhanden' THEN 1 ELSE 0 END) AS ersatz_vorhanden
+            FROM produktstatus
+            WHERE status <> 'Bereits im PK-/NMG-Sortiment'
+            GROUP BY COALESCE(NULLIF(hersteller, ''), '(unbekannt)')
+            ORDER BY gesamt_absatz_6m DESC, produkte DESC
+            LIMIT 200
+            """,
+            {"min_apotheken": int(min_apotheken), "datenquelle": dq, "auswertung_id": auswertung_id},
+        ).fetchall()
+
+        summary = con.execute(
+            """
+            SELECT COUNT(*) AS auswertungen,
+                   COALESCE(SUM(anzahl_positionen), 0) AS positionen,
+                   COALESCE(SUM(nicht_nmg), 0) AS nicht_nmg,
+                   COALESCE(SUM(nmg_treffer), 0) AS nmg_treffer
+            FROM tbl_auswertungen
+            WHERE (:datenquelle = 'ALLE' OR COALESCE(datenquelle, 'NMG') = :datenquelle)
+              AND (:auswertung_id IS NULL OR id = :auswertung_id)
+            """, {"datenquelle": dq, "auswertung_id": auswertung_id}
+        ).fetchone()
+
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    def write_rows(ws, title, rows, note=""):
+        ws["A1"] = title
+        ws["A1"].font = Font(bold=True, size=14)
+        ws.merge_cells("A1:Q1")
+        ws["A2"] = f"Basis: {summary['auswertungen']} gespeicherte Auswertungen, {summary['positionen']} Positionen"
+        ws.merge_cells("A2:Q2")
+        if note:
+            ws["A3"] = note
+            ws.merge_cells("A3:Q3")
+        headers = [
+            "Rang", "Status", "Score", "PZN", "Artikelname", "DF", "PCK", "Hersteller",
+            "Apotheken", "Vorkommen", "Gesamtabsatz 6M", "Ø Absatz 6M", "Gesamtumsatz",
+            "PK-/NMG-PZN/Ersatz", "PK-/NMG-Ersatzartikel", "höchster Einzelabsatz", "Apothekenliste"
+        ]
+        header_row = 5
+        for col, header in enumerate(headers, start=1):
+            cell = ws.cell(header_row, col, header)
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill("solid", fgColor="D9EAF7")
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        for idx, row in enumerate(rows, start=1):
+            r = idx + header_row
+            nmg_pzn = row["nmg_sortiment_pzn"] or row["austausch_nmg_pzn"] or row["pzn_nmg_auswertung"] or ""
+            nmg_artikel = row["nmg_sortiment_artikel"] or row["austausch_nmg_artikel"] or row["austausch_auswertung"] or ""
+            values = [
+                idx, row["status"], _safe_num(row["produktchancen_score"]), row["pzn"], row["artikelname"], row["df"], row["pck"], row["hersteller"],
+                row["apotheken"], row["vorkommen"], _safe_num(row["gesamt_absatz_6m"]), _safe_num(row["durchschnitt_absatz_6m"]), _safe_num(row["gesamt_umsatz"]),
+                nmg_pzn, nmg_artikel, _safe_num(row["hoechster_einzel_absatz"]), row["apotheken_liste"] or ""
+            ]
+            for c, value in enumerate(values, start=1):
+                ws.cell(r, c, value)
+        last_row = max(header_row, len(rows) + header_row)
+        thin = Side(style="thin", color="B7B7B7")
+        for excel_row in ws.iter_rows(min_row=header_row, max_row=last_row, min_col=1, max_col=len(headers)):
+            for cell in excel_row:
+                cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+        for col in [3, 11, 12, 13, 16]:
+            for r in range(header_row + 1, last_row + 1):
+                ws.cell(r, col).number_format = '#,##0.00'
+        widths = [8, 24, 14, 12, 42, 8, 10, 14, 10, 10, 16, 14, 14, 16, 42, 16, 55]
+        for i, width in enumerate(widths, start=1):
+            ws.column_dimensions[get_column_letter(i)].width = width
+        ws.freeze_panes = "A6"
+        ws.auto_filter.ref = f"A{header_row}:Q{last_row}"
+
+    write_rows(
+        wb.create_sheet("Produktchancen"),
+        "Marktanalyse: Neue Produktchancen",
+        rows_chancen,
+        "Nicht im PK-/NMG-Stamm und kein bekannter PK-/NMG-Austauschartikel. Das ist die wichtigste Liste für Produktentwicklung."
+    )
+    write_rows(
+        wb.create_sheet("Ersatz vorhanden"),
+        "Marktanalyse: Nicht-PK-Produkte mit vorhandenem NMG-Ersatz",
+        rows_ersatz,
+        "Nicht im PK-/NMG-Stamm, aber ein Austauschartikel bzw. Ersatz ist bekannt."
+    )
+    write_rows(
+        wb.create_sheet("Bereits Sortiment"),
+        "Marktanalyse: Bereits im NMG-Sortiment",
+        rows_sortiment,
+        "Zur Kontrolle: Produkte, deren PZN bereits im NMG-Stamm enthalten ist."
+    )
+
+    ws_h = wb.create_sheet("Herstelleranalyse")
+    ws_h["A1"] = "Herstelleranalyse außerhalb PK-/NMG-Sortiment"
+    ws_h["A1"].font = Font(bold=True, size=14)
+    headers_h = ["Rang", "Hersteller", "Produkte", "Gesamtabsatz 6M", "Apotheken-Summe", "Neue Produktchancen", "Ersatz vorhanden"]
+    for c, h in enumerate(headers_h, start=1):
+        cell = ws_h.cell(3, c, h)
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="D9EAF7")
+    for idx, row in enumerate(hersteller, start=1):
+        vals = [idx, row["hersteller"], row["produkte"], _safe_num(row["gesamt_absatz_6m"]), row["apotheken_summe"], row["neue_chancen"], row["ersatz_vorhanden"]]
+        for c, v in enumerate(vals, start=1):
+            ws_h.cell(idx + 3, c, v)
+    for idx, width in enumerate([8, 18, 12, 16, 16, 20, 18], start=1):
+        ws_h.column_dimensions[get_column_letter(idx)].width = width
+    ws_h.auto_filter.ref = f"A3:G{max(3, len(hersteller)+3)}"
+    ws_h.freeze_panes = "A4"
+
+    ws_s = wb.create_sheet("Übersicht")
+    ws_s["A1"] = f"Marktanalyse+ Übersicht ({dq})"
+    ws_s["A1"].font = Font(bold=True, size=14)
+    info = [
+        ("Gespeicherte Auswertungen", summary["auswertungen"]),
+        ("Gespeicherte Positionen", summary["positionen"]),
+        ("Produkte in Analyse", len(rows_all)),
+        ("Neue Produktchancen", len(rows_chancen)),
+        ("PK-/NMG-Ersatz vorhanden", len(rows_ersatz)),
+        ("Bereits im Sortiment", len(rows_sortiment)),
+        ("Mindestanzahl Apotheken", min_apotheken),
+        ("Limit je Analyse", limit),
+    ]
+    for r, (k, v) in enumerate(info, start=3):
+        ws_s.cell(r, 1, k).font = Font(bold=True)
+        ws_s.cell(r, 2, v)
+    ws_s.column_dimensions["A"].width = 32
+    ws_s.column_dimensions["B"].width = 20
+
+    wb.save(out)
+    return out
+
+
+def datenbankstatus() -> dict:
+    if not DB_PATH.exists():
+        init_db(DB_PATH)
+    with sqlite3.connect(DB_PATH) as con:
+        con.row_factory = sqlite3.Row
+        def one(sql):
+            return con.execute(sql).fetchone()[0]
+        return {
+            "auswertungen": one("SELECT COUNT(*) FROM tbl_auswertungen"),
+            "positionen": one("SELECT COUNT(*) FROM tbl_auswertungspositionen"),
+            "nicht_nmg_positionen": one("SELECT COUNT(*) FROM tbl_auswertungspositionen WHERE COALESCE(ist_nmg_treffer,0)=0"),
+            "pk_positionen": one("SELECT COUNT(*) FROM tbl_auswertungspositionen WHERE COALESCE(ist_nmg_treffer,0)=1"),
+            "zf_auswertungen": one("SELECT COUNT(*) FROM tbl_auswertungen WHERE COALESCE(datenquelle,'NMG')='ZF'"),
+            "pk_auswertungen": one("SELECT COUNT(*) FROM tbl_auswertungen WHERE COALESCE(datenquelle,'NMG')='NMG'"),
+        }
