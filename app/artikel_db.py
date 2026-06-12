@@ -199,8 +199,6 @@ def import_artikelstamm_excel(file_path, quelle="Artikelstamm-Import", progress_
     if progress_callback:
         progress_callback(total_rows, total_rows)
 
-    wb.close()
-
     return {
         "file": str(path),
         "imported_or_updated": inserted_or_updated,
