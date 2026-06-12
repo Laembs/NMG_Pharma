@@ -39,7 +39,7 @@ from .roadmap_db import (
 )
 from .migrations import run_migrations
 from .config import DB_PATH, DATA_DIR, ASSETS_DIR, SAVED_ANALYSES_DIR, UPDATE_DIR, OUTPUT_DIR
-from .backup import backup_erstellen, backup_wiederherstellen, backup_pruefen, versionsinfo, APP_VERSION, backup_auto_taeglich, DB_SCHEMA_VERSION
+from .backup import backup_erstellen, backup_wiederherstellen, backup_pruefen, versionsinfo, APP_VERSION, APP_VERSION_DISPLAY, backup_auto_taeglich, DB_SCHEMA_VERSION
 from .protocol_manager import (
     ensure_protocol_dirs, log_event, log_exception, list_protocol_files, read_protocol_file,
     delete_protocol_file, create_support_package, open_mail_with_attachment, PROTOCOL_ROOT, DEFAULT_RECIPIENT
@@ -117,7 +117,7 @@ def datetime_from_mtime(path: Path) -> str:
 class NMGApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"NMG Analyse {APP_VERSION}")
+        self.title(f"NMGone {APP_VERSION_DISPLAY}")
         self.geometry("1040x640")
         self.minsize(980, 600)
         try:
@@ -2253,7 +2253,7 @@ class NMGApp(tk.Tk):
             if not path:
                 return
             try:
-                attached = open_mail_with_attachment(path, DEFAULT_RECIPIENT, "NMG Analyse Protokoll")
+                attached = open_mail_with_attachment(path, DEFAULT_RECIPIENT, "NMGone Protokoll")
                 if attached:
                     messagebox.showinfo("Mail", "Mailentwurf wurde mit Anhang geöffnet.")
                 else:
@@ -2268,7 +2268,7 @@ class NMGApp(tk.Tk):
                 package = create_support_package()
                 self._log_action("protokolle", "Supportpaket erstellt", str(package))
                 if messagebox.askyesno("Supportpaket", f"Supportpaket erstellt:\n{package}\n\nJetzt per Mail senden?"):
-                    open_mail_with_attachment(package, DEFAULT_RECIPIENT, "NMG Analyse Supportpaket")
+                    open_mail_with_attachment(package, DEFAULT_RECIPIENT, "NMGone Supportpaket")
             except Exception as exc:
                 self._log_error("protokolle", "Supportpaket erstellen", exc)
                 messagebox.showerror("Supportpaket", str(exc))

@@ -1,4 +1,4 @@
-NMG Analyse 3.1.0 - Installationsroutine
+NMGone V1.0 - Installationsroutine
 
 1. ZIP entpacken.
 2. setup_dev.bat ausführen.

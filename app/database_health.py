@@ -42,7 +42,7 @@ def run_database_health_check() -> dict:
     }
 
     lines: list[str] = []
-    lines.append("NMG Analyse - Datenbank-Gesundheitscheck")
+    lines.append("NMGone - Datenbank-Gesundheitscheck")
     lines.append("=" * 90)
     lines.append(f"Erstellt: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}")
     lines.append(f"Datenbank: {DB_PATH}")

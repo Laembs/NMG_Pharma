@@ -202,7 +202,7 @@ def _write_install_log(package: str, from_v: str, to_v: str, status: str, msg: s
 def write_version_file() -> Path:
     p = BASE_DIR / "version.json"
     payload = {
-        "app": "NMG Analyse",
+        "app": "NMGone",
         "version": APP_VERSION,
         "db_schema_version": DB_SCHEMA_VERSION,
         "build_date": datetime.now().strftime("%Y-%m-%d"),

@@ -1,20 +1,40 @@
 @echo off
 chcp 65001 >nul
 echo =====================================================
-echo   NMG Analyse Installer Build 3.1.0 Recovery
+echo   NMGone Installer Build V1.0 (1.0.0)
 echo =====================================================
 echo.
-pip install -r requirements.txt pyinstaller
-python -m PyInstaller --noconfirm --windowed --name "NMG_Analyse" --add-data "data;data" --add-data "assets;assets" start.py
+
+echo [1/3] Python-Abhaengigkeiten sicherstellen...
+pip install -r requirements.txt pyinstaller >nul
+
+echo [2/3] PyInstaller: dist\NMGone\NMGone.exe bauen...
+python -m PyInstaller --noconfirm --windowed --name "NMGone" --icon assets\nmg_logo.ico --add-data "assets;assets" start.py
+if errorlevel 1 (
+  echo PyInstaller fehlgeschlagen.
+  pause
+  exit /b 1
+)
 
 echo.
-echo EXE liegt unter dist\NMG_Analyse\
+echo EXE liegt unter dist\NMGone\NMGone.exe
 echo.
-if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" (
-  echo Inno Setup gefunden. Setup.exe wird gebaut...
-  "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" installer\NMG_Analyse_Setup_3_1_0.iss
+
+echo [3/3] Inno Setup: Setup.exe bauen...
+set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
+if not exist "%ISCC%" set "ISCC=%ProgramFiles%\Inno Setup 6\ISCC.exe"
+
+if exist "%ISCC%" (
+  "%ISCC%" installer\NMGone_Setup_1_0_0.iss
+  if errorlevel 1 (
+    echo Inno Setup fehlgeschlagen.
+    pause
+    exit /b 1
+  )
+  echo.
+  echo Setup-Datei: dist_setup\NMGone_Setup_1_0_0.exe
 ) else (
-  echo Inno Setup nicht gefunden.
-  echo Die Vorlage liegt unter installer\NMG_Analyse_Setup_3_1_0.iss
+  echo Inno Setup 6 nicht gefunden. Installiere via: winget install JRSoftware.InnoSetup
+  echo Skript-Vorlage liegt unter installer\NMGone_Setup_1_0_0.iss
 )
 pause

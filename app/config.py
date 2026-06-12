@@ -17,10 +17,10 @@ def _load_install_data_root() -> Path | None:
     """Ermittelt den Datenordner.
 
     Prioritaet:
-    1. install_config.json im Programmordner
-    2. Umgebungsvariable NMG_ANALYSE_DATA_ROOT
-    3. Windows: C:/ProgramData/NMG Analyse
-    4. portable Nutzung: Programmordner
+    1. install_config.json im Programmordner (vom Setup geschrieben)
+    2. Umgebungsvariable NMGONE_DATA_ROOT
+    3. Installiertes .exe auf Windows: C:/ProgramData/NMGone
+    4. Dev-Modus (python start.py): lokaler data/-Ordner im Repo
     """
     cfg = BASE_DIR / "install_config.json"
     if cfg.exists():
@@ -32,13 +32,16 @@ def _load_install_data_root() -> Path | None:
         except Exception:
             pass
 
-    env = os.environ.get("NMG_ANALYSE_DATA_ROOT", "").strip()
+    env = os.environ.get("NMGONE_DATA_ROOT", "").strip()
     if env:
         return Path(os.path.expandvars(env)).expanduser()
 
-    if _is_windows() and not os.environ.get("NMG_ANALYSE_PORTABLE"):
+    # Nur die gebaute .exe nutzt ProgramData. Dev-Modus arbeitet lokal,
+    # damit Code-Experimente nicht in produktive Mitarbeiter-Daten greifen.
+    is_frozen = getattr(sys, "frozen", False)
+    if _is_windows() and is_frozen and not os.environ.get("NMGONE_PORTABLE"):
         program_data = os.environ.get("ProgramData", r"C:/ProgramData")
-        return Path(program_data) / "NMG Analyse"
+        return Path(program_data) / "NMGone"
 
     return None
 

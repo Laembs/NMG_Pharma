@@ -10,7 +10,8 @@ from pathlib import Path
 from .config import BASE_DIR, DATA_DIR, OUTPUT_DIR, DB_PATH
 
 BACKUP_DIR = BASE_DIR / "backups"
-APP_VERSION = "3.1.0"
+APP_VERSION = "1.0.0"
+APP_VERSION_DISPLAY = "V1.0"
 DB_SCHEMA_VERSION = "1.1"
 
 
@@ -52,7 +53,7 @@ def backup_erstellen() -> Path:
     if not DB_PATH.exists():
         raise FileNotFoundError(f"Datenbank nicht gefunden: {DB_PATH}")
 
-    backup_path = BACKUP_DIR / f"NMG_Backup_{APP_VERSION}_{_ts()}.zip"
+    backup_path = BACKUP_DIR / f"NMGone_Backup_{APP_VERSION}_{_ts()}.zip"
     manifest = {
         "app_version": APP_VERSION,
         "db_schema_version": DB_SCHEMA_VERSION,
@@ -128,14 +129,14 @@ def backup_auto_taeglich(aufbewahrung_tage: int = 7) -> dict:
     """
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     today = datetime.now().strftime("%Y%m%d")
-    existing_today = sorted(BACKUP_DIR.glob(f"NMG_AutoBackup_{today}_*.zip"))
+    existing_today = sorted(BACKUP_DIR.glob(f"NMGone_AutoBackup_{today}_*.zip"))
     if existing_today:
         return {"created": False, "file": existing_today[-1], "message": "Auto-Backup für heute bereits vorhanden."}
 
     if not DB_PATH.exists():
         return {"created": False, "file": None, "message": "Keine Datenbank für Auto-Backup gefunden."}
 
-    backup_path = BACKUP_DIR / f"NMG_AutoBackup_{today}_{datetime.now().strftime('%H%M%S')}.zip"
+    backup_path = BACKUP_DIR / f"NMGone_AutoBackup_{today}_{datetime.now().strftime('%H%M%S')}.zip"
     manifest = {
         "app_version": APP_VERSION,
         "db_schema_version": DB_SCHEMA_VERSION,
@@ -150,7 +151,7 @@ def backup_auto_taeglich(aufbewahrung_tage: int = 7) -> dict:
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
 
     # Rotation: nur die letzten N Auto-Backups behalten, älteste zuerst löschen.
-    auto_backups = sorted(BACKUP_DIR.glob("NMG_AutoBackup_*.zip"), key=lambda p: p.stat().st_mtime)
+    auto_backups = sorted(BACKUP_DIR.glob("NMGone_AutoBackup_*.zip"), key=lambda p: p.stat().st_mtime)
     deleted = []
     while len(auto_backups) > aufbewahrung_tage:
         old = auto_backups.pop(0)
@@ -163,4 +164,4 @@ def backup_auto_taeglich(aufbewahrung_tage: int = 7) -> dict:
 
 
 def versionsinfo() -> str:
-    return f"NMG Analyse Version {APP_VERSION} | Datenbank-Schema {DB_SCHEMA_VERSION} | Datenbank: {DB_PATH}"
+    return f"NMGone {APP_VERSION_DISPLAY} ({APP_VERSION}) | Datenbank-Schema {DB_SCHEMA_VERSION} | Datenbank: {DB_PATH}"
