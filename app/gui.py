@@ -174,7 +174,7 @@ class NMGApp(tk.Tk):
         left.grid_propagate(False)
         left.rowconfigure(1, weight=1)
 
-        logo_path = ASSETS_DIR / "nmg_logo.png"
+        logo_path = ASSETS_DIR / "NMGone.png"
         logo_box = tk.Frame(left, bg="#ffffff", width=285, height=92)
         logo_box.grid(row=0, column=0, sticky="ew", padx=8, pady=(12, 8))
         logo_box.grid_propagate(False)
@@ -186,9 +186,9 @@ class NMGApp(tk.Tk):
                 self.logo_img = raw_logo.subsample(factor, factor)
                 tk.Label(logo_box, image=self.logo_img, bg="#ffffff").pack(expand=True)
             except Exception:
-                tk.Label(logo_box, text="NMG PHARMA", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#ffffff").pack(expand=True)
+                tk.Label(logo_box, text="NMGone", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#ffffff").pack(expand=True)
         else:
-            tk.Label(logo_box, text="NMG PHARMA", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#ffffff").pack(expand=True)
+            tk.Label(logo_box, text="NMGone", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#ffffff").pack(expand=True)
 
         nav_frame = tk.Frame(left, bg="#ffffff")
         nav_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))

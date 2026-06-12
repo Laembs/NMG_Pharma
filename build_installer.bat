@@ -9,7 +9,7 @@ echo [1/3] Python-Abhaengigkeiten sicherstellen...
 pip install -r requirements.txt pyinstaller >nul
 
 echo [2/3] PyInstaller: dist\NMGone\NMGone.exe bauen...
-python -m PyInstaller --noconfirm --windowed --name "NMGone" --icon assets\nmg_logo.ico --add-data "assets;assets" start.py
+python -m PyInstaller --noconfirm --windowed --name "NMGone" --icon assets\NMGone.ico --add-data "assets;assets" start.py
 if errorlevel 1 (
   echo PyInstaller fehlgeschlagen.
   pause

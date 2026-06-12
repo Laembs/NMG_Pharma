@@ -15,7 +15,7 @@ DefaultGroupName=NMGone
 DisableProgramGroupPage=yes
 OutputDir=..\dist_setup
 OutputBaseFilename=NMGone_Setup_1_0_0
-SetupIconFile=..\assets\nmg_logo.ico
+SetupIconFile=..\assets\NMGone.ico
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -50,8 +50,8 @@ Name: "{commonappdata}\NMGone\logs"
 Source: "..\dist\NMGone\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\NMGone"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\_internal\assets\nmg_logo.ico"
-Name: "{autodesktop}\NMGone"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\_internal\assets\nmg_logo.ico"; Tasks: desktopicon
+Name: "{autoprograms}\NMGone"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\_internal\assets\NMGone.ico"
+Name: "{autodesktop}\NMGone"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\_internal\assets\NMGone.ico"; Tasks: desktopicon
 
 [Run]
 ; install_config.json zeigt der App, wo Nutzerdaten liegen sollen.
