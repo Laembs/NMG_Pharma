@@ -7389,9 +7389,13 @@ class NMGApp(tk.Tk):
                     self.show_artikelstamm_page()
                 self.after(0, done)
             except Exception as exc:
+                # exc wird am Ende des except-Blocks geloescht; vor dem Scheduling
+                # in eine normale lokale Variable kopieren, sonst sieht failed()
+                # nur eine "free variable" und crasht spaeter im Tk-Loop.
+                error_text = str(exc)
                 def failed():
-                    self.status.set(f"Artikelstamm-Import abgebrochen: {exc}")
-                    messagebox.showerror("Artikelstamm", str(exc))
+                    self.status.set(f"Artikelstamm-Import abgebrochen: {error_text}")
+                    messagebox.showerror("Artikelstamm", error_text)
                 self.after(0, failed)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -7539,14 +7543,17 @@ class NMGApp(tk.Tk):
             neu = 0
             aktualisiert = 0
             try:
+                # Alle SQL-Felder (auch nicht gemappte optionale) vorbelegen.
+                # Sonst beschwert sich SQLite mit "You did not supply a value for
+                # binding parameter X", weil das INSERT-Statement named bindings
+                # fuer alle Spalten enthaelt.
+                all_columns = [col for col, *_ in (pflicht_spalten + optionale_spalten)]
                 with sqlite3.connect(DB_PATH) as con:
                     for row_data in table.rows:
-                        record = {}
+                        record = {col: None for col in all_columns}
                         for col_name, col_idx in mapping.items():
                             if isinstance(col_idx, int) and col_idx < len(row_data):
                                 record[col_name] = row_data[col_idx]
-                            else:
-                                record[col_name] = None
                         record["importdatum"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         record["quelle"] = Path(filepath).name
                         try:
