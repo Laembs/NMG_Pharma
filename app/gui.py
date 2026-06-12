@@ -7489,12 +7489,35 @@ class NMGApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Austauschdatenbank", str(exc))
 
+    @staticmethod
+    def _parse_decimal_or_none(value):
+        """Konvertiert Excel-Werte ('5,99' / '5.99' / 5.99 / '') zu float oder None.
+        Wird fuer numerische Spalten beim Import gebraucht, sonst kippt sqlite
+        ueber Strings wie '5,99' rein. None bei leeren oder unparsbaren Werten.
+        """
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        s = str(value).strip().replace(",", ".")
+        if not s:
+            return None
+        try:
+            return float(s)
+        except ValueError:
+            return None
+
     # ── GENERISCHER IMPORT-ASSISTENT ────────────────────────────────────────────
     def _import_assistent(self, title, ziel_tabelle, pflicht_spalten, optionale_spalten,
-                           insert_sql, mapping_key, beschreibung=""):
+                           insert_sql, mapping_key, beschreibung="", numeric_fields=None):
         """Generischer Import-Assistent: xlsx/csv/txt → Datenbank.
         Erkennt Spalten automatisch, bietet Mapping-Dialog bei Unklarheit.
+
+        numeric_fields: Liste der Spaltennamen, die als Zahl (REAL) in die DB
+        sollen. Diese werden ueber _parse_decimal_or_none normalisiert
+        (Komma -> Punkt, leer -> None). Default: keine.
         """
+        numeric_fields = set(numeric_fields or [])
         from .file_loader import load_table, SUPPORTED_DATA_FILETYPES, find_column, normalize_header
         from tkinter import filedialog
 
@@ -7573,7 +7596,11 @@ class NMGApp(tk.Tk):
                         record = {col: None for col in all_columns}
                         for col_name, col_idx in mapping.items():
                             if isinstance(col_idx, int) and col_idx < len(row_data):
-                                record[col_name] = row_data[col_idx]
+                                raw = row_data[col_idx]
+                                if col_name in numeric_fields:
+                                    record[col_name] = self._parse_decimal_or_none(raw)
+                                else:
+                                    record[col_name] = raw if raw not in ("", None) else None
                         record["importdatum"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         record["quelle"] = Path(filepath).name
                         try:
@@ -7678,8 +7705,29 @@ class NMGApp(tk.Tk):
         return result["mapping"]
 
     def _ensure_import_tables(self):
-        """Erstellt Import-Zieltabellen falls noch nicht vorhanden."""
+        """Erstellt Import-Zieltabellen falls noch nicht vorhanden.
+
+        Hinweis: Die alten tbl_*_import-Tabellen bleiben als Schema-Skelett
+        erhalten (falls externe Tools darauf zugreifen), werden aber seit
+        V1.0 SP1 nicht mehr beschrieben. Wahrheits-Tabellen sind:
+          NMG-Artikel + APU/HAP -> tbl_nmg_stamm
+          PK-Rabatte            -> nmg_rabatte
+          Partnerkonditionen    -> tbl_pk_konditionen (siehe unten, neu)
+        """
         with sqlite3.connect(DB_PATH) as con:
+            # Neue Wahrheits-Tabelle fuer Partnerkonditionen, vorher fehlte sie.
+            con.execute("""CREATE TABLE IF NOT EXISTS tbl_pk_konditionen (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kundennummer TEXT NOT NULL,
+                kundenname TEXT,
+                pzn TEXT,
+                rabatt_prozent REAL,
+                gueltigkeit TEXT,
+                quelle TEXT,
+                importdatum TEXT,
+                letzte_aktualisierung TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(kundennummer, pzn)
+            )""")
             con.execute("""CREATE TABLE IF NOT EXISTS tbl_nmg_stamm_import (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 pzn TEXT UNIQUE,
@@ -7713,7 +7761,7 @@ class NMGApp(tk.Tk):
         self._ensure_import_tables()
         self._import_assistent(
             title="NMG Artikel importieren",
-            ziel_tabelle="tbl_nmg_stamm_import",
+            ziel_tabelle="tbl_nmg_stamm",
             pflicht_spalten=[
                 ("pzn", ["PZN", "PZN-Code", "Artikel-PZN"], ["pzn"]),
             ],
@@ -7726,17 +7774,30 @@ class NMGApp(tk.Tk):
                 ("taxe_ek", ["Taxe EK", "HAP", "Großhandelspreis"], ["taxe", "hap", "gross"]),
                 ("taxe_vk", ["Taxe VK", "Apothekenverkaufspreis", "AVP"], ["avp", "taxe vk", "vk"]),
             ],
-            insert_sql="""INSERT OR REPLACE INTO tbl_nmg_stamm_import(pzn,artikelname,hersteller,darreichungsform,packungsgroesse,apu,taxe_ek,taxe_vk,importdatum,quelle)
-                VALUES(:pzn,:artikelname,:hersteller,:darreichungsform,:packungsgroesse,:apu,:taxe_ek,:taxe_vk,:importdatum,:quelle)""",
+            # Direkt in die Wahrheits-Tabelle (V1.0 SP1). Spalte 'hersteller'
+            # wandert in herstellerkuerzel. DF/PCK werden gemappt aber nicht
+            # gespeichert, da tbl_nmg_stamm sie nicht hat (Artikelstamm-Import
+            # ist der richtige Pfad fuer DF/PCK).
+            insert_sql="""INSERT INTO tbl_nmg_stamm(pzn,artikelname,herstellerkuerzel,apu,taxe_ek,taxe_vk,quelle,importdatum)
+                VALUES(:pzn,:artikelname,:hersteller,:apu,:taxe_ek,:taxe_vk,:quelle,:importdatum)
+                ON CONFLICT(pzn) DO UPDATE SET
+                    artikelname=COALESCE(NULLIF(excluded.artikelname,''),tbl_nmg_stamm.artikelname),
+                    herstellerkuerzel=COALESCE(NULLIF(excluded.herstellerkuerzel,''),tbl_nmg_stamm.herstellerkuerzel),
+                    apu=COALESCE(excluded.apu,tbl_nmg_stamm.apu),
+                    taxe_ek=COALESCE(excluded.taxe_ek,tbl_nmg_stamm.taxe_ek),
+                    taxe_vk=COALESCE(excluded.taxe_vk,tbl_nmg_stamm.taxe_vk),
+                    quelle=excluded.quelle,
+                    importdatum=excluded.importdatum""",
             mapping_key="nmg_artikel",
-            beschreibung="NMG-Artikelstamm importieren. Erwartet mindestens eine PZN-Spalte."
+            beschreibung="NMG-Artikelstamm importieren. Erwartet mindestens eine PZN-Spalte.",
+            numeric_fields=["apu", "taxe_ek", "taxe_vk"],
         )
 
     def import_pk_rabatte(self):
         self._ensure_import_tables()
         self._import_assistent(
             title="PK Rabatte importieren",
-            ziel_tabelle="tbl_pk_rabatte_import",
+            ziel_tabelle="nmg_rabatte",
             pflicht_spalten=[
                 ("pzn", ["PZN", "PZN-Code", "Artikel-PZN"], ["pzn"]),
             ],
@@ -7747,17 +7808,28 @@ class NMGApp(tk.Tk):
                 ("rabatt_euro", ["Rabatt €", "Rabatt Euro", "Abschlag"], ["euro", "rabatt eur", "abschlag"]),
                 ("gueltigkeit", ["Gültigkeit", "Gültig bis", "Gültig ab", "Laufzeit"], ["gueltig", "laufzeit"]),
             ],
-            insert_sql="""INSERT OR REPLACE INTO tbl_pk_rabatte_import(pzn,artikelname,hersteller,rabatt_prozent,rabatt_euro,gueltigkeit,importdatum,quelle)
-                VALUES(:pzn,:artikelname,:hersteller,:rabatt_prozent,:rabatt_euro,:gueltigkeit,:importdatum,:quelle)""",
+            # Direkt in die Wahrheits-Tabelle nmg_rabatte (V1.0 SP1).
+            # Spaltenmapping: pzn -> nmg_pzn, artikelname -> artikel,
+            # rabatt_prozent -> rabatt, importdatum -> letzte_aktualisierung.
+            # rabatt_euro, hersteller, gueltigkeit landen (noch) nirgends -
+            # Wahrheits-Tabelle hat sie nicht.
+            insert_sql="""INSERT INTO nmg_rabatte(nmg_pzn,artikel,rabatt,quelle,letzte_aktualisierung)
+                VALUES(:pzn,:artikelname,:rabatt_prozent,:quelle,:importdatum)
+                ON CONFLICT(nmg_pzn) DO UPDATE SET
+                    artikel=COALESCE(NULLIF(excluded.artikel,''),nmg_rabatte.artikel),
+                    rabatt=COALESCE(excluded.rabatt,nmg_rabatte.rabatt),
+                    quelle=excluded.quelle,
+                    letzte_aktualisierung=excluded.letzte_aktualisierung""",
             mapping_key="pk_rabatte",
-            beschreibung="Partnerkonditionen-Rabatte importieren. Erwartet PZN und Rabattspalte(n)."
+            beschreibung="Partnerkonditionen-Rabatte importieren. Erwartet PZN und Rabattspalte(n).",
+            numeric_fields=["rabatt_prozent", "rabatt_euro"],
         )
 
     def import_apu_data(self):
         self._ensure_import_tables()
         self._import_assistent(
             title="APU/HAP Daten importieren",
-            ziel_tabelle="tbl_apu_hap_import",
+            ziel_tabelle="tbl_nmg_stamm",
             pflicht_spalten=[
                 ("pzn", ["PZN", "PZN-Code", "Artikel-PZN"], ["pzn"]),
             ],
@@ -7767,17 +7839,28 @@ class NMGApp(tk.Tk):
                 ("hap", ["HAP", "Großhandelspreis", "Handelspreis", "HEP"], ["hap", "gross", " hep"]),
                 ("hersteller", ["Hersteller", "Lieferant"], ["herst", "liefer"]),
             ],
-            insert_sql="""INSERT OR REPLACE INTO tbl_apu_hap_import(pzn,artikelname,apu,hap,hersteller,importdatum,quelle)
-                VALUES(:pzn,:artikelname,:apu,:hap,:hersteller,:importdatum,:quelle)""",
+            # HAP -> taxe_ek (Grosshandelspreis = Taxe EK im DE-Pharma-Kontext).
+            # Update-Modus: bestehende Stammdaten werden ergaenzt, nicht
+            # ueberschrieben.
+            insert_sql="""INSERT INTO tbl_nmg_stamm(pzn,artikelname,herstellerkuerzel,apu,taxe_ek,quelle,importdatum)
+                VALUES(:pzn,:artikelname,:hersteller,:apu,:hap,:quelle,:importdatum)
+                ON CONFLICT(pzn) DO UPDATE SET
+                    artikelname=COALESCE(NULLIF(excluded.artikelname,''),tbl_nmg_stamm.artikelname),
+                    herstellerkuerzel=COALESCE(NULLIF(excluded.herstellerkuerzel,''),tbl_nmg_stamm.herstellerkuerzel),
+                    apu=COALESCE(excluded.apu,tbl_nmg_stamm.apu),
+                    taxe_ek=COALESCE(excluded.taxe_ek,tbl_nmg_stamm.taxe_ek),
+                    quelle=excluded.quelle,
+                    importdatum=excluded.importdatum""",
             mapping_key="apu_hap",
-            beschreibung="APU/HAP-Preisdaten importieren. Erwartet PZN, APU- und/oder HAP-Spalten."
+            beschreibung="APU/HAP-Preisdaten importieren. Erwartet PZN, APU- und/oder HAP-Spalten.",
+            numeric_fields=["apu", "hap"],
         )
 
     def import_pk_data(self):
         self._ensure_import_tables()
         self._import_assistent(
             title="Partnerkonditionen importieren",
-            ziel_tabelle="tbl_pk_konditionen_import",
+            ziel_tabelle="tbl_pk_konditionen",
             pflicht_spalten=[
                 ("kundennummer", ["Kundennummer", "KD-Nr", "Kunden-ID", "KundNr"], ["kundennr", "kd-nr", "kd nr"]),
             ],
@@ -7787,10 +7870,21 @@ class NMGApp(tk.Tk):
                 ("rabatt_prozent", ["Rabatt %", "Rabatt Prozent", "PK-Rabatt"], ["rabatt", "prozent"]),
                 ("gueltigkeit", ["Gültigkeit", "Gültig bis", "Laufzeit"], ["gueltig", "laufzeit"]),
             ],
-            insert_sql="""INSERT INTO tbl_pk_konditionen_import(kundennummer,kundenname,pzn,rabatt_prozent,gueltigkeit,importdatum,quelle)
-                VALUES(:kundennummer,:kundenname,:pzn,:rabatt_prozent,:gueltigkeit,:importdatum,:quelle)""",
+            # Wahrheits-Tabelle tbl_pk_konditionen wird in _ensure_import_tables
+            # angelegt. UNIQUE(kundennummer,pzn) erlaubt mehrere Eintraege pro
+            # Kunde (verschiedene Artikel) und ON CONFLICT pflegt sie.
+            insert_sql="""INSERT INTO tbl_pk_konditionen(kundennummer,kundenname,pzn,rabatt_prozent,gueltigkeit,quelle,importdatum,letzte_aktualisierung)
+                VALUES(:kundennummer,:kundenname,:pzn,:rabatt_prozent,:gueltigkeit,:quelle,:importdatum,:importdatum)
+                ON CONFLICT(kundennummer,pzn) DO UPDATE SET
+                    kundenname=COALESCE(NULLIF(excluded.kundenname,''),tbl_pk_konditionen.kundenname),
+                    rabatt_prozent=COALESCE(excluded.rabatt_prozent,tbl_pk_konditionen.rabatt_prozent),
+                    gueltigkeit=COALESCE(NULLIF(excluded.gueltigkeit,''),tbl_pk_konditionen.gueltigkeit),
+                    quelle=excluded.quelle,
+                    importdatum=excluded.importdatum,
+                    letzte_aktualisierung=excluded.importdatum""",
             mapping_key="pk_konditionen",
-            beschreibung="Partnerkonditionen importieren. Erwartet Kundennummer-Spalte."
+            beschreibung="Partnerkonditionen importieren. Erwartet Kundennummer-Spalte.",
+            numeric_fields=["rabatt_prozent"],
         )
 
     def check_online_update(self):
