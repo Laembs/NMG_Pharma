@@ -163,6 +163,22 @@ class NMGApp(tk.Tk):
         self._check_daten_benachrichtigungen()
         self.after(1000, self._check_apotheken_analyse_faellig)
 
+        # Admin-Knoepfe (z.B. in Datenbankuebersicht) standardmaessig versteckt.
+        # Ctrl+Alt+A toggelt die Sichtbarkeit. Wer den Shortcut nicht kennt,
+        # sieht die destruktiven Aktionen erst gar nicht.
+        self._admin_visible = False
+        self.bind_all("<Control-Alt-a>", self._toggle_admin_visible)
+        self.bind_all("<Control-Alt-A>", self._toggle_admin_visible)
+
+    def _toggle_admin_visible(self, event=None):
+        self._admin_visible = not self._admin_visible
+        zustand = "EIN" if self._admin_visible else "AUS"
+        hinweis = "Datenbankuebersicht oeffnen, um Admin-Knoepfe zu sehen." if self._admin_visible else ""
+        try:
+            self.status.set(f"Admin-Modus {zustand}. {hinweis}".strip())
+        except Exception:
+            pass
+
     def _build(self):
         self.configure(bg="#f5f7fb")
         self.columnconfigure(1, weight=1)
@@ -317,7 +333,7 @@ class NMGApp(tk.Tk):
             self._set_meta_value("sidebar_visible", "1")
 
     # ── ADMIN-LOGINS (kein Pflichtprofil, kein Pflichtdialog) ──────────────────
-    ADMIN_LOGINS = {"laemb", "jagdeal"}
+    ADMIN_LOGINS = {"laemb", "jagdeal", "user"}
 
     def _is_admin_login(self):
         return (self.bearbeiter or "").strip().lower() in self.ADMIN_LOGINS
@@ -6897,28 +6913,32 @@ class NMGApp(tk.Tk):
             pady=7
         ).pack(side="left")
 
-        tk.Button(
-            toolbar,
-            text="🔐 Admin",
-            command=self.open_admin_database_clear,
-            bg="#8b5a00",
-            fg="white",
-            relief="flat",
-            font=("Arial", 10, "bold"),
-            padx=14,
-            pady=7
-        ).pack(side="left", padx=(8, 0))
-        tk.Button(
-            admin_bar,
-            text="🔐 Auswertungen löschen",
-            command=self.open_admin_auswertungen_loeschen,
-            bg="#9b1c1c",
-            fg="white",
-            relief="flat",
-            font=("Arial", 10, "bold"),
-            padx=14,
-            pady=7
-        ).pack(side="left", padx=(8, 0))
+        # Admin-Knoepfe nur zeigen, wenn (a) Windows-Login Admin-Login ist
+        # und (b) Admin-Modus per Ctrl+Alt+A eingeschaltet wurde. Verhindert,
+        # dass Mitarbeiterinnen "Auswertungen loeschen" versehentlich finden.
+        if getattr(self, "_admin_visible", False) and self._is_admin_login():
+            tk.Button(
+                toolbar,
+                text="🔐 Admin",
+                command=self.open_admin_database_clear,
+                bg="#8b5a00",
+                fg="white",
+                relief="flat",
+                font=("Arial", 10, "bold"),
+                padx=14,
+                pady=7
+            ).pack(side="left", padx=(8, 0))
+            tk.Button(
+                toolbar,
+                text="🔐 Auswertungen löschen",
+                command=self.open_admin_auswertungen_loeschen,
+                bg="#9b1c1c",
+                fg="white",
+                relief="flat",
+                font=("Arial", 10, "bold"),
+                padx=14,
+                pady=7
+            ).pack(side="left", padx=(8, 0))
 
     def _table_exists(self, table_name):
         with sqlite3.connect(DB_PATH) as con:
