@@ -168,10 +168,10 @@ def create_support_package() -> Path:
     return out
 
 
-def open_mail_with_attachment(path: str | Path, recipient: str = DEFAULT_RECIPIENT, subject: str = "NMG Analyse Protokoll") -> bool:
+def open_mail_with_attachment(path: str | Path, recipient: str = DEFAULT_RECIPIENT, subject: str = "NMGone Protokoll") -> bool:
     """Öffnet nach Möglichkeit Outlook mit Anhang. Fallback: Standard-Mailprogramm ohne echten Anhang."""
     path = Path(path).resolve()
-    body = f"Hallo,\n\nanbei das NMG Analyse Protokoll.\n\nDatei: {path}\n"
+    body = f"Hallo,\n\nanbei das NMGone Protokoll.\n\nDatei: {path}\n"
 
     # Outlook per COM über PowerShell. Funktioniert nur unter Windows mit installiertem Outlook.
     if os.name == "nt":

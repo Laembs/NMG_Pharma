@@ -271,7 +271,7 @@ def write_abgleichartikel_protocol(
     ws = wb.active
     ws.title = "Abgleichartikel"
 
-    ws["A1"] = "NMG Analyse - Abgleichartikel bei Neuer Auswertung"
+    ws["A1"] = "NMGone - Abgleichartikel bei Neuer Auswertung"
     ws["A1"].font = Font(bold=True, size=14)
     ws.merge_cells("A1:M1")
     ws["A2"] = f"Analyse: {analyse_name or ''}"

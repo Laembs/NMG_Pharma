@@ -39,7 +39,7 @@ from .roadmap_db import (
 )
 from .migrations import run_migrations
 from .config import DB_PATH, DATA_DIR, ASSETS_DIR, SAVED_ANALYSES_DIR, UPDATE_DIR, OUTPUT_DIR
-from .backup import backup_erstellen, backup_wiederherstellen, backup_pruefen, versionsinfo, APP_VERSION, backup_auto_taeglich, DB_SCHEMA_VERSION
+from .backup import backup_erstellen, backup_wiederherstellen, backup_pruefen, versionsinfo, APP_VERSION, APP_VERSION_DISPLAY, backup_auto_taeglich, DB_SCHEMA_VERSION
 from .protocol_manager import (
     ensure_protocol_dirs, log_event, log_exception, list_protocol_files, read_protocol_file,
     delete_protocol_file, create_support_package, open_mail_with_attachment, PROTOCOL_ROOT, DEFAULT_RECIPIENT
@@ -117,7 +117,7 @@ def datetime_from_mtime(path: Path) -> str:
 class NMGApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"NMG Analyse {APP_VERSION}")
+        self.title(f"NMGone {APP_VERSION_DISPLAY}")
         self.geometry("1040x640")
         self.minsize(980, 600)
         try:
@@ -174,7 +174,7 @@ class NMGApp(tk.Tk):
         left.grid_propagate(False)
         left.rowconfigure(1, weight=1)
 
-        logo_path = ASSETS_DIR / "nmg_logo.png"
+        logo_path = ASSETS_DIR / "NMGone.png"
         logo_box = tk.Frame(left, bg="#ffffff", width=285, height=92)
         logo_box.grid(row=0, column=0, sticky="ew", padx=8, pady=(12, 8))
         logo_box.grid_propagate(False)
@@ -186,9 +186,9 @@ class NMGApp(tk.Tk):
                 self.logo_img = raw_logo.subsample(factor, factor)
                 tk.Label(logo_box, image=self.logo_img, bg="#ffffff").pack(expand=True)
             except Exception:
-                tk.Label(logo_box, text="NMG PHARMA", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#ffffff").pack(expand=True)
+                tk.Label(logo_box, text="NMGone", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#ffffff").pack(expand=True)
         else:
-            tk.Label(logo_box, text="NMG PHARMA", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#ffffff").pack(expand=True)
+            tk.Label(logo_box, text="NMGone", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#ffffff").pack(expand=True)
 
         nav_frame = tk.Frame(left, bg="#ffffff")
         nav_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
@@ -2253,7 +2253,7 @@ class NMGApp(tk.Tk):
             if not path:
                 return
             try:
-                attached = open_mail_with_attachment(path, DEFAULT_RECIPIENT, "NMG Analyse Protokoll")
+                attached = open_mail_with_attachment(path, DEFAULT_RECIPIENT, "NMGone Protokoll")
                 if attached:
                     messagebox.showinfo("Mail", "Mailentwurf wurde mit Anhang geöffnet.")
                 else:
@@ -2268,7 +2268,7 @@ class NMGApp(tk.Tk):
                 package = create_support_package()
                 self._log_action("protokolle", "Supportpaket erstellt", str(package))
                 if messagebox.askyesno("Supportpaket", f"Supportpaket erstellt:\n{package}\n\nJetzt per Mail senden?"):
-                    open_mail_with_attachment(package, DEFAULT_RECIPIENT, "NMG Analyse Supportpaket")
+                    open_mail_with_attachment(package, DEFAULT_RECIPIENT, "NMGone Supportpaket")
             except Exception as exc:
                 self._log_error("protokolle", "Supportpaket erstellen", exc)
                 messagebox.showerror("Supportpaket", str(exc))
