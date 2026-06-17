@@ -1060,7 +1060,10 @@ class NMGApp(tk.Tk):
 
             "analysen": self.show_analysen_page,
             "produktanalyse": self.show_produktanalyse_page,
-            "marktanalyse": self.show_marktanalyse_page,
+            # SP8 hotfix: show_marktanalyse_page wurde in SP7 entfernt,
+            # die Referenz hier aber vergessen. Beim Programmstart loest Python
+            # alle Werte im Dispatch-Dict sofort auf -> AttributeError beim Start.
+            # Eintrag komplett raus.
             "gespeicherte_analysen": self.open_saved_analyses,
             "abweichungsanalyse": self.show_abweichungsanalyse_page,
 
