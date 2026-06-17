@@ -3828,6 +3828,161 @@ class NMGApp(tk.Tk):
             row=1, column=0, columnspan=4, sticky="w", padx=8, pady=(0,3))
         entry.bind("<Return>", lambda e: speichern_notiz())
 
+    # SP16: Austausch-Suche-Widget auf der Startseite ─────────────────────────
+    def _austausch_pzn_clean(self, raw: str) -> str:
+        s = (raw or "").strip()
+        digits = "".join(ch for ch in s if ch.isdigit())
+        if not digits:
+            return ""
+        # Auf 8 Stellen mit fuehrenden Nullen normalisieren (PZN-Standard).
+        return digits.zfill(8) if len(digits) <= 8 else digits
+
+    def _austausch_lookup(self, pzn: str) -> list[dict]:
+        """SP16: Sucht die Austausch-Eintraege fuer eine alte PZN. Reichert
+        die Treffer mit Stammdaten aus tbl_artikelstamm und tbl_nmg_stamm an.
+        """
+        if not pzn:
+            return []
+        # Sicherstellen dass die Tabelle existiert (frische DB / Migration).
+        try:
+            from .austausch_db import ensure_austauschdatenbank_table
+            ensure_austauschdatenbank_table()
+        except Exception:
+            pass
+        sql = """
+            SELECT
+                ad.pzn_alt,
+                ad.pzn_nmg,
+                COALESCE(NULLIF(ad.freitext_austausch, ''), '') AS freitext,
+                COALESCE(ad.status, '') AS status,
+                COALESCE(ad.quelle, '') AS quelle,
+                COALESCE(ast_alt.artikel, '') AS artikel_alt,
+                COALESCE(ast_alt.df, '')      AS df_alt,
+                COALESCE(ast_alt.pck, '')     AS pck_alt,
+                COALESCE(ast_alt.herst, '')   AS herst_alt,
+                COALESCE(ast_nmg.artikel, '') AS artikel_nmg_stamm,
+                COALESCE(ast_nmg.df, '')      AS df_nmg,
+                COALESCE(ast_nmg.pck, '')     AS pck_nmg,
+                COALESCE(ast_nmg.herst, '')   AS herst_nmg_stamm,
+                COALESCE(nmg.artikelname, '') AS artikel_nmg_offiziell,
+                COALESCE(nmg.herstellerkuerzel, '') AS herst_nmg_offiziell,
+                nmg.taxe_ek AS taxe_ek_nmg
+            FROM tbl_austauschdatenbank ad
+            LEFT JOIN tbl_artikelstamm ast_alt ON ast_alt.pzn = ad.pzn_alt
+            LEFT JOIN tbl_artikelstamm ast_nmg ON ast_nmg.pzn = ad.pzn_nmg
+            LEFT JOIN tbl_nmg_stamm    nmg     ON nmg.pzn     = ad.pzn_nmg
+            WHERE ad.pzn_alt = ?
+              AND COALESCE(ad.status, 'aktiv') = 'aktiv'
+            ORDER BY COALESCE(ad.aktualisiert_am, ad.erstellt_am) DESC
+        """
+        with sqlite3.connect(DB_PATH) as con:
+            con.row_factory = sqlite3.Row
+            return [dict(r) for r in con.execute(sql, (pzn,)).fetchall()]
+
+    def _austausch_suche_widget(self, parent):
+        """SP16: Suchwidget oben auf der Startseite. PZN eingeben ->
+        zeigt den NMG-Austausch mit Artikelnamen, DF, PCK und Hersteller
+        aus dem Artikelstamm bzw. NMG-Stamm.
+        """
+        box = tk.Frame(parent, bg="#e8f1fb", highlightbackground="#a8c5e8", highlightthickness=1)
+        box.pack(fill="x", padx=18, pady=(10, 0))
+
+        head = tk.Frame(box, bg="#e8f1fb")
+        head.pack(fill="x", padx=10, pady=(8, 4))
+        tk.Label(head, text="🔄  Austausch-Suche",
+                 font=("Arial", 12, "bold"), fg="#0b4a86", bg="#e8f1fb").pack(side="left")
+        tk.Label(head, text="alte PZN eingeben -> NMG-Ersatz finden",
+                 font=("Arial", 9), fg="#555", bg="#e8f1fb").pack(side="left", padx=(10, 0))
+
+        entry_row = tk.Frame(box, bg="#e8f1fb")
+        entry_row.pack(fill="x", padx=10, pady=(0, 6))
+
+        pzn_var = tk.StringVar()
+        entry = tk.Entry(entry_row, textvariable=pzn_var, font=("Consolas", 12), width=18)
+        entry.pack(side="left", padx=(0, 6))
+
+        result_text = tk.Text(box, height=6, font=("Consolas", 9), bg="#ffffff",
+                              fg="#222", relief="flat", padx=8, pady=4, wrap="word")
+        result_text.pack(fill="x", padx=10, pady=(0, 8))
+        result_text.configure(state="disabled")
+
+        def _show_result(lines: list[str], color: str = "#222"):
+            result_text.configure(state="normal", fg=color)
+            result_text.delete("1.0", "end")
+            result_text.insert("end", "\n".join(lines))
+            result_text.configure(state="disabled")
+
+        def _format_row(r: dict) -> list[str]:
+            lines = []
+            alt_info = f"Alt: PZN {r['pzn_alt']}"
+            if r['artikel_alt']:
+                alt_info += f" - {r['artikel_alt']}"
+            extras = " | ".join(filter(None, [r.get('df_alt'), r.get('pck_alt'), r.get('herst_alt')]))
+            if extras:
+                alt_info += f"  ({extras})"
+            lines.append(alt_info)
+
+            nmg_pzn = r['pzn_nmg'] or "(keine PZN hinterlegt)"
+            nmg_art = r['artikel_nmg_offiziell'] or r['artikel_nmg_stamm']
+            nmg_herst = r['herst_nmg_offiziell'] or r['herst_nmg_stamm']
+            nmg_info = f"-> NMG: PZN {nmg_pzn}"
+            if nmg_art:
+                nmg_info += f" - {nmg_art}"
+            nmg_extras = " | ".join(filter(None, [r.get('df_nmg'), r.get('pck_nmg'), nmg_herst]))
+            if nmg_extras:
+                nmg_info += f"  ({nmg_extras})"
+            lines.append(nmg_info)
+
+            if r['freitext']:
+                lines.append(f"Austausch-Text: {r['freitext']}")
+            if r['taxe_ek_nmg']:
+                lines.append(f"NMG Taxe-EK: {r['taxe_ek_nmg']:.2f} EUR")
+            if r['quelle']:
+                lines.append(f"Quelle: {r['quelle']}")
+            return lines
+
+        def do_search(event=None):
+            raw = pzn_var.get()
+            pzn = self._austausch_pzn_clean(raw)
+            if not pzn:
+                _show_result(["Bitte eine PZN eingeben (mindestens eine Ziffer)."], "#a55")
+                return
+            try:
+                results = self._austausch_lookup(pzn)
+            except Exception as exc:
+                _show_result([f"Suche fehlgeschlagen: {exc}"], "#a55")
+                return
+            if not results:
+                _show_result([
+                    f"Keine Austausch-Eintraege fuer PZN {pzn} gefunden.",
+                    "",
+                    "Mögliche Gründe:",
+                    "- PZN stimmt nicht (auf 8 Stellen normalisiert)",
+                    "- Austauschdatenbank ist noch nicht importiert (Daten aktualisieren -> Austauschdatenbank)",
+                ], "#888")
+                return
+            lines = []
+            for idx, r in enumerate(results, start=1):
+                if idx > 1:
+                    lines.append("")
+                if len(results) > 1:
+                    lines.append(f"Treffer {idx}/{len(results)}:")
+                lines.extend(_format_row(r))
+            _show_result(lines)
+
+        tk.Button(entry_row, text="🔍  Suchen", command=do_search,
+                  bg="#0b4a86", fg="white", relief="flat",
+                  font=("Arial", 10, "bold"), padx=14, pady=4).pack(side="left", padx=(0, 6))
+
+        def _clear():
+            pzn_var.set("")
+            _show_result([])
+            entry.focus_set()
+        tk.Button(entry_row, text="Leeren", command=_clear, padx=10, pady=4).pack(side="left")
+
+        entry.bind("<Return>", do_search)
+        _show_result(["Bereit. PZN eingeben und Enter druecken."], "#888")
+
     def show_startseite(self):
         self.clear_page()
 
@@ -3909,6 +4064,9 @@ class NMGApp(tk.Tk):
             padx=14,
             pady=6,
         ).pack(side="right", padx=14, pady=8)
+
+        # --- SP16: Austausch-Suche (PZN -> NMG-Ersatz) ---
+        self._austausch_suche_widget(inner)
 
         # --- Schnellnotiz + Suche ---
         self._schnellnotiz_widget(inner)
