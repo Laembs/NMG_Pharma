@@ -170,8 +170,10 @@ class NMGApp(tk.Tk):
         self.bind_all("<Control-Alt-a>", self._toggle_admin_visible)
         self.bind_all("<Control-Alt-A>", self._toggle_admin_visible)
 
-        # SP2: Online-Update-Check (asynchron, blockt den Start nicht).
-        self.after(3000, self._check_online_update_on_startup)
+        # SP5: erst lokalen updates/-Ordner pruefen (instant), dann online.
+        # So findet die App auch von Admin per OneDrive vorgelegte Setups
+        # offline und bietet sie zur Installation an.
+        self.after(2000, self._startup_update_check)
 
     @staticmethod
     def _version_tuple(value):
@@ -183,6 +185,88 @@ class NMGApp(tk.Tk):
         while len(parts) < 4:
             parts.append(0)
         return tuple(parts[:4])
+
+    @staticmethod
+    def _parse_setup_filename(name):
+        """'NMGone_Setup_1_0_5.exe' -> (1, 0, 5, 0). None wenn nicht parsbar.
+        Wird benutzt um vorhandene Setups in updates/ nach Version zu sortieren.
+        """
+        import re
+        m = re.match(r"NMGone_Setup_(\d+)_(\d+)_(\d+)\.exe$", str(name), re.IGNORECASE)
+        if not m:
+            return None
+        return tuple(int(g) for g in m.groups()) + (0,)
+
+    def _find_pending_local_setup(self):
+        """Sucht in UPDATE_DIR nach einem NMGone_Setup_*.exe mit Version > APP_VERSION.
+        Liefert (path, version_str) oder None. Mehrere Treffer -> neueste zuerst.
+        """
+        try:
+            UPDATE_DIR.mkdir(parents=True, exist_ok=True)
+            candidates = []
+            current = self._version_tuple(APP_VERSION)
+            for p in UPDATE_DIR.glob("NMGone_Setup_*.exe"):
+                v = self._parse_setup_filename(p.name)
+                if v is None or v <= current:
+                    continue
+                candidates.append((p, v))
+            if not candidates:
+                return None
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            path, v = candidates[0]
+            return (path, ".".join(str(x) for x in v[:3]))
+        except Exception:
+            return None
+
+    def _launch_setup_and_exit(self, setup_path):
+        """Setup im Hintergrund starten und die App beenden. Inno uebernimmt
+        das Tauschen der Programmdateien; durch postinstall startet NMGone
+        automatisch wieder. Wird vom Online-Download UND vom Local-Pending-Check
+        gleichermassen benutzt.
+        """
+        import subprocess
+        try:
+            flags = 0
+            if sys.platform == "win32":
+                flags = (
+                    getattr(subprocess, "DETACHED_PROCESS", 0)
+                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                )
+            subprocess.Popen(
+                [str(setup_path), "/SILENT", "/SUPPRESSMSGBOXES", "/CLOSEAPPLICATIONS"],
+                close_fds=True,
+                creationflags=flags,
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Update",
+                f"Setup konnte nicht gestartet werden:\n{exc}\n\n"
+                f"Datei liegt unter:\n{setup_path}"
+            )
+            return False
+        self.after(800, self.destroy)
+        return True
+
+    def _startup_update_check(self):
+        """SP5: erst lokal (UPDATE_DIR), dann online (GitHub).
+        Lokal = instant + offline-faehig. Online = falls nichts lokal liegt.
+        """
+        pending = self._find_pending_local_setup()
+        if pending:
+            path, version_str = pending
+            if messagebox.askyesno(
+                "Lokales Update verfuegbar",
+                f"Im Update-Ordner liegt ein heruntergeladenes Setup bereit:\n\n"
+                f"Version: V{version_str}\n"
+                f"Aktuell installiert: V{APP_VERSION}\n"
+                f"Datei: {path.name}\n\n"
+                f"Jetzt installieren?"
+            ):
+                self._launch_setup_and_exit(path)
+            # Wer "Nein" sagt: kein Online-Check (gleiche Version).
+            return
+        # Nichts lokal -> online checken
+        self._check_online_update_on_startup()
 
     @staticmethod
     def _fetch_latest_release_info(timeout=8):
@@ -254,20 +338,19 @@ class NMGApp(tk.Tk):
             self._download_and_install_update(asset_url, tag)
 
     def _download_and_install_update(self, asset_url, tag):
-        """Laedt Setup.exe nach %TEMP%, ruft sie auf, beendet die App.
-        Inno Setup uebernimmt den Rest (Upgrade ueber gleiche AppId).
-        Laeuft im Worker-Thread - der Hauptloop muss reaktiv bleiben fuer
-        Progress-Updates.
+        """SP5: Laedt Setup nach UPDATE_DIR (nicht mehr %TEMP%) und bietet
+        dann Jetzt/Spaeter an. 'Spaeter' laesst die Datei liegen; beim
+        naechsten Programmstart wird das Setup vom local-check gefunden.
         """
         import threading
         busy = self._show_busy_modal(f"Update {tag} herunterladen", "Verbindung zu GitHub...")
 
         def worker():
             try:
-                import urllib.request, tempfile, subprocess
-                temp_dir = Path(tempfile.gettempdir())
+                import urllib.request
+                UPDATE_DIR.mkdir(parents=True, exist_ok=True)
                 safe_tag = tag.lstrip("vV").replace(".", "_")
-                target = temp_dir / f"NMGone_Setup_{safe_tag}.exe"
+                target = UPDATE_DIR / f"NMGone_Setup_{safe_tag}.exe"
 
                 req = urllib.request.Request(asset_url, headers={
                     "User-Agent": f"NMGone/{APP_VERSION}",
@@ -300,42 +383,29 @@ class NMGApp(tk.Tk):
 
                 final_path = target
                 final_size = target.stat().st_size
-                def launch():
+
+                def offer_install():
                     self._close_busy_modal(busy)
-                    if not messagebox.askyesno(
+                    # Yes = Jetzt, No = Spaeter (Datei bleibt), Cancel = loeschen
+                    answer = messagebox.askyesnocancel(
                         "Update bereit",
                         f"Download abgeschlossen ({final_size / 1024 / 1024:.1f} MB).\n\n"
-                        f"Setup startet jetzt und installiert {tag}.\n"
-                        f"NMGone beendet sich dazu kurz und oeffnet sich automatisch wieder.\n\n"
-                        f"Fortfahren?"
-                    ):
-                        return
-                    try:
-                        # /SILENT: kleiner Fortschrittsdialog, keine Klicks noetig
-                        # /SUPPRESSMSGBOXES: skippt InitializeSetup-MsgBox
-                        # /CLOSEAPPLICATIONS: schliesst eine eventuell noch laufende Instanz
-                        # DETACHED_PROCESS: ueberlebt das Beenden von NMGone
-                        flags = 0
-                        if sys.platform == "win32":
-                            flags = (
-                                getattr(subprocess, "DETACHED_PROCESS", 0)
-                                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                            )
-                        subprocess.Popen(
-                            [str(final_path), "/SILENT", "/SUPPRESSMSGBOXES", "/CLOSEAPPLICATIONS"],
-                            close_fds=True,
-                            creationflags=flags,
-                        )
-                    except Exception as exc:
-                        messagebox.showerror(
-                            "Update",
-                            f"Setup konnte nicht gestartet werden:\n{exc}\n\n"
-                            f"Datei liegt unter:\n{final_path}"
-                        )
-                        return
-                    # Self-exit nach kurzer Pause, damit Popen sicher feuern kann
-                    self.after(800, self.destroy)
-                self.after(0, launch)
+                        f"Setup liegt unter:\n{final_path}\n\n"
+                        f"JA = jetzt installieren (NMGone beendet sich kurz und oeffnet sich danach wieder)\n"
+                        f"NEIN = spaeter installieren (Setup bleibt im updates-Ordner und wird beim naechsten Start angeboten)\n"
+                        f"ABBRECHEN = Datei wieder loeschen"
+                    )
+                    if answer is True:
+                        self._launch_setup_and_exit(final_path)
+                    elif answer is False:
+                        self.status.set(f"Update {tag} heruntergeladen. Installation auf spaeter verschoben.")
+                    else:
+                        try:
+                            final_path.unlink()
+                            self.status.set("Update-Datei wurde wieder geloescht.")
+                        except Exception:
+                            pass
+                self.after(0, offer_install)
 
             except Exception as exc:
                 error_text = f"{type(exc).__name__}: {exc}"
@@ -2616,6 +2686,23 @@ class NMGApp(tk.Tk):
 
 
     def install_update_dialog(self):
+        # SP5: erst nach lokalem NMGone_Setup_*.exe schauen. Wenn da, anbieten.
+        # Sonst alte Logik mit .nmgupdate-Paketen.
+        pending = self._find_pending_local_setup()
+        if pending:
+            path, version_str = pending
+            if messagebox.askyesno(
+                "Lokales Setup gefunden",
+                f"Im Update-Ordner liegt ein Setup bereit:\n\n"
+                f"Datei: {path.name}\n"
+                f"Version: V{version_str}\n"
+                f"Aktuell installiert: V{APP_VERSION}\n\n"
+                f"Jetzt installieren?"
+            ):
+                self._launch_setup_and_exit(path)
+                return
+            # Wer "Nein" sagt, geht weiter in den .nmgupdate-Pfad.
+
         packages = []
         try:
             packages = find_update_packages()
