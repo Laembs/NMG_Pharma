@@ -224,6 +224,81 @@ class NMGApp(tk.Tk):
             except Exception:
                 pass
 
+    def _show_busy_modal(self, title, subtitle="Bitte warten..."):
+        """SP3: Modaler Warte-Dialog mit Logo + Indeterminate-Progressbar +
+        Sanduhr-Cursor im Hauptfenster. Caller ruft danach _close_busy_modal(win).
+        Auch wenn der Import synchron laeuft: die animierte Progressbar zeigt
+        dem Anwender wenigstens 'Programm arbeitet'.
+        """
+        win = tk.Toplevel(self)
+        win.title(title)
+        win.transient(self)
+        win.grab_set()
+        win.protocol("WM_DELETE_WINDOW", lambda: None)
+        win.configure(bg="#f5f7fb")
+        win.resizable(False, False)
+        try:
+            self.update_idletasks()
+            px, py = self.winfo_x(), self.winfo_y()
+            pw, ph = self.winfo_width(), self.winfo_height()
+            ww, wh = 440, 230
+            win.geometry(f"{ww}x{wh}+{px + max(0, (pw - ww) // 2)}+{py + max(0, (ph - wh) // 2)}")
+        except Exception:
+            win.geometry("440x230")
+        try:
+            logo_path = ASSETS_DIR / "NMGone.png"
+            if logo_path.exists():
+                raw = tk.PhotoImage(file=str(logo_path))
+                factor = max(1, int(max(raw.width() / 200, raw.height() / 70) + 0.999))
+                win._logo_img = raw.subsample(factor, factor)
+                tk.Label(win, image=win._logo_img, bg="#f5f7fb").pack(pady=(16, 6))
+        except Exception:
+            pass
+        tk.Label(win, text=title, font=("Arial", 13, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(pady=(0, 2))
+        msg_var = tk.StringVar(value=subtitle)
+        tk.Label(win, textvariable=msg_var, fg="#444", bg="#f5f7fb").pack(pady=(0, 10))
+        pb = ttk.Progressbar(win, mode="indeterminate", length=340)
+        pb.pack(pady=(0, 16))
+        pb.start(12)
+        win._msg_var = msg_var
+        win._pb = pb
+        try:
+            self.config(cursor="watch")
+        except Exception:
+            pass
+        try:
+            self.update_idletasks()
+        except Exception:
+            pass
+        return win
+
+    def _set_busy_message(self, win, text):
+        try:
+            if win and win.winfo_exists():
+                win._msg_var.set(text)
+                self.update_idletasks()
+        except Exception:
+            pass
+
+    def _close_busy_modal(self, win):
+        try:
+            if win and win.winfo_exists():
+                try:
+                    win._pb.stop()
+                except Exception:
+                    pass
+                try:
+                    win.grab_release()
+                except Exception:
+                    pass
+                win.destroy()
+        except Exception:
+            pass
+        try:
+            self.config(cursor="")
+        except Exception:
+            pass
+
     def _toggle_admin_visible(self, event=None):
         self._admin_visible = not self._admin_visible
         zustand = "EIN" if self._admin_visible else "AUS"
@@ -7040,14 +7115,34 @@ class NMGApp(tk.Tk):
             messagebox.showerror("Admin-Bereich", "Passwort ist falsch.")
             return
 
+        # SP3: alle existierenden Tabellen dynamisch ermitteln. Vorher war
+        # die Liste hartcodiert in ADMIN_CLEAR_TABLES, viele Bereiche
+        # waren unsichtbar. Schutz-Tabellen (App-Konfig + Logs) bleiben
+        # weiter ausgeschlossen, sonst wuerde das Programm danach nicht
+        # mehr starten oder die Historie waere weg.
+        from .db_overview import TABLE_DESCRIPTIONS as _TABLE_DESCS
+        _SKIP = {"meta", "tbl_update_log", "tbl_system_log", "sqlite_sequence"}
         available = []
-        for table_name, label in ADMIN_CLEAR_TABLES:
-            count = self._table_count(table_name)
-            if count is not None:
+        try:
+            with sqlite3.connect(DB_PATH) as con:
+                rows = con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                ).fetchall()
+            for (table_name,) in rows:
+                if table_name in _SKIP:
+                    continue
+                count = self._table_count(table_name)
+                if count is None:
+                    continue
+                desc = _TABLE_DESCS.get(table_name, {})
+                label = desc.get("name", table_name)
                 available.append((table_name, label, count))
+        except Exception:
+            pass
 
         if not available:
-            messagebox.showinfo("Admin-Bereich", "Keine der vorgesehenen Tabellen wurde gefunden.")
+            messagebox.showinfo("Admin-Bereich", "Keine Tabellen in der Datenbank gefunden.")
             return
 
         win = tk.Toplevel(self)
@@ -7076,13 +7171,29 @@ class NMGApp(tk.Tk):
             justify="left"
         ).grid(row=1, column=0, sticky="w", padx=22, pady=(0, 14))
 
-        box = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
-        box.grid(row=2, column=0, sticky="nsew", padx=22, pady=(0, 14))
-        box.columnconfigure(0, weight=1)
+        # SP3: scrollbarer Container, weil die Tabellenliste jetzt deutlich
+        # laenger sein kann. Default: alle Haekchen AUS, damit man nicht
+        # versehentlich die halbe DB leert.
+        win.rowconfigure(2, weight=1)
+        scroll_outer = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        scroll_outer.grid(row=2, column=0, sticky="nsew", padx=22, pady=(0, 14))
+        scroll_outer.columnconfigure(0, weight=1)
+        scroll_outer.rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(scroll_outer, bg="#ffffff", highlightthickness=0)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        sb = ttk.Scrollbar(scroll_outer, orient="vertical", command=canvas.yview)
+        sb.grid(row=0, column=1, sticky="ns")
+        canvas.configure(yscrollcommand=sb.set)
+
+        box = tk.Frame(canvas, bg="#ffffff")
+        canvas.create_window((0, 0), window=box, anchor="nw", tags="box")
+        box.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure("box", width=e.width))
 
         selections = {}
         for idx, (table_name, label, count) in enumerate(available):
-            var = tk.BooleanVar(value=True)
+            var = tk.BooleanVar(value=False)
             selections[table_name] = var
             text = f"{label}  |  {table_name}  |  {count:,} Datensätze".replace(",", ".")
             tk.Checkbutton(
@@ -7163,6 +7274,14 @@ class NMGApp(tk.Tk):
             except Exception as exc:
                 messagebox.showerror("Admin-Bereich", f"Daten konnten nicht geleert werden:\n{exc}")
 
+        def _select_all():
+            for v in selections.values():
+                v.set(True)
+        def _select_none():
+            for v in selections.values():
+                v.set(False)
+        tk.Button(buttons, text="Alle markieren", command=_select_all, padx=12, pady=7).pack(side="left", padx=(0, 8))
+        tk.Button(buttons, text="Keine markieren", command=_select_none, padx=12, pady=7).pack(side="left", padx=(0, 8))
         tk.Button(buttons, text="Abbrechen", command=win.destroy, padx=16, pady=8).pack(side="right", padx=(8, 0))
         tk.Button(
             buttons,
@@ -7434,14 +7553,17 @@ class NMGApp(tk.Tk):
             return
 
         self.status.set("Artikelstamm-Import gestartet. Bitte Programm geöffnet lassen...")
+        busy = self._show_busy_modal("Artikelstamm-Import", "Lese Datei und schreibe in Datenbank...")
 
         def progress(done, total):
             def update_status():
                 if total:
                     pct = int((done / total) * 100)
                     self.status.set(f"Artikelstamm-Import läuft: {done:,} / {total:,} Zeilen ({pct} %)".replace(",", "."))
+                    self._set_busy_message(busy, f"{done:,} / {total:,} Zeilen ({pct} %)".replace(",", "."))
                 else:
                     self.status.set(f"Artikelstamm-Import läuft: {done:,} Zeilen".replace(",", "."))
+                    self._set_busy_message(busy, f"{done:,} Zeilen verarbeitet".replace(",", "."))
             self.after(0, update_status)
 
         def worker():
@@ -7455,6 +7577,7 @@ class NMGApp(tk.Tk):
     f"Artikel gesamt: {total}"
 )
                 def done():
+                    self._close_busy_modal(busy)
                     self.status.set(msg)
                     messagebox.showinfo("Artikelstamm", msg)
                     self.show_artikelstamm_page()
@@ -7465,6 +7588,7 @@ class NMGApp(tk.Tk):
                 # nur eine "free variable" und crasht spaeter im Tk-Loop.
                 error_text = str(exc)
                 def failed():
+                    self._close_busy_modal(busy)
                     self.status.set(f"Artikelstamm-Import abgebrochen: {error_text}")
                     messagebox.showerror("Artikelstamm", error_text)
                 self.after(0, failed)
@@ -7583,103 +7707,111 @@ class NMGApp(tk.Tk):
         gesamt_aktualisiert = 0
         fehler = []
 
-        for filepath in files:
-            try:
-                table = load_table(filepath)
-            except Exception as exc:
-                fehler.append(f"{Path(filepath).name}: {exc}")
-                continue
+        # SP3: Warte-Dialog mit Logo + Progressbar + Sanduhr-Cursor.
+        # Wird unten in try/finally garantiert geschlossen.
+        busy = self._show_busy_modal(title, f"Lese {len(files)} Datei(en)...")
+        try:
+            for fi, filepath in enumerate(files, start=1):
+                self._set_busy_message(busy, f"Datei {fi}/{len(files)}: {Path(filepath).name}")
+                try:
+                    table = load_table(filepath)
+                except Exception as exc:
+                    fehler.append(f"{Path(filepath).name}: {exc}")
+                    continue
 
-            headers = table.headers
-            header_norm = [normalize_header(h) for h in headers]
+                headers = table.headers
+                header_norm = [normalize_header(h) for h in headers]
 
-            # Auto-Mapping
-            mapping = {}
-            for ziel_col, aliases, contains in (pflicht_spalten + optionale_spalten):
-                idx = find_column(headers, aliases, contains)
-                if idx is not None:
-                    mapping[ziel_col] = idx
+                # Auto-Mapping
+                mapping = {}
+                for ziel_col, aliases, contains in (pflicht_spalten + optionale_spalten):
+                    idx = find_column(headers, aliases, contains)
+                    if idx is not None:
+                        mapping[ziel_col] = idx
 
-            # Prüfe Pflichtfelder
-            missing = [col for col, *_ in pflicht_spalten if col not in mapping]
-            if missing:
-                # Gespeichertes Mapping prüfen
-                saved = self._get_meta_value(f"{mapping_key}_{Path(filepath).stem[:20]}", "")
-                if saved:
+                # Prüfe Pflichtfelder
+                missing = [col for col, *_ in pflicht_spalten if col not in mapping]
+                if missing:
+                    saved = self._get_meta_value(f"{mapping_key}_{Path(filepath).stem[:20]}", "")
+                    if saved:
+                        try:
+                            import json
+                            mapping = json.loads(saved)
+                            missing = [col for col, *_ in pflicht_spalten if col not in mapping]
+                        except Exception:
+                            pass
+
+                if missing:
+                    # Mapping-Dialog. Busy-Modal kurz schliessen, damit der
+                    # User den Spalten-Zuordnungs-Dialog ueberhaupt benutzen
+                    # kann (grab_set vom Busy wuerde sonst blocken).
+                    self._close_busy_modal(busy)
+                    mapping = self._mapping_dialog(
+                        title=f"{title} – Spalten zuordnen",
+                        filepath=filepath,
+                        headers=headers,
+                        pflicht=pflicht_spalten,
+                        optional=optionale_spalten,
+                        current_mapping=mapping,
+                        beschreibung=beschreibung,
+                    )
+                    if not mapping:
+                        # Busy fuer naechste Datei wieder aufmachen
+                        busy = self._show_busy_modal(title, "Bitte warten...")
+                        continue
                     try:
                         import json
-                        mapping = json.loads(saved)
-                        missing = [col for col, *_ in pflicht_spalten if col not in mapping]
+                        self._set_meta_value(f"{mapping_key}_{Path(filepath).stem[:20]}", json.dumps(mapping))
                     except Exception:
                         pass
+                    busy = self._show_busy_modal(title, f"Importiere {Path(filepath).name}...")
+                else:
+                    self._set_busy_message(busy, f"Importiere {Path(filepath).name}...")
 
-            if missing:
-                # Mapping-Dialog
-                mapping = self._mapping_dialog(
-                    title=f"{title} – Spalten zuordnen",
-                    filepath=filepath,
-                    headers=headers,
-                    pflicht=pflicht_spalten,
-                    optional=optionale_spalten,
-                    current_mapping=mapping,
-                    beschreibung=beschreibung,
-                )
-                if not mapping:
-                    continue
-                # Mapping speichern
+                # Importieren
+                neu = 0
+                aktualisiert = 0
                 try:
-                    import json
-                    self._set_meta_value(f"{mapping_key}_{Path(filepath).stem[:20]}", json.dumps(mapping))
-                except Exception:
-                    pass
-
-            # Importieren
-            neu = 0
-            aktualisiert = 0
-            try:
-                # Alle SQL-Felder (auch nicht gemappte optionale) vorbelegen.
-                # Sonst beschwert sich SQLite mit "You did not supply a value for
-                # binding parameter X", weil das INSERT-Statement named bindings
-                # fuer alle Spalten enthaelt.
-                all_columns = [col for col, *_ in (pflicht_spalten + optionale_spalten)]
-                with sqlite3.connect(DB_PATH) as con:
-                    for row_data in table.rows:
-                        record = {col: None for col in all_columns}
-                        for col_name, col_idx in mapping.items():
-                            if isinstance(col_idx, int) and col_idx < len(row_data):
-                                raw = row_data[col_idx]
-                                if col_name in numeric_fields:
-                                    record[col_name] = self._parse_decimal_or_none(raw)
-                                else:
-                                    record[col_name] = raw if raw not in ("", None) else None
-                        record["importdatum"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        record["quelle"] = Path(filepath).name
-                        try:
-                            con.execute(insert_sql, record)
-                            neu += 1
-                        except sqlite3.IntegrityError:
-                            # Update bei Duplikat
-                            set_parts = ", ".join(f"{k}=:{k}" for k in record if k not in ("pzn", "kundennummer"))
+                    all_columns = [col for col, *_ in (pflicht_spalten + optionale_spalten)]
+                    with sqlite3.connect(DB_PATH) as con:
+                        for ri, row_data in enumerate(table.rows, start=1):
+                            record = {col: None for col in all_columns}
+                            for col_name, col_idx in mapping.items():
+                                if isinstance(col_idx, int) and col_idx < len(row_data):
+                                    raw = row_data[col_idx]
+                                    if col_name in numeric_fields:
+                                        record[col_name] = self._parse_decimal_or_none(raw)
+                                    else:
+                                        record[col_name] = raw if raw not in ("", None) else None
+                            record["importdatum"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            record["quelle"] = Path(filepath).name
+                            # Alle 500 Zeilen: Modal-Text aktualisieren, damit
+                            # der Anwender Fortschritt sieht.
+                            if ri % 500 == 0:
+                                self._set_busy_message(busy, f"{Path(filepath).name}: {ri:,} Zeilen verarbeitet".replace(",", "."))
                             try:
-                                pk_col = "pzn" if "pzn" in record else "kundennummer"
-                                con.execute(f"UPDATE {ziel_tabelle} SET {set_parts} WHERE {pk_col}=:{pk_col}", record)
-                                aktualisiert += 1
-                                neu = max(0, neu - 1)
-                            except Exception as exc2:
-                                # SP2: Frueher silently geschluckt -> man hat
-                                # nie gesehen warum Daten verschwinden. Jetzt
-                                # in die fehler-Liste, max. 3 pro Datei.
-                                if len([f for f in fehler if "[update-fallback]" in f]) < 3:
-                                    fehler.append(f"{Path(filepath).name} [update-fallback]: {type(exc2).__name__}: {exc2}")
-                        except Exception as exc1:
-                            # Auch nicht-IntegrityError sichtbar machen.
-                            if len([f for f in fehler if "[insert]" in f]) < 3:
-                                fehler.append(f"{Path(filepath).name} [insert]: {type(exc1).__name__}: {exc1}")
-                    con.commit()
-                gesamt_neu += neu
-                gesamt_aktualisiert += aktualisiert
-            except Exception as exc:
-                fehler.append(f"{Path(filepath).name}: {exc}")
+                                con.execute(insert_sql, record)
+                                neu += 1
+                            except sqlite3.IntegrityError:
+                                set_parts = ", ".join(f"{k}=:{k}" for k in record if k not in ("pzn", "kundennummer"))
+                                try:
+                                    pk_col = "pzn" if "pzn" in record else "kundennummer"
+                                    con.execute(f"UPDATE {ziel_tabelle} SET {set_parts} WHERE {pk_col}=:{pk_col}", record)
+                                    aktualisiert += 1
+                                    neu = max(0, neu - 1)
+                                except Exception as exc2:
+                                    if len([f for f in fehler if "[update-fallback]" in f]) < 3:
+                                        fehler.append(f"{Path(filepath).name} [update-fallback]: {type(exc2).__name__}: {exc2}")
+                            except Exception as exc1:
+                                if len([f for f in fehler if "[insert]" in f]) < 3:
+                                    fehler.append(f"{Path(filepath).name} [insert]: {type(exc1).__name__}: {exc1}")
+                        con.commit()
+                    gesamt_neu += neu
+                    gesamt_aktualisiert += aktualisiert
+                except Exception as exc:
+                    fehler.append(f"{Path(filepath).name}: {exc}")
+        finally:
+            self._close_busy_modal(busy)
 
         msg = (f"{title} abgeschlossen.\n\nNeu importiert: {gesamt_neu}\nAktualisiert: {gesamt_aktualisiert}")
         if fehler:

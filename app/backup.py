@@ -10,8 +10,8 @@ from pathlib import Path
 from .config import BASE_DIR, DATA_DIR, OUTPUT_DIR, DB_PATH
 
 BACKUP_DIR = BASE_DIR / "backups"
-APP_VERSION = "1.0.2"
-APP_VERSION_DISPLAY = "V1.0 SP2"
+APP_VERSION = "1.0.3"
+APP_VERSION_DISPLAY = "V1.0 SP3"
 DB_SCHEMA_VERSION = "1.1"
 
 
