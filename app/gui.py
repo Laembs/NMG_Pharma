@@ -7062,11 +7062,10 @@ class NMGApp(tk.Tk):
         self.show_schulbank_page("Schulbank")
 
     def show_daten_aktualisieren_page(self):
+        # SP17: Layout auf 3x3 erweitert, Austauschdatenbank-Kachel ergaenzt
+        # (die fehlte seit SP7 und der Import war von hier nicht erreichbar).
         self.clear_page()
-        # SP2: Zukunftswerk + Partnerkonditionen-Kacheln entfernt - dafuer
-        # ist "Manuelle Analysen" der gemeinsame Einstieg (PK/ZF wird im
-        # Dialog gewaehlt). Layout ist jetzt 3x2.
-        self._page_header("Daten aktualisieren", "Importbereiche für APU/HAP, NMG Artikel, Rabatte und Artikelstamm.")
+        self._page_header("Daten aktualisieren", "Importbereiche für APU/HAP, NMG Artikel, Rabatte, Artikelstamm und Austauschdatenbank.")
         body = tk.Frame(self.page, bg="#ffffff")
         body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
         body.columnconfigure((0, 1, 2), weight=1)
@@ -7078,8 +7077,13 @@ class NMGApp(tk.Tk):
         row2.grid(row=3, column=0, columnspan=3, sticky="ew")
         row2.columnconfigure((0, 1, 2), weight=1)
         self._tile(row2, 0, "🔎", "Artikelstamm", "PZN-Artikelbasis importieren.", "Import", self.show_artikelstamm_page, "#0b4a86")
-        self._tile(row2, 1, "📄", "Auswertungsvorlage", "Vorlage der Ausgabe/Auswertung aktualisieren.", "Öffnen", self.show_auswertungsvorlage_page, "#3867b7")
-        self._tile(row2, 2, "📥", "Manuelle Analysen", "Manuelle PK-/ZF-Analysen importieren.", "Import", self.import_manuelle_analysen, "#11823b")
+        self._tile(row2, 1, "🔄", "Austauschdatenbank", "PZN -> NMG-Austausch importieren.", "Import", self.show_austauschdatenbank_page, "#8b5a00")
+        self._tile(row2, 2, "📄", "Auswertungsvorlage", "Vorlage der Ausgabe/Auswertung aktualisieren.", "Öffnen", self.show_auswertungsvorlage_page, "#3867b7")
+
+        row3 = tk.Frame(body, bg="#ffffff")
+        row3.grid(row=4, column=0, columnspan=3, sticky="ew")
+        row3.columnconfigure((0, 1, 2), weight=1)
+        self._tile(row3, 0, "📥", "Manuelle Analysen", "Manuelle PK-/ZF-Analysen importieren.", "Import", self.import_manuelle_analysen, "#11823b")
 
     def _ask_manual_analysis_type(self):
         """Fragt gezielt, ob manuelle Analysen als PK oder ZF importiert werden sollen."""
