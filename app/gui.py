@@ -8553,10 +8553,9 @@ class NMGApp(tk.Tk):
 
 
 def _show_splash_screen():
-    """SP11: Splash mit Sprach-Auswahl und Start-Button.
+    """SP12: Splash mit Hintergrundbild (NMGone_Splash.png) + Sprach-Auswahl
+    + Start-Button. Wenn das Splash-Bild fehlt, fallback auf Logo-only.
     Liefert True wenn der User Start geklickt hat, False bei Abbruch.
-    Sprache wird ggf. in language.json gespeichert; ab dem naechsten T()-
-    Aufruf gilt sie.
     """
     from .i18n import LANGUAGES, load_language, save_language, get_language, T
 
@@ -8564,55 +8563,78 @@ def _show_splash_screen():
 
     splash_root = tk.Tk()
     splash_root.title("NMGone")
-    splash_root.configure(bg="#f5f7fb")
+    splash_root.configure(bg="#ffffff")
     splash_root.resizable(False, False)
     try:
         splash_root.iconbitmap(str(ASSETS_DIR / "NMGone.ico"))
     except Exception:
         pass
 
-    # Zentriert auf dem Bildschirm
-    ww, wh = 520, 420
+    # Splash-Bild laden, falls vorhanden. Bestimmt die Fenstergroesse.
+    splash_img = None
+    img_w, img_h = 0, 0
+    try:
+        bg_path = ASSETS_DIR / "NMGone_Splash.png"
+        if bg_path.exists():
+            raw = tk.PhotoImage(file=str(bg_path))
+            # Auf hoechstens 720 px Breite herunter skalieren.
+            factor = max(1, int(raw.width() / 720 + 0.999))
+            splash_img = raw.subsample(factor, factor)
+            img_w, img_h = splash_img.width(), splash_img.height()
+            splash_root._bg_img = splash_img
+    except Exception:
+        splash_img = None
+
+    if splash_img is not None:
+        # Unter dem Bild ein Steuerbereich von 130 px Hoehe.
+        ww, wh = img_w, img_h + 130
+    else:
+        ww, wh = 520, 420
+
     sw = splash_root.winfo_screenwidth()
     sh = splash_root.winfo_screenheight()
-    splash_root.geometry(f"{ww}x{wh}+{(sw - ww) // 2}+{(sh - wh) // 3}")
+    splash_root.geometry(f"{ww}x{wh}+{(sw - ww) // 2}+{max(20, (sh - wh) // 3)}")
 
-    # Logo
-    try:
-        logo_path = ASSETS_DIR / "NMGone.png"
-        if logo_path.exists():
-            raw = tk.PhotoImage(file=str(logo_path))
-            factor = max(1, int(max(raw.width() / 260, raw.height() / 110) + 0.999))
-            splash_root._logo_img = raw.subsample(factor, factor)
-            tk.Label(splash_root, image=splash_root._logo_img, bg="#f5f7fb").pack(pady=(28, 12))
-    except Exception:
-        pass
+    # Layout: Bild oben, Steuerbereich unten
+    if splash_img is not None:
+        tk.Label(splash_root, image=splash_img, bg="#ffffff", bd=0).pack(side="top")
+    else:
+        # Fallback: nur Logo
+        try:
+            logo_path = ASSETS_DIR / "NMGone.png"
+            if logo_path.exists():
+                raw = tk.PhotoImage(file=str(logo_path))
+                factor = max(1, int(max(raw.width() / 260, raw.height() / 110) + 0.999))
+                splash_root._logo_img = raw.subsample(factor, factor)
+                tk.Label(splash_root, image=splash_root._logo_img, bg="#ffffff").pack(pady=(28, 12))
+        except Exception:
+            pass
+        welcome_var = tk.StringVar(value=T("Willkommen bei NMGone"))
+        tk.Label(splash_root, textvariable=welcome_var, font=("Arial", 16, "bold"),
+                 fg="#0b4a86", bg="#ffffff").pack(pady=(0, 8))
 
-    welcome_var = tk.StringVar(value=T("Willkommen bei NMGone"))
-    tk.Label(splash_root, textvariable=welcome_var, font=("Arial", 16, "bold"),
-             fg="#0b4a86", bg="#f5f7fb").pack(pady=(0, 18))
+    # Steuerbereich
+    controls = tk.Frame(splash_root, bg="#ffffff")
+    controls.pack(side="top", fill="x", pady=(8, 0))
 
     lang_label_var = tk.StringVar(value=T("Sprache auswählen"))
-    tk.Label(splash_root, textvariable=lang_label_var, font=("Arial", 11),
-             fg="#444", bg="#f5f7fb").pack()
+    tk.Label(controls, textvariable=lang_label_var, font=("Arial", 10),
+             fg="#444", bg="#ffffff").pack()
 
-    # Dropdown mit Code -> "Anzeige (Code)"
     lang_codes = list(LANGUAGES.keys())
     lang_display = [f"{LANGUAGES[c]} ({c})" for c in lang_codes]
     current_idx = lang_codes.index(get_language()) if get_language() in lang_codes else 0
     lang_var = tk.StringVar(value=lang_display[current_idx])
 
-    combo = ttk.Combobox(splash_root, textvariable=lang_var, values=lang_display,
-                         state="readonly", font=("Arial", 11), width=20, justify="center")
-    combo.pack(pady=(6, 24))
+    combo = ttk.Combobox(controls, textvariable=lang_var, values=lang_display,
+                         state="readonly", font=("Arial", 11), width=22, justify="center")
+    combo.pack(pady=(4, 12))
 
     def _on_lang_change(_event=None):
-        # Aktive Sprache wechseln und die Splash-Texte live aktualisieren.
         sel = lang_var.get()
         for c in lang_codes:
             if sel.endswith(f"({c})"):
                 save_language(c)
-                welcome_var.set(T("Willkommen bei NMGone"))
                 lang_label_var.set(T("Sprache auswählen"))
                 start_btn.config(text=T("Starten"))
                 break
@@ -8622,23 +8644,21 @@ def _show_splash_screen():
     started = {"ok": False}
 
     def _on_start():
-        # Auswahl persistieren und Splash schliessen.
         _on_lang_change()
         started["ok"] = True
         splash_root.destroy()
 
     start_btn = tk.Button(
-        splash_root, text=T("Starten"), command=_on_start,
+        controls, text=T("Starten"), command=_on_start,
         bg="#0b4a86", fg="white", relief="flat",
-        font=("Arial", 13, "bold"), padx=28, pady=10, cursor="hand2",
+        font=("Arial", 12, "bold"), padx=32, pady=8, cursor="hand2",
     )
-    start_btn.pack(pady=(0, 18))
+    start_btn.pack(pady=(0, 10))
 
     from .backup import APP_VERSION_DISPLAY
     tk.Label(splash_root, text=f"NMGone {APP_VERSION_DISPLAY}",
-             font=("Arial", 9), fg="#888", bg="#f5f7fb").pack(side="bottom", pady=(0, 12))
+             font=("Arial", 8), fg="#aaa", bg="#ffffff").pack(side="bottom", pady=(0, 6))
 
-    # Enter = Start, Escape = Beenden
     splash_root.bind("<Return>", lambda e: _on_start())
     splash_root.bind("<Escape>", lambda e: splash_root.destroy())
 
