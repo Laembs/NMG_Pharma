@@ -7924,30 +7924,50 @@ class NMGApp(tk.Tk):
         gesamt_neu = 0
         gesamt_aktualisiert = 0
         fehler = []
+        # SP13: Diagnose pro Datei sammeln, damit der User SIEHT was die App
+        # gemacht hat. Vorher gab es nur "Neu importiert: 0" ohne Hinweis warum.
+        diagnostik = []  # list of dicts mit Pro-Datei-Infos
 
-        # SP3: Warte-Dialog mit Logo + Progressbar + Sanduhr-Cursor.
-        # Wird unten in try/finally garantiert geschlossen.
+        # Tabellen-Stand VOR dem Import festhalten (fuer Vorher/Nachher).
+        count_vorher = None
+        try:
+            with sqlite3.connect(DB_PATH) as con_pre:
+                cur = con_pre.execute(f'SELECT COUNT(*) FROM "{ziel_tabelle}"')
+                count_vorher = int(cur.fetchone()[0])
+        except Exception:
+            count_vorher = None
+
         busy = self._show_busy_modal(title, f"Lese {len(files)} Datei(en)...")
         try:
             for fi, filepath in enumerate(files, start=1):
                 self._set_busy_message(busy, f"Datei {fi}/{len(files)}: {Path(filepath).name}")
+                file_diag = {
+                    "name": Path(filepath).name,
+                    "status": "",
+                    "rows_seen": 0,
+                    "rows_inserted": 0,
+                    "rows_updated": 0,
+                    "rows_skipped_empty_pzn": 0,
+                    "columns_mapped": [],
+                    "missing_pflicht": [],
+                }
                 try:
                     table = load_table(filepath)
                 except Exception as exc:
+                    file_diag["status"] = f"Datei nicht lesbar: {type(exc).__name__}: {exc}"
                     fehler.append(f"{Path(filepath).name}: {exc}")
+                    diagnostik.append(file_diag)
                     continue
 
                 headers = table.headers
                 header_norm = [normalize_header(h) for h in headers]
 
-                # Auto-Mapping
                 mapping = {}
                 for ziel_col, aliases, contains in (pflicht_spalten + optionale_spalten):
                     idx = find_column(headers, aliases, contains)
                     if idx is not None:
                         mapping[ziel_col] = idx
 
-                # Prüfe Pflichtfelder
                 missing = [col for col, *_ in pflicht_spalten if col not in mapping]
                 if missing:
                     saved = self._get_meta_value(f"{mapping_key}_{Path(filepath).stem[:20]}", "")
@@ -7960,9 +7980,6 @@ class NMGApp(tk.Tk):
                             pass
 
                 if missing:
-                    # Mapping-Dialog. Busy-Modal kurz schliessen, damit der
-                    # User den Spalten-Zuordnungs-Dialog ueberhaupt benutzen
-                    # kann (grab_set vom Busy wuerde sonst blocken).
                     self._close_busy_modal(busy)
                     mapping = self._mapping_dialog(
                         title=f"{title} – Spalten zuordnen",
@@ -7974,7 +7991,9 @@ class NMGApp(tk.Tk):
                         beschreibung=beschreibung,
                     )
                     if not mapping:
-                        # Busy fuer naechste Datei wieder aufmachen
+                        file_diag["status"] = "Spalten-Zuordnung abgebrochen → Datei uebersprungen"
+                        file_diag["missing_pflicht"] = missing
+                        diagnostik.append(file_diag)
                         busy = self._show_busy_modal(title, "Bitte warten...")
                         continue
                     try:
@@ -7986,13 +8005,17 @@ class NMGApp(tk.Tk):
                 else:
                     self._set_busy_message(busy, f"Importiere {Path(filepath).name}...")
 
-                # Importieren
+                file_diag["columns_mapped"] = sorted(mapping.keys())
+
                 neu = 0
                 aktualisiert = 0
+                rows_seen = 0
+                rows_skipped_empty_pzn = 0
                 try:
                     all_columns = [col for col, *_ in (pflicht_spalten + optionale_spalten)]
                     with sqlite3.connect(DB_PATH) as con:
                         for ri, row_data in enumerate(table.rows, start=1):
+                            rows_seen += 1
                             record = {col: None for col in all_columns}
                             for col_name, col_idx in mapping.items():
                                 if isinstance(col_idx, int) and col_idx < len(row_data):
@@ -8003,8 +8026,12 @@ class NMGApp(tk.Tk):
                                         record[col_name] = raw if raw not in ("", None) else None
                             record["importdatum"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             record["quelle"] = Path(filepath).name
-                            # Alle 500 Zeilen: Modal-Text aktualisieren, damit
-                            # der Anwender Fortschritt sieht.
+
+                            # SP13: Leere PZN bewusst ueberspringen statt NULL-Eintraege zu produzieren.
+                            if "pzn" in record and (record["pzn"] is None or str(record["pzn"]).strip() == ""):
+                                rows_skipped_empty_pzn += 1
+                                continue
+
                             if ri % 500 == 0:
                                 self._set_busy_message(busy, f"{Path(filepath).name}: {ri:,} Zeilen verarbeitet".replace(",", "."))
                             try:
@@ -8026,14 +8053,59 @@ class NMGApp(tk.Tk):
                         con.commit()
                     gesamt_neu += neu
                     gesamt_aktualisiert += aktualisiert
+                    file_diag["status"] = "OK"
+                    file_diag["rows_seen"] = rows_seen
+                    file_diag["rows_inserted"] = neu
+                    file_diag["rows_updated"] = aktualisiert
+                    file_diag["rows_skipped_empty_pzn"] = rows_skipped_empty_pzn
                 except Exception as exc:
+                    file_diag["status"] = f"Importfehler: {type(exc).__name__}: {exc}"
                     fehler.append(f"{Path(filepath).name}: {exc}")
+                diagnostik.append(file_diag)
         finally:
             self._close_busy_modal(busy)
 
-        msg = (f"{title} abgeschlossen.\n\nNeu importiert: {gesamt_neu}\nAktualisiert: {gesamt_aktualisiert}")
+        # Tabellen-Stand NACH dem Import.
+        count_nachher = None
+        try:
+            with sqlite3.connect(DB_PATH) as con_post:
+                cur = con_post.execute(f'SELECT COUNT(*) FROM "{ziel_tabelle}"')
+                count_nachher = int(cur.fetchone()[0])
+        except Exception:
+            count_nachher = None
+
+        # SP13: Diagnose-Block fuer den Abschluss-Dialog bauen.
+        msg_lines = [f"{title} – Diagnose", ""]
+        msg_lines.append(f"Zieltabelle: {ziel_tabelle}")
+        if count_vorher is not None and count_nachher is not None:
+            delta = count_nachher - count_vorher
+            sign = "+" if delta >= 0 else ""
+            msg_lines.append(f"Datensätze vorher: {count_vorher:,}  →  nachher: {count_nachher:,}  ({sign}{delta:,})".replace(",", "."))
+        msg_lines.append("")
+
+        for i, d in enumerate(diagnostik, start=1):
+            msg_lines.append(f"Datei {i}: {d['name']}")
+            msg_lines.append(f"  Status: {d['status']}")
+            if d['columns_mapped']:
+                msg_lines.append(f"  Erkannte Spalten: {', '.join(d['columns_mapped'])}")
+            if d['missing_pflicht']:
+                msg_lines.append(f"  Fehlende Pflichtspalten: {', '.join(d['missing_pflicht'])}")
+            if d['rows_seen']:
+                msg_lines.append(f"  Zeilen gelesen: {d['rows_seen']:,}".replace(",", "."))
+                msg_lines.append(f"  Neu eingefuegt: {d['rows_inserted']:,}".replace(",", "."))
+                msg_lines.append(f"  Aktualisiert: {d['rows_updated']:,}".replace(",", "."))
+                if d['rows_skipped_empty_pzn']:
+                    msg_lines.append(f"  Uebersprungen (leere PZN): {d['rows_skipped_empty_pzn']:,}".replace(",", "."))
+            msg_lines.append("")
+
+        msg_lines.append(f"Zusammenfassung: {gesamt_neu} neu, {gesamt_aktualisiert} aktualisiert.")
         if fehler:
-            msg += f"\nFehler ({len(fehler)}):\n" + "\n".join(fehler[:5])
+            msg_lines.append("")
+            msg_lines.append(f"Fehler ({len(fehler)}):")
+            for f in fehler[:5]:
+                msg_lines.append(f"  {f}")
+
+        msg = "\n".join(msg_lines)
         messagebox.showinfo(title, msg)
         self.status.set(f"{title}: {gesamt_neu} neu, {gesamt_aktualisiert} aktualisiert.")
         try:
