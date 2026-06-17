@@ -8,7 +8,7 @@ import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from .config import BASE_DIR, UPDATE_DIR, BACKUP_DIR, DB_PATH
+from .config import BASE_DIR, UPDATE_DIR, BACKUP_DIR, DB_PATH, LOG_DIR
 from .backup import backup_erstellen, APP_VERSION, DB_SCHEMA_VERSION
 from .migrations import run_migrations
 
@@ -193,14 +193,19 @@ def _write_install_log(package: str, from_v: str, to_v: str, status: str, msg: s
             con.commit(); con.close()
     except Exception:
         pass
-    log_dir = BASE_DIR / "logs"
-    log_dir.mkdir(exist_ok=True)
-    with (log_dir / "update_log.txt").open("a", encoding="utf-8") as f:
+    # SP10: vorher BASE_DIR / "logs" - im installierten Programm read-only.
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    with (LOG_DIR / "update_log.txt").open("a", encoding="utf-8") as f:
         f.write(f"{datetime.now().isoformat(timespec='seconds')} | {status} | {package} | {from_v} -> {to_v} | {msg}\n")
 
 
 def write_version_file() -> Path:
-    p = BASE_DIR / "version.json"
+    # SP10: vorher BASE_DIR / "version.json" - im installierten Programm
+    # read-only -> Schreibversuch warf PermissionError, wurde aber von
+    # gui.py __init__ als except: pass geschluckt (Version-Tracking lief
+    # einfach still in Leere). Jetzt LOG_DIR (in USERDATA_ROOT, writable).
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    p = LOG_DIR / "version.json"
     payload = {
         "app": "NMGone",
         "version": APP_VERSION,

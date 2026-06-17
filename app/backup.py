@@ -7,11 +7,17 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from .config import BASE_DIR, DATA_DIR, OUTPUT_DIR, DB_PATH
+from .config import BASE_DIR, DATA_DIR, OUTPUT_DIR, DB_PATH, BACKUP_DIR as _CONFIG_BACKUP_DIR
 
-BACKUP_DIR = BASE_DIR / "backups"
-APP_VERSION = "1.0.9"
-APP_VERSION_DISPLAY = "V1.0 SP9"
+# SP10 Critical Fix: vorher stand hier "BACKUP_DIR = BASE_DIR / 'backups'",
+# was im installierten Programm auf C:\Program Files\NMGone\_internal\backups
+# zeigte (read-only!). Beim Programmstart wollte backup_auto_taeglich() dort
+# mkdir aufrufen und crashte mit PermissionError [WinError 5].
+# Fix: BACKUP_DIR aus config nehmen (USERDATA_ROOT/backups, also
+# C:\ProgramData\NMGone\backups im installierten Programm, writable).
+BACKUP_DIR = _CONFIG_BACKUP_DIR
+APP_VERSION = "1.0.10"
+APP_VERSION_DISPLAY = "V1.0 SP10"
 DB_SCHEMA_VERSION = "1.1"
 
 
@@ -104,7 +110,10 @@ def backup_wiederherstellen(backup_file: str | Path) -> Path:
         safety_copy = BACKUP_DIR / f"Vor_Restore_DB_{_ts()}.sqlite"
         shutil.copy2(DB_PATH, safety_copy)
 
-    tmp_dir = BASE_DIR / ".restore_tmp"
+    # SP10: vorher BASE_DIR / ".restore_tmp" - im installierten Programm
+    # read-only. Jetzt OS-Tempdir.
+    import tempfile as _tempfile
+    tmp_dir = Path(_tempfile.gettempdir()) / "nmgone_restore_tmp"
     if tmp_dir.exists():
         shutil.rmtree(tmp_dir)
     tmp_dir.mkdir(parents=True, exist_ok=True)
