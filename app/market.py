@@ -400,3 +400,186 @@ def datenbankstatus() -> dict:
             "zf_auswertungen": one("SELECT COUNT(*) FROM tbl_auswertungen WHERE COALESCE(datenquelle,'NMG')='ZF'"),
             "pk_auswertungen": one("SELECT COUNT(*) FROM tbl_auswertungen WHERE COALESCE(datenquelle,'NMG')='NMG'"),
         }
+
+
+# ── SP14: Neue Produktanalyse PK/ZF/PK+ZF ────────────────────────────────────
+def _produktanalyse_datenquellen(kundentyp: str) -> list[str]:
+    """Mapping zwischen kundentyp ('PK'/'ZF'/'PK+ZF') und den
+    tbl_auswertungen.datenquelle-Werten, die wir filtern muessen.
+    Altdaten haben datenquelle='NMG' obwohl es PK-Auswertungen sind.
+    """
+    k = (kundentyp or "").upper().replace(" ", "")
+    if k == "PK":
+        return ["NMG", "PK"]
+    if k == "ZF":
+        return ["ZF"]
+    return ["NMG", "PK", "ZF"]  # PK+ZF oder ALLE
+
+
+def _produktanalyse_rows(con: sqlite3.Connection, kundentyp: str, monate: int = 6) -> list[sqlite3.Row]:
+    """Liefert die Zeilen fuer eine einzelne Produktanalyse-Auswertung.
+    Filter: Auswertungen der letzten N Monate, gewuenschte Datenquellen,
+    PZN nicht im NMG-Stamm (= Produktchancen).
+    Sortiert nach moeglichem Gesamtumsatz absteigend.
+    """
+    datenquellen = _produktanalyse_datenquellen(kundentyp)
+    placeholders = ",".join("?" * len(datenquellen))
+    sql = f"""
+        WITH gruppiert AS (
+            SELECT
+                p.pzn,
+                COALESCE(MAX(NULLIF(p.artikelname, '')), '') AS artikelname,
+                COALESCE(MAX(NULLIF(p.df, '')), '') AS df,
+                COALESCE(MAX(NULLIF(p.pck, '')), '') AS pck,
+                COUNT(DISTINCT a.apotheke) AS apotheken,
+                SUM(COALESCE(p.absatz_6m, 0)) AS gesamtabsatz_6m,
+                AVG(NULLIF(p.absatz_6m, 0)) AS durchschnitt_absatz_6m,
+                AVG(NULLIF(p.ek, 0)) AS durchschnitt_ek
+            FROM tbl_auswertungspositionen p
+            JOIN tbl_auswertungen a ON a.id = p.auswertung_id
+            WHERE p.pzn IS NOT NULL AND p.pzn <> ''
+              AND COALESCE(p.absatz_6m, 0) > 0
+              AND COALESCE(a.datenquelle, 'NMG') IN ({placeholders})
+              AND a.datum >= date('now', '-{int(monate)} months')
+            GROUP BY p.pzn
+        )
+        SELECT
+            g.pzn,
+            g.artikelname,
+            g.df,
+            g.pck,
+            -- SP14: Hersteller bevorzugt aus tbl_artikelstamm (autoritative
+            -- Stammdatenquelle). Fallback auf das in den Positionen
+            -- mitgelieferte Herstellerkuerzel.
+            COALESCE(NULLIF(ast.herst, ''), '') AS hersteller_stamm,
+            g.apotheken,
+            g.gesamtabsatz_6m,
+            COALESCE(g.durchschnitt_absatz_6m, 0) AS durchschnitt_absatz_6m,
+            -- EK-Quelle: zuerst NMG-Stamm taxe_ek (war bei Produktchancen
+            -- typischerweise leer, aber sobald der User den Artikel ins
+            -- NMG-Sortiment aufnimmt, greift er hier). Fallback: AVG
+            -- der Position-EKs aus den Auswertungen.
+            COALESCE(nmg.taxe_ek, g.durchschnitt_ek, 0) AS effektiver_ek,
+            g.gesamtabsatz_6m * COALESCE(nmg.taxe_ek, g.durchschnitt_ek, 0) AS moeglicher_gesamtumsatz
+        FROM gruppiert g
+        LEFT JOIN tbl_artikelstamm ast ON ast.pzn = g.pzn
+        LEFT JOIN tbl_nmg_stamm nmg ON nmg.pzn = g.pzn
+        -- SP14: Nur Produktchancen - Artikel die noch NICHT im NMG-Stamm sind.
+        WHERE nmg.pzn IS NULL
+        ORDER BY moeglicher_gesamtumsatz DESC, g.gesamtabsatz_6m DESC
+    """
+    con.row_factory = sqlite3.Row
+    return con.execute(sql, datenquellen).fetchall()
+
+
+def _produktanalyse_basis_info(con: sqlite3.Connection, kundentyp: str, monate: int = 6) -> tuple[int, int]:
+    """Zaehlt Auswertungen + Positionen im gefilterten Zeitraum.
+    Wird oben in der Excel als Basis-Information ausgegeben.
+    """
+    datenquellen = _produktanalyse_datenquellen(kundentyp)
+    placeholders = ",".join("?" * len(datenquellen))
+    aw = int(con.execute(
+        f"""SELECT COUNT(*) FROM tbl_auswertungen
+            WHERE COALESCE(datenquelle, 'NMG') IN ({placeholders})
+              AND datum >= date('now', '-{int(monate)} months')""",
+        datenquellen,
+    ).fetchone()[0])
+    pos = int(con.execute(
+        f"""SELECT COUNT(*) FROM tbl_auswertungspositionen p
+            JOIN tbl_auswertungen a ON a.id = p.auswertung_id
+            WHERE COALESCE(a.datenquelle, 'NMG') IN ({placeholders})
+              AND a.datum >= date('now', '-{int(monate)} months')""",
+        datenquellen,
+    ).fetchone()[0])
+    return aw, pos
+
+
+def _produktanalyse_fill_sheet(ws, label: str, rows, basis_auswertungen: int, basis_positionen: int):
+    """Befuellt ein Worksheet im Vorlagen-Format des Users:
+    Zeile 1 Titel, Zeile 2 Basis-Info, Zeile 3 Beschreibung, Zeile 5 Header,
+    ab Zeile 6 Daten.
+    """
+    ws.cell(1, 1).value = f"Produktanalyse {label}: Neue Produktchancen (Artikel nicht im NMG-Stamm)"
+    ws.cell(1, 1).font = Font(bold=True, size=14, color="0B4A86")
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=10)
+
+    ws.cell(2, 1).value = f"Basis: {basis_auswertungen:,} gespeicherte Auswertungen, {basis_positionen:,} Positionen (letzte 6 Monate)".replace(",", ".")
+    ws.cell(2, 1).font = Font(italic=True, color="555555")
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=10)
+
+    ws.cell(3, 1).value = "Nicht im NMG-Stamm. Hersteller wird aus dem Artikelstamm gezogen. Gesamtumsatz = Gesamtabsatz x EK (Taxe-EK falls vorhanden, sonst Durchschnitts-EK aus den Auswertungen)."
+    ws.cell(3, 1).font = Font(italic=True, color="555555")
+    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=10)
+
+    headers = ["Rang", "PZN", "Artikelname", "DF", "PCK", "Hersteller", "Apotheken",
+               "Gesamtabsatz 6M", "Ø Absatz 6M", "möglicher Gesamtumsatz"]
+    for i, h in enumerate(headers, start=1):
+        c = ws.cell(5, i)
+        c.value = h
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="0B4A86")
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    widths = [6, 12, 38, 8, 8, 18, 10, 14, 14, 20]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    for rank, r in enumerate(rows, start=1):
+        rw = 5 + rank
+        ws.cell(rw, 1).value = rank
+        ws.cell(rw, 2).value = r["pzn"]
+        ws.cell(rw, 3).value = r["artikelname"]
+        ws.cell(rw, 4).value = r["df"]
+        ws.cell(rw, 5).value = r["pck"]
+        ws.cell(rw, 6).value = r["hersteller_stamm"]
+        ws.cell(rw, 7).value = r["apotheken"]
+        ws.cell(rw, 8).value = round(_safe_num(r["gesamtabsatz_6m"]), 2)
+        ws.cell(rw, 9).value = round(_safe_num(r["durchschnitt_absatz_6m"]), 2)
+        ws.cell(rw, 10).value = round(_safe_num(r["moeglicher_gesamtumsatz"]), 2)
+
+    ws.freeze_panes = "A6"
+    if rows:
+        ws.auto_filter.ref = f"A5:J{5 + len(rows)}"
+
+
+def export_produktanalyse_neu(kundentyp: str = "PK", monate: int = 6) -> Path:
+    """SP14: Neue Produktanalyse nach Spezifikation des Users.
+
+    Args:
+        kundentyp: 'PK', 'ZF' oder 'PK+ZF'
+        monate: Zeitfilter auf tbl_auswertungen.datum (Default 6)
+
+    Bei 'PK+ZF' werden 3 Sheets in derselben Excel erzeugt: PK, ZF, PK+ZF.
+    Sonst eine Excel mit einem Sheet.
+
+    Liefert den Pfad zur erzeugten Excel-Datei.
+    """
+    if not DB_PATH.exists():
+        init_db(DB_PATH)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    label = kundentyp.upper().replace(" ", "")
+    if label not in ("PK", "ZF", "PK+ZF"):
+        raise ValueError(f"Unbekannter Kundentyp: {kundentyp}")
+
+    out = OUTPUT_DIR / f"Produktanalyse_{label.replace('+', '_und_')}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+
+    wb = Workbook()
+    # Default-Sheet entfernen, wir fuegen unsere selbst an.
+    wb.remove(wb.active)
+
+    with sqlite3.connect(DB_PATH) as con:
+        sheets_to_make: list[tuple[str, str]] = []  # (sheet_name, kundentyp_filter)
+        if label == "PK+ZF":
+            sheets_to_make = [("PK", "PK"), ("ZF", "ZF"), ("PK+ZF", "PK+ZF")]
+        else:
+            sheets_to_make = [(label, label)]
+
+        for sheet_name, ktyp in sheets_to_make:
+            ws = wb.create_sheet(title=sheet_name)
+            rows = _produktanalyse_rows(con, ktyp, monate)
+            aw, pos = _produktanalyse_basis_info(con, ktyp, monate)
+            _produktanalyse_fill_sheet(ws, sheet_name, rows, aw, pos)
+
+    wb.save(out)
+    return out
