@@ -417,10 +417,17 @@ def _produktanalyse_datenquellen(kundentyp: str) -> list[str]:
 
 
 def _produktanalyse_rows(con: sqlite3.Connection, kundentyp: str, monate: int = 6) -> list[sqlite3.Row]:
-    """Liefert die Zeilen fuer eine einzelne Produktanalyse-Auswertung.
-    Filter: Auswertungen der letzten N Monate, gewuenschte Datenquellen,
-    PZN nicht im NMG-Stamm (= Produktchancen).
-    Sortiert nach moeglichem Gesamtumsatz absteigend.
+    """SP15: Liefert die Zeilen fuer eine Produktanalyse.
+
+    Filter:
+      - Auswertungen der letzten N Monate, ausgewaehlte Datenquellen
+      - PZN NICHT im NMG-Stamm
+      - PZN hat KEINEN Austausch-Eintrag (tbl_austauschartikel/tbl_austauschdatenbank)
+        -> wenn fuer eine alte PZN bereits eine NMG-Ersatz-PZN hinterlegt ist,
+        ist die alte keine "Chance" mehr, sondern bereits substituiert.
+
+    Stammdaten (Artikelname, DF, PCK, Hersteller) und EK kommen aus
+    tbl_artikelstamm. Gesamtumsatz = Gesamtabsatz x Artikelstamm-EK.
     """
     datenquellen = _produktanalyse_datenquellen(kundentyp)
     placeholders = ",".join("?" * len(datenquellen))
@@ -428,13 +435,9 @@ def _produktanalyse_rows(con: sqlite3.Connection, kundentyp: str, monate: int = 
         WITH gruppiert AS (
             SELECT
                 p.pzn,
-                COALESCE(MAX(NULLIF(p.artikelname, '')), '') AS artikelname,
-                COALESCE(MAX(NULLIF(p.df, '')), '') AS df,
-                COALESCE(MAX(NULLIF(p.pck, '')), '') AS pck,
                 COUNT(DISTINCT a.apotheke) AS apotheken,
                 SUM(COALESCE(p.absatz_6m, 0)) AS gesamtabsatz_6m,
-                AVG(NULLIF(p.absatz_6m, 0)) AS durchschnitt_absatz_6m,
-                AVG(NULLIF(p.ek, 0)) AS durchschnitt_ek
+                AVG(NULLIF(p.absatz_6m, 0)) AS durchschnitt_absatz_6m
             FROM tbl_auswertungspositionen p
             JOIN tbl_auswertungen a ON a.id = p.auswertung_id
             WHERE p.pzn IS NOT NULL AND p.pzn <> ''
@@ -445,27 +448,34 @@ def _produktanalyse_rows(con: sqlite3.Connection, kundentyp: str, monate: int = 
         )
         SELECT
             g.pzn,
-            g.artikelname,
-            g.df,
-            g.pck,
-            -- SP14: Hersteller bevorzugt aus tbl_artikelstamm (autoritative
-            -- Stammdatenquelle). Fallback auf das in den Positionen
-            -- mitgelieferte Herstellerkuerzel.
-            COALESCE(NULLIF(ast.herst, ''), '') AS hersteller_stamm,
+            -- SP15: alle Stammdaten aus tbl_artikelstamm.
+            COALESCE(ast.artikel, '') AS artikelname,
+            COALESCE(ast.df, '') AS df,
+            COALESCE(ast.pck, '') AS pck,
+            COALESCE(ast.herst, '') AS hersteller_stamm,
             g.apotheken,
             g.gesamtabsatz_6m,
             COALESCE(g.durchschnitt_absatz_6m, 0) AS durchschnitt_absatz_6m,
-            -- EK-Quelle: zuerst NMG-Stamm taxe_ek (war bei Produktchancen
-            -- typischerweise leer, aber sobald der User den Artikel ins
-            -- NMG-Sortiment aufnimmt, greift er hier). Fallback: AVG
-            -- der Position-EKs aus den Auswertungen.
-            COALESCE(nmg.taxe_ek, g.durchschnitt_ek, 0) AS effektiver_ek,
-            g.gesamtabsatz_6m * COALESCE(nmg.taxe_ek, g.durchschnitt_ek, 0) AS moeglicher_gesamtumsatz
+            -- SP15: EK aus tbl_artikelstamm.ek (Listen-EK / Taxe-EK / Import-EK).
+            COALESCE(ast.ek, 0) AS effektiver_ek,
+            g.gesamtabsatz_6m * COALESCE(ast.ek, 0) AS moeglicher_gesamtumsatz
         FROM gruppiert g
         LEFT JOIN tbl_artikelstamm ast ON ast.pzn = g.pzn
         LEFT JOIN tbl_nmg_stamm nmg ON nmg.pzn = g.pzn
-        -- SP14: Nur Produktchancen - Artikel die noch NICHT im NMG-Stamm sind.
         WHERE nmg.pzn IS NULL
+          -- SP15: Austausch-Artikel (alte Tabelle) ausschliessen.
+          AND NOT EXISTS (
+              SELECT 1 FROM tbl_austauschartikel aa
+              WHERE aa.original_pzn = g.pzn
+                AND (COALESCE(aa.nmg_pzn, '') <> '' OR COALESCE(aa.austauschbar_gegen, '') <> '')
+          )
+          -- SP15: Austausch-Artikel (neue Tabelle) ausschliessen.
+          AND NOT EXISTS (
+              SELECT 1 FROM tbl_austauschdatenbank ad
+              WHERE ad.pzn_alt = g.pzn
+                AND (COALESCE(ad.pzn_nmg, '') <> '' OR COALESCE(ad.freitext_austausch, '') <> '')
+                AND COALESCE(ad.status, 'aktiv') = 'aktiv'
+          )
         ORDER BY moeglicher_gesamtumsatz DESC, g.gesamtabsatz_6m DESC
     """
     con.row_factory = sqlite3.Row
@@ -543,7 +553,7 @@ def _produktanalyse_fill_sheet(ws, label: str, rows, basis_auswertungen: int, ba
 
 
 def export_produktanalyse_neu(kundentyp: str = "PK", monate: int = 6) -> Path:
-    """SP14: Neue Produktanalyse nach Spezifikation des Users.
+    """SP14/SP15: Produktanalyse nach Spezifikation des Users.
 
     Args:
         kundentyp: 'PK', 'ZF' oder 'PK+ZF'
@@ -553,10 +563,24 @@ def export_produktanalyse_neu(kundentyp: str = "PK", monate: int = 6) -> Path:
     Sonst eine Excel mit einem Sheet.
 
     Liefert den Pfad zur erzeugten Excel-Datei.
+
+    SP15: Stammdaten (Artikelname, DF, PCK, Hersteller, EK) kommen aus
+    tbl_artikelstamm; Austausch-Artikel werden gefiltert.
     """
     if not DB_PATH.exists():
         init_db(DB_PATH)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # SP15: sicherstellen, dass die referenzierten Tabellen existieren:
+    # - tbl_artikelstamm + ek-Spalte (Migration)
+    # - tbl_austauschdatenbank (sonst SELECT crasht in der WHERE-Klausel)
+    from .artikel_db import ensure_artikelstamm_table
+    ensure_artikelstamm_table()
+    try:
+        from .db_overview import ensure_known_overview_tables
+        ensure_known_overview_tables()
+    except Exception:
+        pass
 
     label = kundentyp.upper().replace(" ", "")
     if label not in ("PK", "ZF", "PK+ZF"):
