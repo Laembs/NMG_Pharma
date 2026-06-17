@@ -170,6 +170,60 @@ class NMGApp(tk.Tk):
         self.bind_all("<Control-Alt-a>", self._toggle_admin_visible)
         self.bind_all("<Control-Alt-A>", self._toggle_admin_visible)
 
+        # SP2: Online-Update-Check (asynchron, blockt den Start nicht).
+        self.after(3000, self._check_online_update_on_startup)
+
+    @staticmethod
+    def _version_tuple(value):
+        """'1.0.2' / 'v1.0.2' / '1.0.2.0' -> (1, 0, 2, 0). Robust gegen Praefix/Suffix."""
+        parts = []
+        for piece in str(value).lstrip("vV").split("."):
+            digits = "".join(c for c in piece if c.isdigit())
+            parts.append(int(digits) if digits else 0)
+        while len(parts) < 4:
+            parts.append(0)
+        return tuple(parts[:4])
+
+    def _check_online_update_on_startup(self):
+        """Fragt GitHub Releases API nach neuester Version. Zeigt Dialog mit
+        Browser-Link, wenn neuer als aktuell. Repo ist public -> kein Token noetig.
+        Laeuft im Hintergrundthread, damit der Programmstart nicht blockiert.
+        """
+        import threading
+        def worker():
+            try:
+                import urllib.request, json
+                url = "https://api.github.com/repos/Laembs/NMG_Pharma/releases/latest"
+                req = urllib.request.Request(url, headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": f"NMGone/{APP_VERSION}",
+                })
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                latest_tag = str(data.get("tag_name", "")).strip()
+                html_url = str(data.get("html_url", "")).strip()
+                if not latest_tag or not html_url:
+                    return
+                if self._version_tuple(latest_tag) > self._version_tuple(APP_VERSION):
+                    self.after(0, lambda: self._show_online_update_dialog(latest_tag, html_url))
+            except Exception:
+                # Offline / kein Internet / Rate Limit -> still bleiben.
+                pass
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_online_update_dialog(self, tag, url):
+        import webbrowser
+        if messagebox.askyesno(
+            "Update verfuegbar",
+            f"Eine neuere Version von NMGone ist verfuegbar: {tag}\n\n"
+            f"Aktuell installiert: V{APP_VERSION}\n\n"
+            f"Moechtest du jetzt die Download-Seite oeffnen?"
+        ):
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+
     def _toggle_admin_visible(self, event=None):
         self._admin_visible = not self._admin_visible
         zustand = "EIN" if self._admin_visible else "AUS"
@@ -6506,26 +6560,23 @@ class NMGApp(tk.Tk):
 
     def show_daten_aktualisieren_page(self):
         self.clear_page()
-        self._page_header("Daten aktualisieren", "Importbereiche für Zukunftswerk, Partnerkonditionen, APU/HAP, NMG Artikel und Rabatte.")
+        # SP2: Zukunftswerk + Partnerkonditionen-Kacheln entfernt - dafuer
+        # ist "Manuelle Analysen" der gemeinsame Einstieg (PK/ZF wird im
+        # Dialog gewaehlt). Layout ist jetzt 3x2.
+        self._page_header("Daten aktualisieren", "Importbereiche für APU/HAP, NMG Artikel, Rabatte und Artikelstamm.")
         body = tk.Frame(self.page, bg="#ffffff")
         body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
         body.columnconfigure((0, 1, 2), weight=1)
-        self._tile(body, 0, "📥", "Zukunftswerk", "ZF-Daten importieren.", "Import", self.import_zf_data, "#3867b7")
-        self._tile(body, 1, "🤝", "Partnerkonditionen", "PK-Daten importieren.", "Import", self.import_pk_data, "#0b4a86")
-        self._tile(body, 2, "💊", "APU/HAP Daten", "APU/HAP Daten importieren.", "Import", self.import_apu_data, "#11823b")
+        self._tile(body, 0, "💊", "APU/HAP Daten", "APU/HAP Daten importieren.", "Import", self.import_apu_data, "#11823b")
+        self._tile(body, 1, "📋", "NMG Artikel", "NMG Artikel importieren.", "Import", self.import_nmg_articles, "#8b5a00")
+        self._tile(body, 2, "💰", "PK Rabatte", "Partnerkonditionen-Rabatte importieren.", "Import", self.import_pk_rabatte, "#6b4fb3")
 
         row2 = tk.Frame(body, bg="#ffffff")
         row2.grid(row=3, column=0, columnspan=3, sticky="ew")
         row2.columnconfigure((0, 1, 2), weight=1)
-        self._tile(row2, 0, "📋", "NMG Artikel", "NMG Artikel importieren.", "Import", self.import_nmg_articles, "#8b5a00")
-        self._tile(row2, 1, "💰", "PK Rabatte", "Partnerkonditionen-Rabatte importieren.", "Import", self.import_pk_rabatte, "#6b4fb3")
-        self._tile(row2, 2, "🔎", "Artikelstamm", "PZN-Artikelbasis importieren.", "Import", self.show_artikelstamm_page, "#0b4a86")
-
-        row3 = tk.Frame(body, bg="#ffffff")
-        row3.grid(row=4, column=0, columnspan=3, sticky="ew")
-        row3.columnconfigure((0, 1, 2), weight=1)
-        self._tile(row3, 0, "📄", "Auswertungsvorlage", "Vorlage der Ausgabe/Auswertung aktualisieren.", "Öffnen", self.show_auswertungsvorlage_page, "#3867b7")
-        self._tile(row3, 1, "📥", "Manuelle Analysen", "Manuelle PK-/ZF-Analysen importieren.", "Import", self.import_manuelle_analysen, "#11823b")
+        self._tile(row2, 0, "🔎", "Artikelstamm", "PZN-Artikelbasis importieren.", "Import", self.show_artikelstamm_page, "#0b4a86")
+        self._tile(row2, 1, "📄", "Auswertungsvorlage", "Vorlage der Ausgabe/Auswertung aktualisieren.", "Öffnen", self.show_auswertungsvorlage_page, "#3867b7")
+        self._tile(row2, 2, "📥", "Manuelle Analysen", "Manuelle PK-/ZF-Analysen importieren.", "Import", self.import_manuelle_analysen, "#11823b")
 
     def _ask_manual_analysis_type(self):
         """Fragt gezielt, ob manuelle Analysen als PK oder ZF importiert werden sollen."""
@@ -7614,8 +7665,16 @@ class NMGApp(tk.Tk):
                                 con.execute(f"UPDATE {ziel_tabelle} SET {set_parts} WHERE {pk_col}=:{pk_col}", record)
                                 aktualisiert += 1
                                 neu = max(0, neu - 1)
-                            except Exception:
-                                pass
+                            except Exception as exc2:
+                                # SP2: Frueher silently geschluckt -> man hat
+                                # nie gesehen warum Daten verschwinden. Jetzt
+                                # in die fehler-Liste, max. 3 pro Datei.
+                                if len([f for f in fehler if "[update-fallback]" in f]) < 3:
+                                    fehler.append(f"{Path(filepath).name} [update-fallback]: {type(exc2).__name__}: {exc2}")
+                        except Exception as exc1:
+                            # Auch nicht-IntegrityError sichtbar machen.
+                            if len([f for f in fehler if "[insert]" in f]) < 3:
+                                fehler.append(f"{Path(filepath).name} [insert]: {type(exc1).__name__}: {exc1}")
                     con.commit()
                 gesamt_neu += neu
                 gesamt_aktualisiert += aktualisiert
