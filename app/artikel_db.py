@@ -47,8 +47,28 @@ def _find_column(header_map, possible_names):
     return None
 
 
+def _decimal(value):
+    """SP15: Konvertiert Excel-Werte ('5,99' / '5.99' / 5.99 / '') zu float oder None.
+    Wird fuer EK / Listen-EK gebraucht.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip().replace(",", ".").replace(" ", "")
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
 def ensure_artikelstamm_table():
-    """Legt die zentrale PZN-Artikelbasis an, ohne bestehende Daten zu löschen."""
+    """Legt die zentrale PZN-Artikelbasis an, ohne bestehende Daten zu löschen.
+    SP15: ek-Spalte (Listen-EK / Taxe-EK / Import-EK) hinzugefuegt - wird in
+    der Produktanalyse fuer die Umsatzberechnung verwendet.
+    """
     with sqlite3.connect(DB_PATH) as con:
         con.execute("""
             CREATE TABLE IF NOT EXISTS tbl_artikelstamm (
@@ -57,12 +77,17 @@ def ensure_artikelstamm_table():
                 df TEXT,
                 pck TEXT,
                 herst TEXT,
+                ek REAL,
                 quelle TEXT NOT NULL DEFAULT 'Import',
                 treffer INTEGER NOT NULL DEFAULT 1,
                 erstellt_am TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 aktualisiert_am TEXT
             )
         """)
+        # SP15: Migration fuer Bestands-DBs - falls die ek-Spalte fehlt, nachpflegen.
+        cols = {r[1] for r in con.execute("PRAGMA table_info(tbl_artikelstamm)").fetchall()}
+        if "ek" not in cols:
+            con.execute("ALTER TABLE tbl_artikelstamm ADD COLUMN ek REAL")
         con.execute("""
             CREATE INDEX IF NOT EXISTS idx_artikelstamm_artikel
             ON tbl_artikelstamm (artikel)
@@ -91,8 +116,14 @@ def _detect_columns(ws):
         col_df = _find_column(header_map, ["DF", "DAR", "Darreichungsform"])
         col_pck = _find_column(header_map, ["PCK", "Pck", "Packung", "Pack.Gr", "Packungsgröße", "Packungsgroesse"])
         col_herst = _find_column(header_map, ["Herst", "Herst.", "Hersteller", "Herstellerkürzel", "Anbieter", "Firma", "Lieferant"])
+        # SP15: EK-Spalte (Listen-EK, Taxe-EK, Import-EK etc.)
+        col_ek = _find_column(header_map, [
+            "EK", "Listen-EK", "Listen EK", "ListenEK", "Import EK", "Import-EK",
+            "ImportEK", "TAX-EK", "TAXEK", "Taxe EK", "Taxe-EK", "Einkaufspreis",
+            "EK Preis", "Einkauf",
+        ])
 
-        score = int(bool(col_pzn)) * 10 + sum(int(bool(x)) for x in [col_artikel, col_df, col_pck, col_herst])
+        score = int(bool(col_pzn)) * 10 + sum(int(bool(x)) for x in [col_artikel, col_df, col_pck, col_herst, col_ek])
         if score > best_score:
             best_score = score
             best_map = {
@@ -102,6 +133,7 @@ def _detect_columns(ws):
                 "df": col_df,
                 "pck": col_pck,
                 "herst": col_herst,
+                "ek": col_ek,
             }
 
     if not best_map.get("pzn"):
@@ -141,22 +173,30 @@ def import_artikelstamm_excel(file_path, quelle="Artikelstamm-Import", progress_
     idx_df = col_index("df")
     idx_pck = col_index("pck")
     idx_herst = col_index("herst")
+    idx_ek = col_index("ek")  # SP15
 
     def get(row, idx):
         if idx is None or idx >= len(row):
             return ""
         return _clean(row[idx])
 
+    def get_decimal(row, idx):
+        # SP15: numerische Spalten (EK) sicher parsen.
+        if idx is None or idx >= len(row):
+            return None
+        return _decimal(row[idx])
+
     sql = """
         INSERT INTO tbl_artikelstamm (
-            pzn, artikel, df, pck, herst, quelle, treffer, erstellt_am, aktualisiert_am
+            pzn, artikel, df, pck, herst, ek, quelle, treffer, erstellt_am, aktualisiert_am
         )
-        VALUES (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, NULL)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, NULL)
         ON CONFLICT(pzn) DO UPDATE SET
             artikel = COALESCE(NULLIF(excluded.artikel, ''), tbl_artikelstamm.artikel),
             df = COALESCE(NULLIF(excluded.df, ''), tbl_artikelstamm.df),
             pck = COALESCE(NULLIF(excluded.pck, ''), tbl_artikelstamm.pck),
             herst = COALESCE(NULLIF(excluded.herst, ''), tbl_artikelstamm.herst),
+            ek = COALESCE(excluded.ek, tbl_artikelstamm.ek),
             quelle = excluded.quelle,
             treffer = tbl_artikelstamm.treffer + 1,
             aktualisiert_am = CURRENT_TIMESTAMP
@@ -179,6 +219,7 @@ def import_artikelstamm_excel(file_path, quelle="Artikelstamm-Import", progress_
                     get(row, idx_df),
                     get(row, idx_pck),
                     get(row, idx_herst),
+                    get_decimal(row, idx_ek),  # SP15
                     quelle,
                 ))
 
