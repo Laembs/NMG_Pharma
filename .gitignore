@@ -10,6 +10,10 @@ backups/
 *.db
 *.zip
 
+# Ausnahme: das Uebersetzungs-Excel ist OK (keine Kundendaten,
+# Repo-Inhalt - SP11 i18n-Workflow)
+!translations/NMGone_Translations.xlsx
+
 # === Lokale Claude-Code-State-Files ===
 .claude/
 
