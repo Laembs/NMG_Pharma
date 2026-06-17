@@ -261,6 +261,7 @@ class NMGApp(tk.Tk):
                 f"Aktuell installiert: V{APP_VERSION}\n"
                 f"Datei: {path.name}\n\n"
                 f"Jetzt installieren?"
+                f"{self.SMARTSCREEN_HINT}"
             ):
                 self._launch_setup_and_exit(path)
             # Wer "Nein" sagt: kein Online-Check (gleiche Version).
@@ -334,6 +335,7 @@ class NMGApp(tk.Tk):
             f"Jetzt herunterladen und installieren?\n\n"
             f"NMGone schliesst sich automatisch, der Setup-Assistent startet,\n"
             f"deine Daten unter C:\\ProgramData\\NMGone bleiben unberuehrt."
+            f"{self.SMARTSCREEN_HINT}"
         ):
             self._download_and_install_update(asset_url, tag)
 
@@ -394,6 +396,7 @@ class NMGApp(tk.Tk):
                         f"JA = jetzt installieren (NMGone beendet sich kurz und oeffnet sich danach wieder)\n"
                         f"NEIN = spaeter installieren (Setup bleibt im updates-Ordner und wird beim naechsten Start angeboten)\n"
                         f"ABBRECHEN = Datei wieder loeschen"
+                        f"{self.SMARTSCREEN_HINT}"
                     )
                     if answer is True:
                         self._launch_setup_and_exit(final_path)
@@ -660,6 +663,19 @@ class NMGApp(tk.Tk):
 
     # ── ADMIN-LOGINS (kein Pflichtprofil, kein Pflichtdialog) ──────────────────
     ADMIN_LOGINS = {"laemb", "jagdeal", "user"}
+
+    # SP6: Hinweistext wird an alle Update-Dialoge gehaengt, in denen ein
+    # Setup gestartet werden koennte. Weil wir kein Code-Signing-Cert haben,
+    # warnt SmartScreen jedes Mal "Unbekannter Herausgeber" - der User
+    # braucht die Klick-Anleitung.
+    SMARTSCREEN_HINT = (
+        "\n\nHINWEIS - Windows zeigt beim Setup-Start ggf. die Meldung\n"
+        "\"Der Computer wurde durch Windows geschuetzt\". Das ist normal,\n"
+        "weil das Setup (noch) kein Code-Signing-Zertifikat hat.\n\n"
+        "Schritte zum Fortfahren:\n"
+        "  1. Klicke oben auf \"Weitere Informationen\"\n"
+        "  2. Klicke unten auf den Button \"Trotzdem ausfuehren\""
+    )
 
     def _is_admin_login(self):
         return (self.bearbeiter or "").strip().lower() in self.ADMIN_LOGINS
@@ -2698,6 +2714,7 @@ class NMGApp(tk.Tk):
                 f"Version: V{version_str}\n"
                 f"Aktuell installiert: V{APP_VERSION}\n\n"
                 f"Jetzt installieren?"
+                f"{self.SMARTSCREEN_HINT}"
             ):
                 self._launch_setup_and_exit(path)
                 return
