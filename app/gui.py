@@ -39,6 +39,7 @@ from .roadmap_db import (
 )
 from .migrations import run_migrations
 from .config import DB_PATH, DATA_DIR, ASSETS_DIR, SAVED_ANALYSES_DIR, UPDATE_DIR, OUTPUT_DIR, BACKUP_DIR, LOG_DIR
+from .i18n import T as _T  # SP11: dict-basierte Uebersetzung
 from .backup import backup_erstellen, backup_wiederherstellen, backup_pruefen, versionsinfo, APP_VERSION, APP_VERSION_DISPLAY, backup_auto_taeglich, DB_SCHEMA_VERSION
 from .protocol_manager import (
     ensure_protocol_dirs, log_event, log_exception, list_protocol_files, read_protocol_file,
@@ -1031,22 +1032,24 @@ class NMGApp(tk.Tk):
         """Ausklappbarer Menübaum. Beschlossene Punkte bleiben sichtbar."""
         tree = self.nav_tree
 
-        tree.insert("", "end", "startseite", text="🏠  Startseite")
-        tree.insert("", "end", "neue_auswertung", text="📊  Neue Auswertung")
+        # SP11: alle Navi-Texte ueber _T() - Sprache wird beim Programmstart aus
+        # language.json gelesen und gilt bis zum naechsten Start.
+        tree.insert("", "end", "startseite", text=f"🏠  {_T('Startseite')}")
+        tree.insert("", "end", "neue_auswertung", text=f"📊  {_T('Neue Auswertung')}")
 
-        tree.insert("", "end", "apps", text="🚀  Apps")
-        tree.insert("", "end", "analysen", text="📁  Analysen")
-        tree.insert("", "end", "schulbank", text="🎓  Schulbank")
-        tree.insert("", "end", "daten_aktualisieren", text="🗄  Daten aktualisieren")
-        tree.insert("", "end", "update_backup", text="🔄  Update / Backup")
-        
-        tree.insert("", "end", "datenbankuebersicht", text="🗄  Datenbankübersicht")
+        tree.insert("", "end", "apps", text=f"🚀  {_T('Apps')}")
+        tree.insert("", "end", "analysen", text=f"📁  {_T('Analysen')}")
+        tree.insert("", "end", "schulbank", text=f"🎓  {_T('Schulbank')}")
+        tree.insert("", "end", "daten_aktualisieren", text=f"🗄  {_T('Daten aktualisieren')}")
+        tree.insert("", "end", "update_backup", text=f"🔄  {_T('Update / Backup')}")
 
-        tree.insert("", "end", "report", text="📋  Report")
-        tree.insert("", "end", "roadmap", text="📌  Roadmap")
+        tree.insert("", "end", "datenbankuebersicht", text=f"🗄  {_T('Datenbankübersicht')}")
 
-        tree.insert("", "end", "datenbankpfad", text="☁️  Cloud / DB-Pfad")
-        tree.insert("", "end", "hilfe", text="❓  Hilfe")
+        tree.insert("", "end", "report", text=f"📋  {_T('Report')}")
+        tree.insert("", "end", "roadmap", text=f"📌  {_T('Roadmap')}")
+
+        tree.insert("", "end", "datenbankpfad", text=f"☁️  {_T('Cloud / DB-Pfad')}")
+        tree.insert("", "end", "hilfe", text=f"❓  {_T('Hilfe')}")
 
     def _on_nav_select(self, event=None):
         selected = self.nav_tree.selection()
@@ -8549,6 +8552,104 @@ class NMGApp(tk.Tk):
 
 
 
+def _show_splash_screen():
+    """SP11: Splash mit Sprach-Auswahl und Start-Button.
+    Liefert True wenn der User Start geklickt hat, False bei Abbruch.
+    Sprache wird ggf. in language.json gespeichert; ab dem naechsten T()-
+    Aufruf gilt sie.
+    """
+    from .i18n import LANGUAGES, load_language, save_language, get_language, T
+
+    load_language()
+
+    splash_root = tk.Tk()
+    splash_root.title("NMGone")
+    splash_root.configure(bg="#f5f7fb")
+    splash_root.resizable(False, False)
+    try:
+        splash_root.iconbitmap(str(ASSETS_DIR / "NMGone.ico"))
+    except Exception:
+        pass
+
+    # Zentriert auf dem Bildschirm
+    ww, wh = 520, 420
+    sw = splash_root.winfo_screenwidth()
+    sh = splash_root.winfo_screenheight()
+    splash_root.geometry(f"{ww}x{wh}+{(sw - ww) // 2}+{(sh - wh) // 3}")
+
+    # Logo
+    try:
+        logo_path = ASSETS_DIR / "NMGone.png"
+        if logo_path.exists():
+            raw = tk.PhotoImage(file=str(logo_path))
+            factor = max(1, int(max(raw.width() / 260, raw.height() / 110) + 0.999))
+            splash_root._logo_img = raw.subsample(factor, factor)
+            tk.Label(splash_root, image=splash_root._logo_img, bg="#f5f7fb").pack(pady=(28, 12))
+    except Exception:
+        pass
+
+    welcome_var = tk.StringVar(value=T("Willkommen bei NMGone"))
+    tk.Label(splash_root, textvariable=welcome_var, font=("Arial", 16, "bold"),
+             fg="#0b4a86", bg="#f5f7fb").pack(pady=(0, 18))
+
+    lang_label_var = tk.StringVar(value=T("Sprache auswählen"))
+    tk.Label(splash_root, textvariable=lang_label_var, font=("Arial", 11),
+             fg="#444", bg="#f5f7fb").pack()
+
+    # Dropdown mit Code -> "Anzeige (Code)"
+    lang_codes = list(LANGUAGES.keys())
+    lang_display = [f"{LANGUAGES[c]} ({c})" for c in lang_codes]
+    current_idx = lang_codes.index(get_language()) if get_language() in lang_codes else 0
+    lang_var = tk.StringVar(value=lang_display[current_idx])
+
+    combo = ttk.Combobox(splash_root, textvariable=lang_var, values=lang_display,
+                         state="readonly", font=("Arial", 11), width=20, justify="center")
+    combo.pack(pady=(6, 24))
+
+    def _on_lang_change(_event=None):
+        # Aktive Sprache wechseln und die Splash-Texte live aktualisieren.
+        sel = lang_var.get()
+        for c in lang_codes:
+            if sel.endswith(f"({c})"):
+                save_language(c)
+                welcome_var.set(T("Willkommen bei NMGone"))
+                lang_label_var.set(T("Sprache auswählen"))
+                start_btn.config(text=T("Starten"))
+                break
+
+    combo.bind("<<ComboboxSelected>>", _on_lang_change)
+
+    started = {"ok": False}
+
+    def _on_start():
+        # Auswahl persistieren und Splash schliessen.
+        _on_lang_change()
+        started["ok"] = True
+        splash_root.destroy()
+
+    start_btn = tk.Button(
+        splash_root, text=T("Starten"), command=_on_start,
+        bg="#0b4a86", fg="white", relief="flat",
+        font=("Arial", 13, "bold"), padx=28, pady=10, cursor="hand2",
+    )
+    start_btn.pack(pady=(0, 18))
+
+    from .backup import APP_VERSION_DISPLAY
+    tk.Label(splash_root, text=f"NMGone {APP_VERSION_DISPLAY}",
+             font=("Arial", 9), fg="#888", bg="#f5f7fb").pack(side="bottom", pady=(0, 12))
+
+    # Enter = Start, Escape = Beenden
+    splash_root.bind("<Return>", lambda e: _on_start())
+    splash_root.bind("<Escape>", lambda e: splash_root.destroy())
+
+    splash_root.mainloop()
+    return started["ok"]
+
+
 def main():
+    # SP11: erst Splash, dann Hauptprogramm. Wenn der User die Splash
+    # ueber X/Escape schliesst, wird das Hauptprogramm nicht gestartet.
+    if not _show_splash_screen():
+        return
     app = NMGApp()
     app.mainloop()
