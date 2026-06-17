@@ -184,45 +184,172 @@ class NMGApp(tk.Tk):
             parts.append(0)
         return tuple(parts[:4])
 
+    @staticmethod
+    def _fetch_latest_release_info(timeout=8):
+        """Holt latest-release-Info von GitHub. Liefert (tag, html_url, asset_url)
+        oder (None, None, None). Wird vom Startup-Check und vom Menue-Knopf
+        'Update suchen' gleichermassen genutzt.
+        """
+        import urllib.request, json
+        url = "https://api.github.com/repos/Laembs/NMG_Pharma/releases/latest"
+        req = urllib.request.Request(url, headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"NMGone/{APP_VERSION}",
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        tag = str(data.get("tag_name", "")).strip()
+        html_url = str(data.get("html_url", "")).strip()
+        asset_url = None
+        for asset in data.get("assets", []) or []:
+            name = str(asset.get("name", "")).lower()
+            if name.endswith(".exe"):
+                asset_url = str(asset.get("browser_download_url", "")).strip()
+                break
+        return (tag or None, html_url or None, asset_url or None)
+
     def _check_online_update_on_startup(self):
-        """Fragt GitHub Releases API nach neuester Version. Zeigt Dialog mit
-        Browser-Link, wenn neuer als aktuell. Repo ist public -> kein Token noetig.
-        Laeuft im Hintergrundthread, damit der Programmstart nicht blockiert.
+        """Beim Start asynchron checken. Wenn neuer als APP_VERSION:
+        Dialog mit Direkt-Install-Option. Wer 'Nein' sagt, wird beim
+        naechsten Start wieder gefragt (kein State gespeichert).
         """
         import threading
         def worker():
             try:
-                import urllib.request, json
-                url = "https://api.github.com/repos/Laembs/NMG_Pharma/releases/latest"
-                req = urllib.request.Request(url, headers={
-                    "Accept": "application/vnd.github+json",
-                    "User-Agent": f"NMGone/{APP_VERSION}",
-                })
-                with urllib.request.urlopen(req, timeout=8) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                latest_tag = str(data.get("tag_name", "")).strip()
-                html_url = str(data.get("html_url", "")).strip()
-                if not latest_tag or not html_url:
+                tag, html_url, asset_url = self._fetch_latest_release_info(timeout=8)
+                if not tag:
                     return
-                if self._version_tuple(latest_tag) > self._version_tuple(APP_VERSION):
-                    self.after(0, lambda: self._show_online_update_dialog(latest_tag, html_url))
+                if self._version_tuple(tag) > self._version_tuple(APP_VERSION):
+                    self.after(0, lambda: self._show_online_update_dialog(tag, html_url, asset_url))
             except Exception:
-                # Offline / kein Internet / Rate Limit -> still bleiben.
+                # Offline / Rate Limit -> beim naechsten Start wieder versuchen.
                 pass
         threading.Thread(target=worker, daemon=True).start()
 
-    def _show_online_update_dialog(self, tag, url):
-        import webbrowser
+    def _show_online_update_dialog(self, tag, html_url, asset_url=None):
+        """Bietet Direkt-Install an. Wenn aus irgendeinem Grund kein
+        .exe-Asset gefunden wurde (defektes Release), Browser-Fallback.
+        """
+        if not asset_url:
+            import webbrowser
+            if messagebox.askyesno(
+                "Update verfuegbar",
+                f"Neue Version: {tag}\nAktuell: V{APP_VERSION}\n\n"
+                f"Konnte das Setup nicht direkt finden. Download-Seite oeffnen?"
+            ):
+                try:
+                    webbrowser.open(html_url or "https://github.com/Laembs/NMG_Pharma/releases")
+                except Exception:
+                    pass
+            return
+
         if messagebox.askyesno(
             "Update verfuegbar",
-            f"Eine neuere Version von NMGone ist verfuegbar: {tag}\n\n"
+            f"Eine neuere Version von NMGone ist verfuegbar: {tag}\n"
             f"Aktuell installiert: V{APP_VERSION}\n\n"
-            f"Moechtest du jetzt die Download-Seite oeffnen?"
+            f"Jetzt herunterladen und installieren?\n\n"
+            f"NMGone schliesst sich automatisch, der Setup-Assistent startet,\n"
+            f"deine Daten unter C:\\ProgramData\\NMGone bleiben unberuehrt."
         ):
+            self._download_and_install_update(asset_url, tag)
+
+    def _download_and_install_update(self, asset_url, tag):
+        """Laedt Setup.exe nach %TEMP%, ruft sie auf, beendet die App.
+        Inno Setup uebernimmt den Rest (Upgrade ueber gleiche AppId).
+        Laeuft im Worker-Thread - der Hauptloop muss reaktiv bleiben fuer
+        Progress-Updates.
+        """
+        import threading
+        busy = self._show_busy_modal(f"Update {tag} herunterladen", "Verbindung zu GitHub...")
+
+        def worker():
             try:
-                webbrowser.open(url)
-            except Exception:
-                pass
+                import urllib.request, tempfile, subprocess
+                temp_dir = Path(tempfile.gettempdir())
+                safe_tag = tag.lstrip("vV").replace(".", "_")
+                target = temp_dir / f"NMGone_Setup_{safe_tag}.exe"
+
+                req = urllib.request.Request(asset_url, headers={
+                    "User-Agent": f"NMGone/{APP_VERSION}",
+                    "Accept": "application/octet-stream",
+                })
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    total = int(resp.headers.get("Content-Length", 0))
+                    with open(target, "wb") as fh:
+                        downloaded = 0
+                        block = 128 * 1024
+                        while True:
+                            chunk = resp.read(block)
+                            if not chunk:
+                                break
+                            fh.write(chunk)
+                            downloaded += len(chunk)
+                            if total:
+                                pct = int(100 * downloaded / total)
+                                mb_done = downloaded / 1024 / 1024
+                                mb_total = total / 1024 / 1024
+                                self.after(0, lambda p=pct, md=mb_done, mt=mb_total:
+                                    self._set_busy_message(busy, f"Download {p}% ({md:.1f} / {mt:.1f} MB)"))
+                            else:
+                                mb_done = downloaded / 1024 / 1024
+                                self.after(0, lambda md=mb_done:
+                                    self._set_busy_message(busy, f"Heruntergeladen: {md:.1f} MB"))
+
+                if target.stat().st_size < 1_000_000:
+                    raise ValueError(f"Download zu klein ({target.stat().st_size} bytes) - vermutlich fehlgeschlagen")
+
+                final_path = target
+                final_size = target.stat().st_size
+                def launch():
+                    self._close_busy_modal(busy)
+                    if not messagebox.askyesno(
+                        "Update bereit",
+                        f"Download abgeschlossen ({final_size / 1024 / 1024:.1f} MB).\n\n"
+                        f"Setup startet jetzt und installiert {tag}.\n"
+                        f"NMGone beendet sich dazu kurz und oeffnet sich automatisch wieder.\n\n"
+                        f"Fortfahren?"
+                    ):
+                        return
+                    try:
+                        # /SILENT: kleiner Fortschrittsdialog, keine Klicks noetig
+                        # /SUPPRESSMSGBOXES: skippt InitializeSetup-MsgBox
+                        # /CLOSEAPPLICATIONS: schliesst eine eventuell noch laufende Instanz
+                        # DETACHED_PROCESS: ueberlebt das Beenden von NMGone
+                        flags = 0
+                        if sys.platform == "win32":
+                            flags = (
+                                getattr(subprocess, "DETACHED_PROCESS", 0)
+                                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                            )
+                        subprocess.Popen(
+                            [str(final_path), "/SILENT", "/SUPPRESSMSGBOXES", "/CLOSEAPPLICATIONS"],
+                            close_fds=True,
+                            creationflags=flags,
+                        )
+                    except Exception as exc:
+                        messagebox.showerror(
+                            "Update",
+                            f"Setup konnte nicht gestartet werden:\n{exc}\n\n"
+                            f"Datei liegt unter:\n{final_path}"
+                        )
+                        return
+                    # Self-exit nach kurzer Pause, damit Popen sicher feuern kann
+                    self.after(800, self.destroy)
+                self.after(0, launch)
+
+            except Exception as exc:
+                error_text = f"{type(exc).__name__}: {exc}"
+                def failed():
+                    self._close_busy_modal(busy)
+                    messagebox.showerror(
+                        "Update fehlgeschlagen",
+                        f"Konnte das Update nicht herunterladen:\n\n{error_text}\n\n"
+                        f"Du kannst das Update auch manuell holen:\n"
+                        f"https://github.com/Laembs/NMG_Pharma/releases/tag/{tag}"
+                    )
+                self.after(0, failed)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _show_busy_modal(self, title, subtitle="Bitte warten..."):
         """SP3: Modaler Warte-Dialog mit Logo + Indeterminate-Progressbar +
@@ -8079,10 +8206,47 @@ class NMGApp(tk.Tk):
         )
 
     def check_online_update(self):
-        messagebox.showinfo(
-            "Online Update",
-            "Online-Updateprüfung folgt in Version 4.0."
-        )
+        """Manueller Check via 'Update / Backup' -> 'Update suchen'-Kachel.
+        Anders als der Startup-Check zeigt diese Variante immer eine Rueckmeldung,
+        auch wenn die aktuelle Version schon die neueste ist.
+        """
+        import threading
+        busy = self._show_busy_modal("Update suchen", "Frage GitHub nach neuester Version...")
+
+        def worker():
+            try:
+                tag, html_url, asset_url = self._fetch_latest_release_info(timeout=10)
+                def on_main():
+                    self._close_busy_modal(busy)
+                    if not tag:
+                        messagebox.showinfo(
+                            "Update suchen",
+                            "Konnte keine Release-Info von GitHub holen.\n"
+                            "Pruefe deine Internetverbindung und versuche es erneut."
+                        )
+                        return
+                    if self._version_tuple(tag) > self._version_tuple(APP_VERSION):
+                        self._show_online_update_dialog(tag, html_url, asset_url)
+                    else:
+                        messagebox.showinfo(
+                            "Update suchen",
+                            f"Du hast bereits die aktuellste Version installiert.\n\n"
+                            f"Installiert: V{APP_VERSION}\n"
+                            f"Neueste auf GitHub: {tag}"
+                        )
+                self.after(0, on_main)
+            except Exception as exc:
+                error_text = f"{type(exc).__name__}: {exc}"
+                def failed():
+                    self._close_busy_modal(busy)
+                    messagebox.showerror(
+                        "Update suchen",
+                        f"Konnte GitHub nicht erreichen:\n\n{error_text}\n\n"
+                        f"Pruefe deine Internetverbindung."
+                    )
+                self.after(0, failed)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def show_roadmap_page(self):
         self.clear_page()

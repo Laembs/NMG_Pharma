@@ -1,7 +1,7 @@
 {
   "app": "NMGone",
-  "version": "1.0.3",
-  "version_display": "V1.0 SP3",
+  "version": "1.0.4",
+  "version_display": "V1.0 SP4",
   "db_schema_version": "1.1",
   "build_date": "2026-06-13"
 }
