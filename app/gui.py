@@ -18,7 +18,7 @@ from .importer import import_excel
 from .learning_db import import_learning_list, import_checked_auswertung
 from .manual_analysis_import import import_manual_analysis_files
 from .exporter import create_linden_export, UnknownInputFormatError
-from .market import export_marktanalyse_nicht_nmg, export_marktanalyse_produktchancen, datenbankstatus
+from .market import export_marktanalyse_nicht_nmg, export_marktanalyse_produktchancen, datenbankstatus, export_produktanalyse_neu
 from .compare import export_abweichungsanalyse
 from .historical_import import import_historical_market_folder, import_historical_market_file
 from .austausch_db import import_austausch_excel, count_austauschdatenbank, add_austausch_entry
@@ -1793,17 +1793,69 @@ class NMGApp(tk.Tk):
     # SP7: market_analysis (Marktanalyse) komplett entfernt - "Produktanalyse"
     # deckt fachlich alles ab, was wir brauchen.
 
-    def market_opportunities(self):
-        self._log_action("produktanalyse", "Produktanalyse gestartet")
-        dq = self._ask_data_source("Produktanalyse")
-        if not dq:
-            return
+    def _ask_produktanalyse_kundentyp(self):
+        """SP14: Fragt PK / ZF / PK+ZF ab. Liefert String oder None bei Abbruch."""
+        win = tk.Toplevel(self)
+        win.title("Produktanalyse")
+        win.transient(self)
+        win.grab_set()
+        win.configure(bg="#f5f7fb")
+        win.resizable(False, False)
         try:
-            out = export_marktanalyse_produktchancen(limit=500, min_apotheken=1, datenquelle=dq)
-            self._log_action("produktanalyse", "Produktanalyse erzeugt", f"Datenquelle: {dq} | Datei: {out}")
-            self.status.set(f"Produktchancen-Marktanalyse erzeugt: {out}")
-            messagebox.showinfo("Fertig", f"Produktchancen-Marktanalyse erstellt:\n{out}")
+            self.update_idletasks()
+            px, py = self.winfo_x(), self.winfo_y()
+            pw, ph = self.winfo_width(), self.winfo_height()
+            ww, wh = 460, 280
+            win.geometry(f"{ww}x{wh}+{px + max(0, (pw - ww) // 2)}+{py + max(0, (ph - wh) // 2)}")
+        except Exception:
+            win.geometry("460x280")
+
+        tk.Label(win, text="Welche Auswertungen sollen ausgewertet werden?",
+                 font=("Arial", 13, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(pady=(20, 6))
+        tk.Label(win, text="Filter: nur Auswertungen der letzten 6 Monate.",
+                 font=("Arial", 10), fg="#444", bg="#f5f7fb").pack(pady=(0, 18))
+
+        choice = {"value": None}
+
+        def pick(val):
+            choice["value"] = val
+            win.destroy()
+
+        btn_frame = tk.Frame(win, bg="#f5f7fb")
+        btn_frame.pack()
+        for label, val, color in [
+            ("📊 PK", "PK", "#0b4a86"),
+            ("📊 ZF", "ZF", "#3867b7"),
+            ("📊 PK + ZF", "PK+ZF", "#11823b"),
+        ]:
+            tk.Button(btn_frame, text=label, command=lambda v=val: pick(v),
+                      bg=color, fg="white", relief="flat",
+                      font=("Arial", 12, "bold"), padx=20, pady=10, width=10).pack(side="left", padx=6)
+
+        tk.Button(win, text="Abbrechen", command=win.destroy, padx=12, pady=6).pack(pady=(20, 12))
+        win.bind("<Escape>", lambda e: win.destroy())
+        self.wait_window(win)
+        return choice["value"]
+
+    def market_opportunities(self):
+        # SP14: neuer Workflow - User waehlt PK/ZF/PK+ZF, dann erzeuge
+        # Produktchancen-Excel pro Kundentyp (bei PK+ZF: 3 Tabs).
+        self._log_action("produktanalyse", "Produktanalyse gestartet")
+        kundentyp = self._ask_produktanalyse_kundentyp()
+        if not kundentyp:
+            return
+        busy = self._show_busy_modal("Produktanalyse", f"Erzeuge Produktanalyse {kundentyp}...")
+        try:
+            out = export_produktanalyse_neu(kundentyp=kundentyp, monate=6)
+            self._close_busy_modal(busy)
+            self._log_action("produktanalyse", "Produktanalyse erzeugt",
+                             f"Kundentyp: {kundentyp} | Datei: {out}")
+            self.status.set(f"Produktanalyse erzeugt: {out}")
+            if messagebox.askyesno("Fertig",
+                                   f"Produktanalyse {kundentyp} erstellt:\n{out}\n\nDatei jetzt oeffnen?"):
+                _open_file(out)
         except Exception as exc:
+            self._close_busy_modal(busy)
             self._log_error("produktanalyse", "Produktanalyse", exc)
             messagebox.showerror("Produktanalyse-Fehler", str(exc))
 
