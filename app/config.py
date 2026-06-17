@@ -21,11 +21,21 @@ def _load_install_data_root() -> Path | None:
     2. Umgebungsvariable NMGONE_DATA_ROOT
     3. Installiertes .exe auf Windows: C:/ProgramData/NMGone
     4. Dev-Modus (python start.py): lokaler data/-Ordner im Repo
+
+    SP7: Skelett fuer kuenftige SharePoint/OneDrive-Umleitung. Bewusst
+    auskommentiert - wird in einem spaeteren SP aktiviert, wenn das
+    Feature freigegeben wird. Dann liest die App den Pfad aus
+    install_config.json -> "data_root_override" (oder aus der meta-Tabelle)
+    und routet darueber. Bis dahin bleibt alles wie heute.
     """
     cfg = BASE_DIR / "install_config.json"
     if cfg.exists():
         try:
             payload = json.loads(cfg.read_text(encoding="utf-8"))
+            # TODO SP-future: zuerst override pruefen, wenn freigegeben
+            # override = str(payload.get("data_root_override", "")).strip()
+            # if override and payload.get("feature_custom_data_root_enabled"):
+            #     return Path(os.path.expandvars(override)).expanduser()
             raw = str(payload.get("data_root", "")).strip()
             if raw:
                 return Path(os.path.expandvars(raw)).expanduser()

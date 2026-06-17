@@ -38,7 +38,7 @@ from .roadmap_db import (
     update_roadmap_status,
 )
 from .migrations import run_migrations
-from .config import DB_PATH, DATA_DIR, ASSETS_DIR, SAVED_ANALYSES_DIR, UPDATE_DIR, OUTPUT_DIR
+from .config import DB_PATH, DATA_DIR, ASSETS_DIR, SAVED_ANALYSES_DIR, UPDATE_DIR, OUTPUT_DIR, BACKUP_DIR, LOG_DIR
 from .backup import backup_erstellen, backup_wiederherstellen, backup_pruefen, versionsinfo, APP_VERSION, APP_VERSION_DISPLAY, backup_auto_taeglich, DB_SCHEMA_VERSION
 from .protocol_manager import (
     ensure_protocol_dirs, log_event, log_exception, list_protocol_files, read_protocol_file,
@@ -1466,13 +1466,11 @@ class NMGApp(tk.Tk):
         start_action:
         - None: normale Übersicht
         - "produktanalyse": Nutzer soll zuerst eine Auswertung auswählen
-        - "marktanalyse": Nutzer soll zuerst eine Auswertung auswählen
+        SP7: marktanalyse-Branch entfernt - Funktion komplett raus.
         """
         self.clear_page()
         if start_action == "produktanalyse":
             self._page_header("Produktanalyse – Auswertung auswählen", "Bitte erst eine gespeicherte Auswertung auswählen. Danach wird die Produktanalyse genau für diese Auswertung erstellt.")
-        elif start_action == "marktanalyse":
-            self._page_header("Marktanalyse – Auswertung auswählen", "Bitte erst eine gespeicherte Auswertung auswählen. Danach wird die Marktanalyse genau für diese Auswertung erstellt.")
         else:
             self._page_header("Gespeicherte Analysen", "Analyse auswählen und direkt weiter auswerten.")
 
@@ -1667,18 +1665,6 @@ class NMGApp(tk.Tk):
             except Exception as exc:
                 messagebox.showerror("Produktanalyse", str(exc))
 
-        def market_selected():
-            row = selected_row()
-            if not row:
-                return
-            dq = row["datenquelle"] or "NMG"
-            try:
-                out = export_marktanalyse_nicht_nmg(limit=200, min_apotheken=1, datenquelle=dq, auswertung_id=int(row["id"]))
-                self.status.set(f"Marktanalyse für Analyse {row['id']} erzeugt: {out}")
-                messagebox.showinfo("Marktanalyse", f"Marktanalyse erstellt:\n{out}")
-            except Exception as exc:
-                messagebox.showerror("Marktanalyse", str(exc))
-
         def deviation_selected():
             row = selected_row()
             if not row:
@@ -1704,7 +1690,6 @@ class NMGApp(tk.Tk):
 
         add_btn("📄 Auswertung öffnen", open_selected_output, "#0b4a86")
         add_btn("📈 Produktanalyse", product_selected, "#11823b")
-        add_btn("🌍 Marktanalyse", market_selected, "#3867b7")
         add_btn("🔍 Abweichungsanalyse", deviation_selected, "#8b5a00")
         tk.Button(side, text="Ordner gespeicherte Analysen", command=lambda: _open_folder(SAVED_ANALYSES_DIR), padx=10, pady=7).pack(fill="x", padx=16, pady=(14, 5))
         tk.Button(side, text="🔐 Admin: Auswertungen löschen", command=self.open_admin_auswertungen_loeschen, bg="#9b1c1c", fg="white", relief="flat", font=("Arial", 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(8, 5))
@@ -1799,19 +1784,8 @@ class NMGApp(tk.Tk):
         self.status.set(msg)
         messagebox.showinfo("ZF-Import", msg)
 
-    def market_analysis(self):
-        self._log_action("marktanalyse", "Marktanalyse gestartet")
-        dq = self._ask_data_source("Marktanalyse")
-        if not dq:
-            return
-        try:
-            out = export_marktanalyse_nicht_nmg(limit=200, min_apotheken=1, datenquelle=dq)
-            self._log_action("marktanalyse", "Marktanalyse erzeugt", f"Datenquelle: {dq} | Datei: {out}")
-            self.status.set(f"Marktanalyse erzeugt: {out}")
-            messagebox.showinfo("Fertig", f"Marktanalyse erstellt:\n{out}")
-        except Exception as exc:
-            self._log_error("marktanalyse", "Marktanalyse", exc)
-            messagebox.showerror("Marktanalyse-Fehler", str(exc))
+    # SP7: market_analysis (Marktanalyse) komplett entfernt - "Produktanalyse"
+    # deckt fachlich alles ab, was wir brauchen.
 
     def market_opportunities(self):
         self._log_action("produktanalyse", "Produktanalyse gestartet")
@@ -2668,7 +2642,7 @@ class NMGApp(tk.Tk):
         tk.Label(win, text="Beim Programmstart wird automatisch ein Tagesbackup erstellt.\nEs werden die letzten 7 Auto-Backups behalten.").pack(pady=4)
         tk.Button(win, text="Backup jetzt manuell erstellen", command=self.create_backup, bg="#0b4a86", fg="white", padx=18, pady=8).pack(pady=6)
         tk.Button(win, text="Backup wiederherstellen", command=self.restore_backup, padx=18, pady=8).pack(pady=6)
-        tk.Button(win, text="Backup-Ordner öffnen", command=lambda: _open_folder(Path(__file__).resolve().parent.parent / "backups")).pack(pady=6)
+        tk.Button(win, text="Backup-Ordner öffnen", command=lambda: _open_folder(BACKUP_DIR)).pack(pady=6)
 
     def create_backup(self):
         self._log_action("update_backup", "Backup manuell gestartet")
@@ -3118,7 +3092,13 @@ class NMGApp(tk.Tk):
                 self._mark_latest_auswertung_customer(kundentyp, kundennummer, kundenname or analyse_name)
         except Exception:
             pass
-        analyse_dir = SAVED_ANALYSES_DIR / f"{analyse_name}_{out.stem[-15:] if len(out.stem) >= 15 else ''}".strip("_")
+        # SP7: Auswertungen werden je nach Kundentyp in einen Unterordner sortiert:
+        #   gespeicherte_analysen/PK/<analyse>/   (Partnerkondition)
+        #   gespeicherte_analysen/ZF/<analyse>/   (Zukunftswerk)
+        # Wenn kein Kundentyp angegeben ist, bleibt das alte Verhalten erhalten.
+        sub = kundentyp if kundentyp in ("PK", "ZF") else None
+        base_dir = SAVED_ANALYSES_DIR / sub if sub else SAVED_ANALYSES_DIR
+        analyse_dir = base_dir / f"{analyse_name}_{out.stem[-15:] if len(out.stem) >= 15 else ''}".strip("_")
         analyse_dir.mkdir(parents=True, exist_ok=True)
         copied_out = analyse_dir / out.name
         shutil.copy2(out, copied_out)
@@ -3368,7 +3348,7 @@ class NMGApp(tk.Tk):
             ("todo",             "✅", "ToDo",                 "Aufgaben und offene Punkte.",               self.show_todo_center,                        "#11823b"),
             ("mitarbeiter",      "👥", "Mitarbeiter",          "Zuständigkeiten und Datenpfade.",           self.show_mitarbeiter_center,                "#6b4fb3"),
             ("produktanalyse",   "📈", "Produktanalyse",       "Produktchancen erstellen.",                 self.market_opportunities,                   "#11823b"),
-            ("marktanalyse",     "🌍", "Marktanalyse",         "Nicht-PK-Potenziale analysieren.",          self.market_analysis,                        "#3867b7"),
+            # SP7: Marktanalyse-Tile entfernt.
             ("abweichung",       "🔍", "Abweichungsanalyse",   "Manuelle vs. Programm-Auswertung.",         self.deviation_analysis,                     "#8b5a00"),
             ("datenupdates",     "🗄", "Daten aktualisieren",  "Stammdaten und Importe pflegen.",           self.show_daten_aktualisieren_page,          "#555"),
             ("roadmap",          "📌", "Roadmap",              "Offene und erledigte Punkte.",              self.show_roadmap_page,                      "#6b4fb3"),
@@ -5842,24 +5822,25 @@ class NMGApp(tk.Tk):
         ).pack(side="left", padx=10)
 
     def show_analysen_page(self):
+        # SP7: Marktanalyse-Kachel raus. Produktanalyse-Kachel ruft jetzt
+        # market_opportunities direkt (wie der Startseite-Button), statt
+        # erst auf gespeicherte Auswertungen umzuleiten.
         self.clear_page()
-        self._page_header("Analysen", "Produktanalyse, Marktanalyse, gespeicherte Analysen, Abweichungsanalyse oder manuelle Analysen importieren.")
+        self._page_header("Analysen", "Produktanalyse, gespeicherte Analysen, Abweichungsanalyse oder manuelle Analysen importieren.")
         body = tk.Frame(self.page, bg="#ffffff")
         body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
-        body.columnconfigure((0, 1, 2, 3, 4), weight=1)
-        self._tile(body, 0, "📈", "Produktanalyse", "Erst gespeicherte Auswertung auswählen, dann Produktanalyse starten.", "Auswählen", lambda: self.open_saved_analyses("produktanalyse"), "#11823b")
-        self._tile(body, 1, "🌍", "Marktanalyse", "Erst gespeicherte Auswertung auswählen, dann Marktanalyse starten.", "Auswählen", lambda: self.open_saved_analyses("marktanalyse"), "#3867b7")
-        self._tile(body, 2, "📁", "Gespeichert", "Gespeicherte Analysen öffnen.", "Öffnen", self.open_saved_analyses, "#0b4a86")
-        self._tile(body, 3, "🔍", "Abweichung", "Manuelle und Programm-Auswertung vergleichen.", "Starten", self.deviation_analysis, "#8b5a00")
-        self._tile(body, 4, "📥", "Manuelle Analysen", "Mitarbeiter-Auswertungen importieren und Schulbank/Analysen füttern.", "Import", self.import_manuelle_analysen, "#6b4fb3")
+        body.columnconfigure((0, 1, 2, 3), weight=1)
+        self._tile(body, 0, "📈", "Produktanalyse", "Produktchancen erstellen.", "Starten", self.market_opportunities, "#11823b")
+        self._tile(body, 1, "📁", "Gespeichert", "Gespeicherte Analysen öffnen.", "Öffnen", self.open_saved_analyses, "#0b4a86")
+        self._tile(body, 2, "🔍", "Abweichung", "Manuelle und Programm-Auswertung vergleichen.", "Starten", self.deviation_analysis, "#8b5a00")
+        self._tile(body, 3, "📥", "Manuelle Analysen", "Mitarbeiter-Auswertungen importieren und Schulbank/Analysen füttern.", "Import", self.import_manuelle_analysen, "#6b4fb3")
 
     def show_produktanalyse_page(self):
-        # Produktanalyse soll gezielt auf einer ausgewählten gespeicherten Auswertung laufen.
-        self.open_saved_analyses("produktanalyse")
+        # SP7: Verhalten an Startseite-Button angeglichen - kein Umweg ueber
+        # "gespeicherte Auswertung waehlen", direkt market_opportunities.
+        self.market_opportunities()
 
-    def show_marktanalyse_page(self):
-        # Marktanalyse soll gezielt auf einer ausgewählten gespeicherten Auswertung laufen.
-        self.open_saved_analyses("marktanalyse")
+    # SP7: show_marktanalyse_page entfernt.
 
     def show_abweichungsanalyse_page(self):
         self._action_page(
