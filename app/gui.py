@@ -163,6 +163,8 @@ class NMGApp(tk.Tk):
         self._check_mitarbeiterprofil_pflicht()
         self._check_daten_benachrichtigungen()
         self.after(1000, self._check_apotheken_analyse_faellig)
+        # SP26: nach Start pruefen, ob wichtige Wissens-Tabellen leer sind.
+        self.after(1500, self._check_wissensbasis_leer)
 
         # Admin-Knoepfe (z.B. in Datenbankuebersicht) standardmaessig versteckt.
         # Ctrl+Alt+A toggelt die Sichtbarkeit. Wer den Shortcut nicht kennt,
@@ -876,7 +878,7 @@ class NMGApp(tk.Tk):
                 pass
 
         items = self._get_data_update_status_items()
-        rote = [name for name, val in items if self._status_ampel(val) in ("🔴", "⚪")]
+        rote = [name for name, val, count in items if self._status_ampel_combined(val, count) in ("🔴", "⚫", "⚪")]
         if not rote:
             return
 
@@ -1032,6 +1034,48 @@ class NMGApp(tk.Tk):
             tk.Label(box, text="Keine Termine gefunden\n(Outlook nicht verfügbar oder keine Termine)", font=("Arial", 9), fg="#888", bg="#faf4ff", justify="left").pack(anchor="w", padx=10, pady=4)
         tk.Label(box, text="Nur-Lese-Ansicht · Termine aus Outlook", font=("Arial", 8), fg="#999", bg="#faf4ff").pack(anchor="w", padx=10, pady=(0, 8))
         return box
+
+    def _check_wissensbasis_leer(self):
+        """SP26: Nach Programmstart pruefen, ob die wichtigen Wissens-Tabellen
+        befuellt sind. Wenn eine kritische Tabelle leer ist -> Hinweis-Dialog
+        mit Direkt-Link auf 'Daten aktualisieren'.
+
+        Kritisch im Sinne der Auswertung:
+        - tbl_nmg_stamm (NMG-Artikel) - sonst kein NMG-Treffer.
+        - nmg_rabatte (PK-Rabatte) - sonst keine Rabatt-Spalte.
+        - tbl_austauschdatenbank (aktive Eintraege) - sonst kein Austausch-Lookup.
+        """
+        try:
+            items = self._get_data_update_status_items()
+        except Exception:
+            return
+        if not items:
+            return
+        kritische_namen = {"NMG Artikel", "PK Rabatte", "Austauschdatenbank"}
+        leere = []
+        for name, _value, count in items:
+            try:
+                n = int(count or 0)
+            except Exception:
+                n = 0
+            if name in kritische_namen and n <= 0:
+                leere.append(name)
+        if not leere:
+            return
+        zeilen = "\n".join(f"  • {n}" for n in leere)
+        msg = (
+            "Die folgenden Wissensbasen sind leer oder noch nicht importiert:\n\n"
+            f"{zeilen}\n\n"
+            "Solange diese Daten fehlen, kommen Auswertungen unvollstaendig zurueck "
+            "(z.B. fehlende NMG-Treffer oder Rabatt-Spalte).\n\n"
+            "Moechtest du jetzt zur Seite 'Daten aktualisieren' wechseln, um die "
+            "fehlenden Daten zu importieren?"
+        )
+        try:
+            if messagebox.askyesno("Wissensbasis unvollstaendig", msg):
+                self.show_daten_aktualisieren_page()
+        except Exception:
+            pass
 
     def _check_apotheken_analyse_faellig(self):
         """Erstellt ToDos für Apotheken deren letzte Analyse > 5 Monate her ist (außer inaktiven)."""
@@ -1203,6 +1247,38 @@ class NMGApp(tk.Tk):
             return "noch nie"
         return dt.strftime("%d.%m.%Y %H:%M")
 
+    def _format_count(self, count):
+        """SP26: Anzahl-Eintraege benutzerfreundlich formatieren."""
+        try:
+            n = int(count or 0)
+        except Exception:
+            n = 0
+        if n <= 0:
+            return "leer"
+        return f"{n:,}".replace(",", ".") + " Eintr."
+
+    def _status_ampel_combined(self, value, count):
+        """SP26: Ampel beruecksichtigt sowohl Datum als auch leere Tabellen.
+        count == 0 -> ⚪ leer. Sonst normale Datums-Ampel.
+        """
+        try:
+            n = int(count or 0)
+        except Exception:
+            n = 0
+        if n <= 0:
+            return "⚪"
+        return self._status_ampel(value) or "⚪"
+
+    def _status_ampel_combined_color(self, value, count):
+        """SP26: Textfarbe. Leere Tabellen werden rot, sonst Datums-Farbe."""
+        try:
+            n = int(count or 0)
+        except Exception:
+            n = 0
+        if n <= 0:
+            return "#b00020"
+        return self._status_ampel_color(value)
+
     def _status_ampel(self, value):
         """Ampel nach Datenalter: grün <30, gelb ab 30, rot ab 60, schwarz ab 90 Tage."""
         dt = self._parse_status_datetime(value)
@@ -1257,8 +1333,18 @@ class NMGApp(tk.Tk):
                 continue
         return best_raw
 
+    def _count_table_safe(self, con, query):
+        """SP26: Anzahl-Eintraege fuer eine Wissensbasis. Robust gegen fehlende Tabellen."""
+        try:
+            row = con.execute(query).fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+        except Exception:
+            return 0
+
     def _get_data_update_status_items(self):
-        """Rechter Statusbereich: letzte Aktualisierung wichtiger Datenquellen."""
+        """Rechter Statusbereich: letzte Aktualisierung + Anzahl Eintraege.
+        Rueckgabe je Eintrag: (name, letztes_datum, anzahl).
+        """
         try:
             with sqlite3.connect(DB_PATH) as con:
                 return [
@@ -1268,7 +1354,8 @@ class NMGApp(tk.Tk):
                             ("SELECT MAX(importdatum) FROM tbl_nmg_stamm WHERE apu IS NOT NULL OR taxe_ek IS NOT NULL OR taxe_vk IS NOT NULL", ()),
                             ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(typ) IN ('apu_hap','apu','hap')", ()),
                             ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(datei) LIKE '%apu%' OR lower(datei) LIKE '%hap%'", ()),
-                        ])
+                        ]),
+                        self._count_table_safe(con, "SELECT COUNT(*) FROM tbl_nmg_stamm WHERE apu IS NOT NULL OR taxe_ek IS NOT NULL OR taxe_vk IS NOT NULL"),
                     ),
                     (
                         "NMG Artikel",
@@ -1276,7 +1363,8 @@ class NMGApp(tk.Tk):
                             ("SELECT MAX(importdatum) FROM tbl_nmg_stamm", ()),
                             ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(typ) IN ('nmg_stamm','nmg_artikel','nmg_articles')", ()),
                             ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(datei) LIKE '%nmg%' AND lower(datei) LIKE '%artikel%'", ()),
-                        ])
+                        ]),
+                        self._count_table_safe(con, "SELECT COUNT(*) FROM tbl_nmg_stamm"),
                     ),
                     (
                         "PK Rabatte",
@@ -1284,7 +1372,8 @@ class NMGApp(tk.Tk):
                             ("SELECT MAX(letzte_aktualisierung) FROM nmg_rabatte", ()),
                             ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(typ) IN ('pk_rabatte','partnerkonditionen_rabatte','rabatte')", ()),
                             ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(datei) LIKE '%rabatt%'", ()),
-                        ])
+                        ]),
+                        self._count_table_safe(con, "SELECT COUNT(*) FROM nmg_rabatte WHERE rabatt IS NOT NULL"),
                     ),
                     (
                         "Artikelstamm",
@@ -1295,7 +1384,26 @@ class NMGApp(tk.Tk):
                             ("SELECT MAX(erstellt_am) FROM tbl_artikelstamm", ()),
                             ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(typ) IN ('artikelstamm','pzn_basis','artikel_basis')", ()),
                             ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(datei) LIKE '%artikelstamm%'", ()),
-                        ])
+                        ]),
+                        self._count_table_safe(con, "SELECT COUNT(*) FROM tbl_artikelstamm")
+                            or self._count_table_safe(con, "SELECT COUNT(*) FROM tbl_pzn_basisdaten"),
+                    ),
+                    (
+                        "Austauschdatenbank",
+                        self._get_last_data_update(con, [
+                            ("SELECT MAX(aktualisiert_am) FROM tbl_austauschdatenbank WHERE COALESCE(status,'aktiv')='aktiv'", ()),
+                            ("SELECT MAX(erstellt_am) FROM tbl_austauschdatenbank WHERE COALESCE(status,'aktiv')='aktiv'", ()),
+                            ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(typ) IN ('austausch','austauschdatenbank','biosimilar')", ()),
+                        ]),
+                        self._count_table_safe(con, "SELECT COUNT(*) FROM tbl_austauschdatenbank WHERE COALESCE(status,'aktiv')='aktiv'"),
+                    ),
+                    (
+                        "Lieferfaehigkeit",
+                        self._get_last_data_update(con, [
+                            ("SELECT MAX(letzte_aktualisierung) FROM tbl_lieferfaehigkeit", ()),
+                            ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(typ) IN ('lieferfaehigkeit','lieferbar')", ()),
+                        ]),
+                        self._count_table_safe(con, "SELECT COUNT(*) FROM tbl_lieferfaehigkeit"),
                     ),
                 ]
         except Exception:
@@ -1306,8 +1414,9 @@ class NMGApp(tk.Tk):
         if not items:
             return "Status nicht verfügbar"
         lines = []
-        for name, value in items:
-            lines.append(f"{name} {self._status_ampel(value)}")
+        for name, value, count in items:
+            amp = self._status_ampel_combined(value, count)
+            lines.append(f"{name} {amp}  ({self._format_count(count)})")
             lines.append(self._format_status_datetime(value))
             lines.append("")
         lines.append("Legende")
@@ -1361,13 +1470,14 @@ class NMGApp(tk.Tk):
             bg="#ffffff"
         ).pack(anchor="w", padx=14, pady=(14, 6))
         try:
-            for item_name, item_value in self._get_data_update_status_items():
-                color = self._status_ampel_color(item_value)
-                amp = self._status_ampel(item_value)
+            for item_name, item_value, item_count in self._get_data_update_status_items():
+                color = self._status_ampel_combined_color(item_value, item_count)
+                amp = self._status_ampel_combined(item_value, item_count)
                 date_text = self._format_status_datetime(item_value)
+                count_text = self._format_count(item_count)
                 tk.Label(
                     box_updates,
-                    text=f"{amp} {item_name}\n{date_text}",
+                    text=f"{amp} {item_name} ({count_text})\n{date_text}",
                     justify="left",
                     bg="#ffffff",
                     fg=color,
@@ -3526,14 +3636,15 @@ class NMGApp(tk.Tk):
             tk.Label(amp_box, text="🗄 Daten-Aktualität", font=("Arial", 9, "bold"), fg="#0b4a86", bg="#f0f4fa").pack(anchor="w", padx=8, pady=(5,2))
             items = self._get_data_update_status_items()
             if items:
-                for name, val in items:
-                    amp = self._status_ampel(val)
-                    color = self._status_ampel_color(val)
+                for name, val, count in items:
+                    amp = self._status_ampel_combined(val, count)
+                    color = self._status_ampel_combined_color(val, count)
                     date_str = self._format_status_datetime(val)
-                    tk.Label(amp_box, text=f"{amp} {name}: {date_str}", font=("Arial", 8), fg=color, bg="#f0f4fa").pack(anchor="w", padx=8)
+                    count_str = self._format_count(count)
+                    tk.Label(amp_box, text=f"{amp} {name} ({count_str}): {date_str}", font=("Arial", 8), fg=color, bg="#f0f4fa").pack(anchor="w", padx=8)
             else:
                 tk.Label(amp_box, text="–", font=("Arial", 8), fg="#888", bg="#f0f4fa").pack(anchor="w", padx=8)
-            tk.Label(amp_box, text="🟢<30T 🟡30-60T 🔴>60T ⚪kein", font=("Arial", 7), fg="#888", bg="#f0f4fa").pack(anchor="w", padx=8, pady=(0,4))
+            tk.Label(amp_box, text="🟢<30T 🟡30-60T 🔴>60T ⚪leer/kein Datum", font=("Arial", 7), fg="#888", bg="#f0f4fa").pack(anchor="w", padx=8, pady=(0,4))
             col_idx += 1
 
         if "info_todos" in active_info:
