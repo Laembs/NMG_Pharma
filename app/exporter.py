@@ -155,11 +155,10 @@ def _lookup(con: sqlite3.Connection, original_pzn: str):
         return ""
 
     # 1) Höchste Priorität: neue Austauschdatenbank / Schulbank-Lernstand.
-    # PZN robust vergleichen, weil Excel und alte Importe führende Nullen verlieren können.
-    # Wichtig: Wenn zu einer PZN alt mehrere aktive Zielvarianten existieren, darf die
-    # Neue Auswertung NICHT automatisch irgendeinen Treffer nehmen. Dieser Fall gehört
-    # in die Schulbank -> Manuelle Prüfung und bleibt in der Auswertung bewusst offen.
+    # SP20: Mehrere aktive Treffer = mehrere Austausch-Moeglichkeiten; erster Treffer
+    # wird primaer, alle weiteren werden im Freitext "austauschbar gegen" zusaetzlich gelistet.
     austausch = None
+    weitere = []
     try:
         rows = con.execute("""
             SELECT *
@@ -177,21 +176,15 @@ def _lookup(con: sqlite3.Connection, original_pzn: str):
         def _norm_text(value):
             return " ".join(str(value or "").strip().lower().split())
 
-        # SP19: Mehrdeutigkeit nur dann, wenn die NMG-PZNs wirklich verschieden sind.
-        # Wenn alle Treffer auf dieselbe pzn_nmg zeigen (typisch bei Biosimilar-Listen
-        # mit mehrfachen Eintraegen pro PZN_alt), den Treffer trotzdem nehmen.
-        nmg_pzns = {_pzn(item.get("pzn_nmg")) for item in matches if _pzn(item.get("pzn_nmg"))}
-        if len(nmg_pzns) > 1:
-            return {}
-        if matches and not nmg_pzns:
-            # Keine NMG-PZN, nur Freitext: nur dann mehrdeutig, wenn die Freitexte abweichen.
-            freitexte = {_norm_text(item.get("freitext_austausch")) for item in matches if _norm_text(item.get("freitext_austausch"))}
-            if len(freitexte) > 1:
-                return {}
+        # SP20: Mehrere aktive Treffer werden nicht mehr unterdrueckt. Der neueste
+        # Treffer wird als Haupt-Austausch verwendet (NMG-PZN, Rabatt, Lieferbarkeit),
+        # alle weiteren werden im Freitext "austauschbar gegen" zusaetzlich aufgefuehrt.
         if matches:
             austausch = matches[0]
+            weitere = matches[1:]
     except Exception:
         austausch = None
+        weitere = []
 
     if austausch:
         nmg_pzn = _pzn(austausch.get("pzn_nmg"))
@@ -199,6 +192,32 @@ def _lookup(con: sqlite3.Connection, original_pzn: str):
         artikel_nmg = str(austausch.get("artikel_nmg") or "").strip()
         if nmg_pzn and (not freitext or freitext.lower().startswith("pzn nmg:")):
             freitext = artikel_nmg or _article_name_by_pzn(nmg_pzn) or freitext
+
+        # SP20: Weitere aktive Austausch-Optionen anhaengen. Doppelte NMG-PZNs
+        # (typisch bei Biosimilar-Listen mit Mehrfacheintraegen) werden uebersprungen.
+        weitere_texte = []
+        seen_pzns = {nmg_pzn} if nmg_pzn else set()
+        seen_texts = {_norm_text(freitext)} if freitext else set()
+        for extra in weitere or []:
+            extra_pzn = _pzn(extra.get("pzn_nmg"))
+            extra_name = str(extra.get("artikel_nmg") or "").strip()
+            extra_freitext = str(extra.get("freitext_austausch") or "").strip()
+            if extra_pzn:
+                if extra_pzn in seen_pzns:
+                    continue
+                seen_pzns.add(extra_pzn)
+                label = extra_name or _article_name_by_pzn(extra_pzn)
+                weitere_texte.append(f"PZN {extra_pzn}" + (f" – {label}" if label else ""))
+            else:
+                norm = _norm_text(extra_freitext)
+                if not norm or norm in seen_texts:
+                    continue
+                seen_texts.add(norm)
+                weitere_texte.append(extra_freitext)
+
+        if weitere_texte:
+            zusatz = "weitere: " + " | ".join(weitere_texte)
+            freitext = f"{freitext} | {zusatz}" if freitext else zusatz
 
         stamm = _rowdict(con.execute("SELECT * FROM tbl_nmg_stamm WHERE pzn=?", (nmg_pzn or '',)).fetchone()) if nmg_pzn else None
         rabatt = _rowdict(con.execute("SELECT * FROM nmg_rabatte WHERE nmg_pzn=?", (nmg_pzn or '',)).fetchone()) if nmg_pzn else None
