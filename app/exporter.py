@@ -157,20 +157,33 @@ def _lookup(con: sqlite3.Connection, original_pzn: str):
     # 1) Höchste Priorität: neue Austauschdatenbank / Schulbank-Lernstand.
     # SP20: Mehrere aktive Treffer = mehrere Austausch-Moeglichkeiten; erster Treffer
     # wird primaer, alle weiteren werden im Freitext "austauschbar gegen" zusaetzlich gelistet.
-    # SP21: Reihenfolge nach hoechstem PK-Rabatt (nmg_rabatte.rabatt) zuerst, bei
-    # Gleichstand nach Aktualisierungsdatum (stabil = neueste zuerst).
+    # SP21/SP23: Sortier-Logik fuer den Haupttreffer:
+    # 1) Kandidaten MIT einem echten Rabatt-Eintrag (nmg_rabatte.rabatt IS NOT NULL)
+    #    haben Vorrang gegenueber Kandidaten ohne Eintrag. Damit landet ein Artikel
+    #    ohne Rabatt-Eintrag nicht mehr in der NMG-PZN-Spalte, solange es einen mit
+    #    Rabatt gibt.
+    # 2) Innerhalb der "mit Rabatt"-Gruppe gewinnt der hoechste Rabatt.
+    # 3) Als zusaetzliches Sicherheitsnetz: Kandidaten, die im NMG-Stamm existieren,
+    #    werden bevorzugt (sonst veraltete Schulbank-Eintraege gewinnen).
+    # 4) Tie-Breaker: aktualisiert_am DESC, id DESC.
     austausch = None
     weitere = []
     try:
         rows = con.execute("""
-            SELECT a.*, COALESCE(r.rabatt, 0) AS _rabatt_pk
+            SELECT a.*,
+                   r.rabatt AS _rabatt_pk,
+                   ns.pzn   AS _nmg_stamm_pzn
             FROM tbl_austauschdatenbank a
-            LEFT JOIN nmg_rabatte r ON r.nmg_pzn = a.pzn_nmg
+            LEFT JOIN nmg_rabatte   r  ON r.nmg_pzn = a.pzn_nmg
+            LEFT JOIN tbl_nmg_stamm ns ON ns.pzn    = a.pzn_nmg
             WHERE COALESCE(a.status, 'aktiv') = 'aktiv'
               AND COALESCE(a.pzn_alt, '') <> ''
-            ORDER BY COALESCE(r.rabatt, 0) DESC,
-                     datetime(COALESCE(a.aktualisiert_am, a.erstellt_am, a.gueltig_ab, '1970-01-01')) DESC,
-                     a.id DESC
+            ORDER BY
+                CASE WHEN r.rabatt IS NOT NULL THEN 0 ELSE 1 END,
+                COALESCE(r.rabatt, 0) DESC,
+                CASE WHEN ns.pzn IS NOT NULL THEN 0 ELSE 1 END,
+                datetime(COALESCE(a.aktualisiert_am, a.erstellt_am, a.gueltig_ab, '1970-01-01')) DESC,
+                a.id DESC
         """).fetchall()
         matches = []
         for candidate in rows:
