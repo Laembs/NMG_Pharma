@@ -178,9 +178,6 @@ def _lookup(con: sqlite3.Connection, original_pzn: str):
             if _norm_db_pzn(data.get("pzn_alt")) == original_pzn:
                 matches.append(data)
 
-        def _norm_text(value):
-            return " ".join(str(value or "").strip().lower().split())
-
         # SP20: Mehrere aktive Treffer werden nicht mehr unterdrueckt. Der neueste
         # Treffer wird als Haupt-Austausch verwendet (NMG-PZN, Rabatt, Lieferbarkeit),
         # alle weiteren werden im Freitext "austauschbar gegen" zusaetzlich aufgefuehrt.
@@ -198,27 +195,32 @@ def _lookup(con: sqlite3.Connection, original_pzn: str):
         if nmg_pzn and (not freitext or freitext.lower().startswith("pzn nmg:")):
             freitext = artikel_nmg or _article_name_by_pzn(nmg_pzn) or freitext
 
-        # SP20: Weitere aktive Austausch-Optionen anhaengen. Doppelte NMG-PZNs
-        # (typisch bei Biosimilar-Listen mit Mehrfacheintraegen) werden uebersprungen.
+        # SP20: Weitere aktive Austausch-Optionen anhaengen.
+        # SP22: In der Spalte "austauschbar gegen" duerfen nur Artikel auftauchen,
+        # die tatsaechlich im NMG-Stamm vorhanden sind. Freitext-Eintraege ohne
+        # verifizierbare NMG-PZN werden ausgeblendet, ebenso PZNs, die der NMG-
+        # Stamm nicht kennt (veraltet oder Tippfehler).
+        def _pzn_in_nmg_stamm(pzn):
+            if not pzn:
+                return False
+            try:
+                return con.execute(
+                    "SELECT 1 FROM tbl_nmg_stamm WHERE pzn=? LIMIT 1", (pzn,)
+                ).fetchone() is not None
+            except Exception:
+                return False
+
         weitere_texte = []
         seen_pzns = {nmg_pzn} if nmg_pzn else set()
-        seen_texts = {_norm_text(freitext)} if freitext else set()
         for extra in weitere or []:
             extra_pzn = _pzn(extra.get("pzn_nmg"))
-            extra_name = str(extra.get("artikel_nmg") or "").strip()
-            extra_freitext = str(extra.get("freitext_austausch") or "").strip()
-            if extra_pzn:
-                if extra_pzn in seen_pzns:
-                    continue
-                seen_pzns.add(extra_pzn)
-                label = extra_name or _article_name_by_pzn(extra_pzn)
-                weitere_texte.append(f"PZN {extra_pzn}" + (f" – {label}" if label else ""))
-            else:
-                norm = _norm_text(extra_freitext)
-                if not norm or norm in seen_texts:
-                    continue
-                seen_texts.add(norm)
-                weitere_texte.append(extra_freitext)
+            if not extra_pzn or extra_pzn in seen_pzns:
+                continue
+            if not _pzn_in_nmg_stamm(extra_pzn):
+                continue
+            seen_pzns.add(extra_pzn)
+            extra_name = str(extra.get("artikel_nmg") or "").strip() or _article_name_by_pzn(extra_pzn)
+            weitere_texte.append(f"PZN {extra_pzn}" + (f" – {extra_name}" if extra_name else ""))
 
         if weitere_texte:
             zusatz = "weitere: " + " | ".join(weitere_texte)
