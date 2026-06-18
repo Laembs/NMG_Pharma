@@ -404,6 +404,350 @@ def _lookup_stammdaten(con: sqlite3.Connection, pzn: str) -> dict:
     return result
 
 
+# ---------------------------------------------------------------------------
+# SP25: In-Memory-Caches fuer die Auswertungs-Schleife.
+#
+# Vor SP25 hat _lookup(), _lookup_stammdaten(), lookup_hersteller(),
+# lookup_basisdaten() und lookup_latest_ek() pro Rohdaten-Zeile zwischen 5 und
+# 10 SQL-Queries abgesetzt. Mit SP24's pzn_norm()-Funktion auf beiden Seiten
+# der JOIN-Klauseln konnten die Indizes nicht mehr genutzt werden, jede Query
+# wurde zum full table scan. Bei 8000 Zeilen × 8 Queries × N k Tabellen-Rows
+# kostete eine Auswertung viele Minuten.
+#
+# SP25 laedt die Lookup-Tabellen genau einmal pro Auswertung als Python-Dicts
+# (PZN bereits auf 8 Stellen normalisiert). _lookup_fast() und Co. arbeiten
+# danach mit O(1) Dict-Zugriffen. Schreiboperationen (register_basisdaten,
+# register_ek) bleiben SQL - die werden in einer kuenftigen SP gebatcht.
+# ---------------------------------------------------------------------------
+
+def _load_lookup_caches(con: sqlite3.Connection):
+    caches = {
+        "rabatte": {},
+        "nmg_stamm": {},
+        "lieferfaehigkeit": {},
+        "artikelstamm": {},
+        "pzn_basisdaten": {},
+        "hersteller_lern": {},
+        "ek_rohdaten_latest": {},
+        "austausch": {},
+        "lernvorschlaege": {},
+        "referenz_h_o": {},
+    }
+
+    def _safe_exec(sql):
+        try:
+            return con.execute(sql).fetchall()
+        except Exception:
+            return []
+
+    for row in _safe_exec("SELECT nmg_pzn, rabatt FROM nmg_rabatte"):
+        pzn = _pzn(row[0])
+        if pzn and row[1] is not None:
+            caches["rabatte"][pzn] = row[1]
+
+    for row in _safe_exec("SELECT pzn, artikelname, apu, herstellerkuerzel, taxe_ek FROM tbl_nmg_stamm"):
+        pzn = _pzn(row[0])
+        if pzn:
+            caches["nmg_stamm"][pzn] = {
+                "artikelname": row[1], "apu": row[2],
+                "herstellerkuerzel": row[3], "taxe_ek": row[4],
+            }
+
+    for row in _safe_exec("SELECT nmg_pzn, lieferbar, bevorratung_angeraten, liefervorschlag FROM tbl_lieferfaehigkeit"):
+        pzn = _pzn(row[0])
+        if pzn:
+            caches["lieferfaehigkeit"][pzn] = {
+                "lieferbar": row[1], "bevorratung_angeraten": row[2], "liefervorschlag": row[3],
+            }
+
+    for row in _safe_exec("SELECT pzn, artikel, df, pck, herst, ek FROM tbl_artikelstamm"):
+        pzn = _pzn(row[0])
+        if pzn:
+            caches["artikelstamm"][pzn] = {
+                "artikel": row[1], "df": row[2], "pck": row[3],
+                "herst": row[4], "ek": row[5],
+            }
+
+    for row in _safe_exec("SELECT pzn, artikelname, df, pck, herstellerkuerzel FROM tbl_pzn_basisdaten"):
+        pzn = _pzn(row[0])
+        if pzn:
+            caches["pzn_basisdaten"][pzn] = {
+                "artikelname": row[1], "df": row[2], "pck": row[3],
+                "herstellerkuerzel": row[4],
+            }
+
+    for row in _safe_exec("SELECT pzn, herstellerkuerzel FROM tbl_hersteller_lern"):
+        pzn = _pzn(row[0])
+        if pzn and row[1]:
+            caches["hersteller_lern"][pzn] = row[1]
+
+    # tbl_pzn_ek_rohdaten: pro PZN den juengsten Eintrag (ORDER BY importdatum DESC, id DESC).
+    for row in _safe_exec("""
+        SELECT pzn, ek
+        FROM tbl_pzn_ek_rohdaten
+        ORDER BY importdatum DESC, id DESC
+    """):
+        pzn = _pzn(row[0])
+        if pzn and pzn not in caches["ek_rohdaten_latest"] and row[1] is not None:
+            caches["ek_rohdaten_latest"][pzn] = row[1]
+
+    # Austausch: aktive Eintraege, sortiert mit SP23-Priorisierung.
+    austausch_rows = _safe_exec("""
+        SELECT id, pzn_alt, pzn_nmg, artikel_alt, artikel_nmg,
+               freitext_austausch, aktualisiert_am, erstellt_am, gueltig_ab
+        FROM tbl_austauschdatenbank
+        WHERE COALESCE(status, 'aktiv') = 'aktiv'
+          AND COALESCE(pzn_alt, '') <> ''
+    """)
+
+    def _dt_str(*candidates):
+        for c in candidates:
+            if c:
+                return str(c)
+        return "1970-01-01"
+
+    def _sort_key(r):
+        pzn_nmg = _pzn(r[2])
+        rabatt = caches["rabatte"].get(pzn_nmg)
+        in_stamm = pzn_nmg in caches["nmg_stamm"]
+        return (
+            0 if rabatt is not None else 1,
+            -(rabatt if rabatt is not None else 0),
+            0 if in_stamm else 1,
+            _dt_str(r[6], r[7], r[8]),
+            r[0] or 0,
+        )
+
+    # Reverse sortieren fuer DESC bei datetime + id, ASC fuer die Flags - trick: sortieren
+    # mit (flag_asc, -rabatt, flag_asc, -datetime_lex, -id). Aber Datums-String DESC = "ZZZZ" zuerst.
+    # Einfacher: zwei Pass-Sortierung.
+    decorated = []
+    for r in austausch_rows:
+        pzn_nmg = _pzn(r[2])
+        rabatt = caches["rabatte"].get(pzn_nmg)
+        in_stamm = pzn_nmg in caches["nmg_stamm"]
+        decorated.append((
+            0 if rabatt is not None else 1,
+            -(rabatt if rabatt is not None else 0),
+            0 if in_stamm else 1,
+            r,
+        ))
+    # Stabil sortieren, danach in einer zweiten Sortierung nach Datum DESC.
+    austausch_rows_sorted = [d[3] for d in sorted(decorated, key=lambda d: (d[0], d[1], d[2]))]
+    # Innerhalb gleicher Schluessel ist die ursprueliche SQL-Reihenfolge erhalten - reicht.
+    # Wir holen aber lieber nach datetime DESC sortieren in einer Voraus-Sortierung der SQL:
+    # Geht einfacher per SECOND-Sort - aber Tie-Breaker (Datum DESC) ist meist nicht entscheidend.
+    # Pragmatisch: nach Datum DESC vorsortieren, dann obigen stabilen sort.
+    pre_sorted = sorted(austausch_rows, key=lambda r: (_dt_str(r[6], r[7], r[8]), r[0] or 0), reverse=True)
+    decorated = []
+    for r in pre_sorted:
+        pzn_nmg = _pzn(r[2])
+        rabatt = caches["rabatte"].get(pzn_nmg)
+        in_stamm = pzn_nmg in caches["nmg_stamm"]
+        decorated.append((
+            0 if rabatt is not None else 1,
+            -(rabatt if rabatt is not None else 0),
+            0 if in_stamm else 1,
+            r,
+        ))
+    austausch_rows_sorted = [d[3] for d in sorted(decorated, key=lambda d: (d[0], d[1], d[2]))]
+
+    for r in austausch_rows_sorted:
+        key = _pzn(r[1])
+        if not key:
+            continue
+        caches["austausch"].setdefault(key, []).append({
+            "id": r[0], "pzn_alt": r[1], "pzn_nmg": r[2],
+            "artikel_alt": r[3], "artikel_nmg": r[4],
+            "freitext_austausch": r[5],
+            "aktualisiert_am": r[6], "erstellt_am": r[7], "gueltig_ab": r[8],
+        })
+
+    for row in _safe_exec("""
+        SELECT id, pzn_alt, pzn_nmg, freitext_austausch, produkt_neu, bearbeitet_am, erstellt_am
+        FROM tbl_lernvorschlaege
+        WHERE status = 'uebernommen'
+          AND COALESCE(pzn_alt, '') <> ''
+        ORDER BY datetime(COALESCE(bearbeitet_am, erstellt_am, '1970-01-01')) DESC, id DESC
+    """):
+        key = _pzn(row[1])
+        if not key:
+            continue
+        caches["lernvorschlaege"].setdefault(key, []).append({
+            "id": row[0], "pzn_alt": row[1], "pzn_nmg": row[2],
+            "freitext_austausch": row[3], "produkt_neu": row[4],
+            "bearbeitet_am": row[5], "erstellt_am": row[6],
+        })
+
+    for row in _safe_exec("SELECT * FROM tbl_referenz_h_o"):
+        try:
+            data = dict(row) if hasattr(row, "keys") else None
+        except Exception:
+            data = None
+        if not data:
+            continue
+        key = _pzn(data.get("original_pzn"))
+        if key:
+            caches["referenz_h_o"][key] = data
+
+    return caches
+
+
+def _lookup_fast(caches, original_pzn):
+    """SP25 In-Memory-Variante von _lookup. Identisches Verhalten, aber alle
+    Tabellen-Zugriffe gehen ueber caches statt SQL.
+    """
+    original_pzn = _pzn(original_pzn)
+    if not original_pzn:
+        return {}
+
+    def _article_name_by_pzn(pzn):
+        if not pzn:
+            return ""
+        for store_key in ("nmg_stamm", "artikelstamm", "pzn_basisdaten"):
+            entry = caches[store_key].get(pzn)
+            if entry:
+                name = entry.get("artikelname") or entry.get("artikel")
+                if name:
+                    return str(name).strip()
+        return ""
+
+    # 1) Austauschdatenbank
+    matches = caches["austausch"].get(original_pzn, [])
+    if matches:
+        austausch = matches[0]
+        weitere = matches[1:]
+
+        nmg_pzn = _pzn(austausch.get("pzn_nmg"))
+        freitext = str(austausch.get("freitext_austausch") or "").strip()
+        artikel_nmg = str(austausch.get("artikel_nmg") or "").strip()
+        if nmg_pzn and (not freitext or freitext.lower().startswith("pzn nmg:")):
+            freitext = artikel_nmg or _article_name_by_pzn(nmg_pzn) or freitext
+
+        weitere_texte = []
+        seen_pzns = {nmg_pzn} if nmg_pzn else set()
+        for extra in weitere:
+            extra_pzn = _pzn(extra.get("pzn_nmg"))
+            if not extra_pzn or extra_pzn in seen_pzns:
+                continue
+            if extra_pzn not in caches["nmg_stamm"]:
+                continue
+            seen_pzns.add(extra_pzn)
+            extra_name = str(extra.get("artikel_nmg") or "").strip() or _article_name_by_pzn(extra_pzn)
+            weitere_texte.append(f"PZN {extra_pzn}" + (f" – {extra_name}" if extra_name else ""))
+
+        if weitere_texte:
+            zusatz = "weitere: " + " | ".join(weitere_texte)
+            freitext = f"{freitext} | {zusatz}" if freitext else zusatz
+
+        stamm = caches["nmg_stamm"].get(nmg_pzn)
+        rabatt = caches["rabatte"].get(nmg_pzn)
+        liefer = caches["lieferfaehigkeit"].get(nmg_pzn)
+        return {
+            "im_sortiment": "X" if nmg_pzn else "X Austausch mögl",
+            "nmg_pzn": nmg_pzn or None,
+            "apu_nmg": stamm.get("apu") if stamm and stamm.get("apu") is not None else None,
+            "rabatt": rabatt,
+            "lieferbar": liefer.get("lieferbar") if liefer else None,
+            "bevorratung": liefer.get("bevorratung_angeraten") if liefer else None,
+            "liefervorschlag": liefer.get("liefervorschlag") if liefer else None,
+            "austauschbar_gegen": freitext or None,
+        }
+
+    # 2) Lernvorschlaege (uebernommen)
+    for data in caches["lernvorschlaege"].get(original_pzn, []):
+        nmg_pzn = _pzn(data.get("pzn_nmg"))
+        freitext = str(data.get("freitext_austausch") or data.get("produkt_neu") or "").strip()
+        if nmg_pzn and (not freitext or freitext.lower().startswith("pzn nmg:")):
+            freitext = _article_name_by_pzn(nmg_pzn) or freitext
+        stamm = caches["nmg_stamm"].get(nmg_pzn)
+        rabatt = caches["rabatte"].get(nmg_pzn)
+        liefer = caches["lieferfaehigkeit"].get(nmg_pzn)
+        return {
+            "im_sortiment": "X" if nmg_pzn else "X Austausch mögl",
+            "nmg_pzn": nmg_pzn or None,
+            "apu_nmg": stamm.get("apu") if stamm and stamm.get("apu") is not None else None,
+            "rabatt": rabatt,
+            "lieferbar": liefer.get("lieferbar") if liefer else None,
+            "bevorratung": liefer.get("bevorratung_angeraten") if liefer else None,
+            "liefervorschlag": liefer.get("liefervorschlag") if liefer else None,
+            "austauschbar_gegen": freitext or None,
+        }
+
+    # 3) tbl_referenz_h_o
+    ref = caches["referenz_h_o"].get(original_pzn)
+    if ref:
+        nmg_pzn_ref = _pzn(ref.get("nmg_pzn"))
+        stamm_ref = caches["nmg_stamm"].get(nmg_pzn_ref)
+        return {
+            "im_sortiment": ref.get("im_sortiment"),
+            "nmg_pzn": nmg_pzn_ref,
+            "apu_nmg": stamm_ref.get("apu") if stamm_ref and stamm_ref.get("apu") is not None else ref.get("apu_nmg"),
+            "rabatt": ref.get("rabatt"),
+            "lieferbar": ref.get("lieferbar"),
+            "bevorratung": ref.get("bevorratung_angeraten"),
+            "liefervorschlag": ref.get("liefervorschlag"),
+            "austauschbar_gegen": ref.get("austauschbar_gegen"),
+        }
+
+    # 4) Original-PZN selbst NMG?
+    nmg_pzn = original_pzn
+    stamm = caches["nmg_stamm"].get(nmg_pzn)
+    rabatt = caches["rabatte"].get(nmg_pzn)
+    liefer = caches["lieferfaehigkeit"].get(nmg_pzn)
+    if not any([stamm, rabatt is not None, liefer]):
+        return {}
+    return {
+        "im_sortiment": "X",
+        "nmg_pzn": nmg_pzn,
+        "apu_nmg": stamm.get("apu") if stamm and stamm.get("apu") is not None else None,
+        "rabatt": rabatt,
+        "lieferbar": liefer.get("lieferbar") if liefer else None,
+        "bevorratung": liefer.get("bevorratung_angeraten") if liefer else None,
+        "liefervorschlag": liefer.get("liefervorschlag") if liefer else None,
+        "austauschbar_gegen": None,
+    }
+
+
+def _lookup_stammdaten_fast(caches, pzn):
+    pzn = _pzn(pzn)
+    result = {"artikelname": None, "df": None, "pck": None, "hersteller": None, "ek": None}
+    if not pzn:
+        return result
+    art = caches["artikelstamm"].get(pzn)
+    if art:
+        if result["artikelname"] in (None, ""): result["artikelname"] = art.get("artikel")
+        if result["df"] in (None, ""): result["df"] = art.get("df")
+        if result["pck"] in (None, ""): result["pck"] = art.get("pck")
+        if result["hersteller"] in (None, ""): result["hersteller"] = art.get("herst")
+        if result["ek"] in (None, "") and art.get("ek") is not None: result["ek"] = art.get("ek")
+    basis = caches["pzn_basisdaten"].get(pzn)
+    if basis:
+        if result["artikelname"] in (None, ""): result["artikelname"] = basis.get("artikelname")
+        if result["df"] in (None, ""): result["df"] = basis.get("df")
+        if result["pck"] in (None, ""): result["pck"] = basis.get("pck")
+        if result["hersteller"] in (None, ""): result["hersteller"] = basis.get("herstellerkuerzel")
+    stamm = caches["nmg_stamm"].get(pzn)
+    if stamm:
+        if result["artikelname"] in (None, ""): result["artikelname"] = stamm.get("artikelname")
+        if result["hersteller"] in (None, ""): result["hersteller"] = stamm.get("herstellerkuerzel")
+        if result["ek"] in (None, "") and stamm.get("taxe_ek") is not None: result["ek"] = stamm.get("taxe_ek")
+    return result
+
+
+def _lookup_basisdaten_fast(caches, pzn):
+    pzn = _pzn(pzn)
+    return caches["pzn_basisdaten"].get(pzn, {}) if pzn else {}
+
+
+def _lookup_hersteller_fast(caches, pzn):
+    pzn = _pzn(pzn)
+    return caches["hersteller_lern"].get(pzn, "") if pzn else ""
+
+
+def _lookup_latest_ek_fast(caches, pzn):
+    pzn = _pzn(pzn)
+    return caches["ek_rohdaten_latest"].get(pzn) if pzn else None
 
 
 def _strip_leading_manufacturer_number(value):
@@ -589,6 +933,11 @@ def create_linden_export(input_file: str | Path, apotheke: str) -> Path:
         # (Excel-Int vs. String, fuehrende Nullen, ".0"-Suffix). _pzn() zfilled
         # auf 8 Stellen wenn rein numerisch, sonst nimmt es den getrimmten String.
         con.create_function("pzn_norm", 1, _pzn)
+
+        # SP27: Stammtabellen einmal in den RAM laden. Danach laeuft jeder
+        # pro-Zeile-Lookup als Dict-Zugriff statt als SQL-Query.
+        caches = _load_lookup_caches(con)
+
         auswertung_id = None
         statistik = {"positionen": 0, "nmg_treffer": 0, "nicht_nmg": 0, "gesamt_absatz": 0.0}
         abgleich_rows = []
@@ -621,7 +970,8 @@ def create_linden_export(input_file: str | Path, apotheke: str) -> Path:
             original_pzn = _pzn(source_row[0] if source_row else None)
 
             # A-G aus Rohdatei übernehmen. Fehlende Artikel/DF/PCK/Hersteller werden aus der PZN-Basisdatenbank ergänzt.
-            basis = lookup_basisdaten(con, original_pzn)
+            # SP27: alle Reads gehen ueber den Cache statt SQL.
+            basis = _lookup_basisdaten_fast(caches, original_pzn)
             artikel_roh = source_row[1] if len(source_row) > 1 else None
             df_roh = source_row[2] if len(source_row) > 2 else None
             pck_roh = source_row[3] if len(source_row) > 3 else None
@@ -633,10 +983,10 @@ def create_linden_export(input_file: str | Path, apotheke: str) -> Path:
             artikel_final = artikel_roh or basis.get("artikelname")
             df_final = df_roh or basis.get("df")
             pck_final = pck_roh or basis.get("pck")
-            hersteller_final = hersteller_roh or basis.get("herstellerkuerzel") or _lookup_hersteller(con, original_pzn)
+            hersteller_final = hersteller_roh or basis.get("herstellerkuerzel") or _lookup_hersteller_fast(caches, original_pzn)
 
             if not (artikel_final and df_final and pck_final and hersteller_final):
-                stamm = _lookup_stammdaten(con, original_pzn)
+                stamm = _lookup_stammdaten_fast(caches, original_pzn)
                 artikel_final = artikel_final or stamm.get("artikelname")
                 df_final = df_final or stamm.get("df")
                 pck_final = pck_final or stamm.get("pck")
@@ -650,10 +1000,10 @@ def create_linden_export(input_file: str | Path, apotheke: str) -> Path:
                 register_ek(con, original_pzn, ek_num, input_file.name, str(input_mapping.get("ek_header") or input_mapping.get("ek") or ""))
                 ek_final = ek_num
             else:
-                ek_final = lookup_latest_ek(con, original_pzn)
+                ek_final = _lookup_latest_ek_fast(caches, original_pzn)
                 if ek_final is None:
                     if stamm is None:
-                        stamm = _lookup_stammdaten(con, original_pzn)
+                        stamm = _lookup_stammdaten_fast(caches, original_pzn)
                     ek_final = stamm.get("ek")
 
             output_values = [
@@ -664,7 +1014,7 @@ def create_linden_export(input_file: str | Path, apotheke: str) -> Path:
             for c_idx, value in enumerate(output_values, start=1):
                 ws.cell(r_idx, c_idx, value)
 
-            hit = _lookup(con, original_pzn)
+            hit = _lookup_fast(caches, original_pzn)
             abgleich_trace = trace_lookup_source(con, original_pzn, hit)
             abgleich_trace.update({
                 "zeile": r_idx,
