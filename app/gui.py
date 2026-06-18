@@ -6238,9 +6238,12 @@ class NMGApp(tk.Tk):
 
         rows = self.get_lernvorschlaege(current_status)
         visible_ids = []
+        # SP18: Mapping iid -> (source_table, id) damit delete_selected
+        # in die richtige Tabelle loescht.
+        row_source_map = {}
         for row in rows:
             visible_ids.append(int(row["id"]))
-            tree.insert("", "end", values=(
+            iid = tree.insert("", "end", values=(
                 row["id"],
                 row["pzn_alt"] or "",
                 row["artikel_alt"] or row["produkt_alt"] or "",
@@ -6251,6 +6254,13 @@ class NMGApp(tk.Tk):
                 row["erstellt_am"],
                 row["bearbeitet_am"] or "",
             ))
+            try:
+                row_source_map[iid] = (
+                    row["source_table"] if "source_table" in row.keys() else "tbl_lernvorschlaege",
+                    int(row["id"]),
+                )
+            except Exception:
+                row_source_map[iid] = ("tbl_lernvorschlaege", int(row["id"]))
 
         def update_many(item_ids, status, label, confirm_all=False):
             if not item_ids:
@@ -6286,13 +6296,50 @@ class NMGApp(tk.Tk):
             update_many(ids, status, label)
 
         def delete_selected():
-            ids = selected_ids()
-            if not ids:
+            # SP18: nach source_table aufteilen. Frueher wurde immer aus
+            # tbl_lernvorschlaege geloescht, was bei "Uebernommen"-Eintraegen
+            # (die aus tbl_austauschdatenbank kommen) keine Wirkung hatte.
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Schulbank", "Bitte zuerst einen oder mehrere Lernvorschläge auswählen.")
                 return
-            if not messagebox.askyesno("Lernvorschläge löschen", f"{len(ids)} Lernvorschlag/Vorschläge wirklich löschen?\n\nDie Einträge werden aus der Schulbank entfernt. Bereits gelernte Austauschdaten bleiben erhalten."):
+            to_delete = []  # list of (source_table, id)
+            for iid in sel:
+                if iid in row_source_map:
+                    to_delete.append(row_source_map[iid])
+            if not to_delete:
                 return
-            for item_id in ids:
-                self.delete_lernvorschlag(item_id)
+            # Zaehler pro Tabelle in der Bestaetigungsmeldung
+            from_lern = sum(1 for t, _ in to_delete if t == "tbl_lernvorschlaege")
+            from_aust = sum(1 for t, _ in to_delete if t == "tbl_austauschdatenbank")
+            info = f"{len(to_delete)} Eintrag/Einträge werden gelöscht:"
+            if from_lern:
+                info += f"\n  • aus Lernvorschlägen: {from_lern}"
+            if from_aust:
+                info += f"\n  • aus Austauschdatenbank: {from_aust}"
+            info += "\n\nFortfahren?"
+            if not messagebox.askyesno("Schulbank löschen", info):
+                return
+            done = 0
+            errors = []
+            for source_table, item_id in to_delete:
+                try:
+                    if source_table == "tbl_austauschdatenbank":
+                        with sqlite3.connect(DB_PATH) as con:
+                            con.execute("DELETE FROM tbl_austauschdatenbank WHERE id = ?", (item_id,))
+                            con.commit()
+                    else:
+                        self.delete_lernvorschlag(item_id)
+                    done += 1
+                except Exception as exc:
+                    errors.append(f"{source_table}#{item_id}: {exc}")
+            msg = f"{done} von {len(to_delete)} Eintrag/Einträgen gelöscht."
+            if errors:
+                msg += "\n\nFehler:\n" + "\n".join(errors[:8])
+                messagebox.showwarning("Schulbank", msg)
+            else:
+                self.status.set(msg)
+                messagebox.showinfo("Schulbank", msg)
             self.show_schulbank_page(section)
 
         tk.Button(actionbar, text="✓ Markierte lernen", command=lambda: set_status("uebernommen"), bg="#11823b", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=(0, 8))
@@ -6656,6 +6703,8 @@ class NMGApp(tk.Tk):
             except Exception:
                 return set()
 
+        # SP18: source_table mitliefern, damit delete_selected weiss, aus
+        # welcher Tabelle der angezeigte Eintrag wirklich kommt.
         base_select = """\nSELECT id,
                    COALESCE(produkt_alt, '') AS produkt_alt,\nCOALESCE(produkt_neu, '') AS produkt_neu,
                    COALESCE(pzn_alt, '') AS pzn_alt,\nCOALESCE(artikel_alt, produkt_alt, '') AS artikel_alt,
@@ -6663,7 +6712,8 @@ class NMGApp(tk.Tk):
                    COALESCE(quelle_datei, '') AS quelle_datei,\nstatus,
                    COALESCE(bearbeiter, '') AS bearbeiter,\nerstellt_am,
                    bearbeitet_am,\nhistorie_ab,
-                   historie_bis,\naustausch_id
+                   historie_bis,\naustausch_id,
+                   'tbl_lernvorschlaege' AS source_table
             FROM tbl_lernvorschlaege\n"""
         valid_filter = """\nCOALESCE(pzn_alt, '') <> ''
             AND (COALESCE(pzn_nmg, '') <> '' OR COALESCE(freitext_austausch, produkt_neu, '') <> '')\nAND (COALESCE(pzn_nmg, '') = '' OR COALESCE(pzn_alt, '') <> COALESCE(pzn_nmg, ''))
@@ -6692,6 +6742,8 @@ class NMGApp(tk.Tk):
                 date_where = f"AND datetime({date_expr}) > datetime('now', '-7 days')"
             elif recent is False:
                 date_where = f"AND ({date_expr} = '' OR datetime({date_expr}) <= datetime('now', '-7 days'))"
+            # SP18: source_table-Marker, damit der Loeschen-Knopf weiss
+            # aus welcher Tabelle der Eintrag wirklich kommt.
             sql = f"""\nSELECT id,
                        {produkt_alt} AS produkt_alt,\nCOALESCE({freitext}, {artikel_nmg}, '') AS produkt_neu,
                        COALESCE(pzn_alt, '') AS pzn_alt,\n{artikel_alt} AS artikel_alt,
@@ -6699,7 +6751,8 @@ class NMGApp(tk.Tk):
                        {quelle} AS quelle_datei,\n'uebernommen' AS status,
                        {bearbeiter} AS bearbeiter,\n{date_expr} AS erstellt_am,
                        {date_expr} AS bearbeitet_am,\nNULL AS historie_ab,
-                       NULL AS historie_bis,\nid AS austausch_id
+                       NULL AS historie_bis,\nid AS austausch_id,
+                       'tbl_austauschdatenbank' AS source_table
                 FROM tbl_austauschdatenbank\nWHERE {status_expr} = 'aktiv'
                   AND COALESCE(pzn_alt, '') <> ''\nAND ({pzn_nmg} <> '' OR COALESCE({freitext}, {artikel_nmg}, '') <> '')
                   AND ({pzn_nmg} = '' OR COALESCE(pzn_alt, '') <> {pzn_nmg})\n{date_where}
