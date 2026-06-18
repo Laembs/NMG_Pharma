@@ -685,6 +685,20 @@ class NMGApp(tk.Tk):
                 pass
         return win
 
+    def _refresh_status_sidebar(self):
+        """SP29: Rechte Status-Sidebar neu zeichnen. Wird nach Imports gerufen,
+        damit die Counter (z.B. 'PK Rabatte (N Eintr., M mit Wert)') ohne
+        App-Neustart aktuelle Zahlen zeigen.
+        """
+        try:
+            if not getattr(self, "_right_panel_visible", False):
+                return
+            for w in self._right_panel.winfo_children():
+                w.destroy()
+            self._status_card(self._right_panel)
+        except Exception:
+            pass
+
     def _toggle_sidebar(self):
         """Rechte Seitenleiste ein- oder ausblenden. Zustand wird persistiert."""
         if self._right_panel_visible:
@@ -1431,14 +1445,9 @@ class NMGApp(tk.Tk):
                         ]),
                         self._count_table_safe(con, "SELECT COUNT(*) FROM tbl_austauschdatenbank WHERE COALESCE(status,'aktiv')='aktiv'"),
                     ),
-                    (
-                        "Lieferfaehigkeit",
-                        self._get_last_data_update(con, [
-                            ("SELECT MAX(letzte_aktualisierung) FROM tbl_lieferfaehigkeit", ()),
-                            ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(typ) IN ('lieferfaehigkeit','lieferbar')", ()),
-                        ]),
-                        self._count_table_safe(con, "SELECT COUNT(*) FROM tbl_lieferfaehigkeit"),
-                    ),
+                    # SP29: Lieferfaehigkeit-Kachel ausgeblendet. Kommt mit der
+                    # Bestandsfuehrung wieder; vorher gibt es nichts sinnvolles
+                    # anzuzeigen.
                 ]
         except Exception:
             return []
@@ -7300,6 +7309,12 @@ class NMGApp(tk.Tk):
 
     def _normalize_pzn_input(self, value):
         text = str(value or "").strip()
+        # SP29: SK-Importdateien tragen ein Lagervariante-Suffix wie ' /1' an
+        # der PZN ('12457880 /1'). Vorher wurde die Suffix-Ziffer mit ueber den
+        # isdigit()-Filter in die PZN gezogen, was zu 9-stelligen Phantom-PZNs
+        # fuehrte und alle PK-Rabatt-Lookups stumm scheitern liess.
+        if "/" in text:
+            text = text.split("/", 1)[0].strip()
         if text.endswith(".0") and text[:-2].isdigit():
             text = text[:-2]
         digits = "".join(ch for ch in text if ch.isdigit())
@@ -8738,6 +8753,7 @@ class NMGApp(tk.Tk):
                     "rows_inserted": 0,
                     "rows_updated": 0,
                     "rows_skipped_empty_pzn": 0,
+                    "rows_consolidated": 0,
                     "columns_mapped": [],
                     "missing_pflicht": [],
                 }
@@ -8801,51 +8817,81 @@ class NMGApp(tk.Tk):
                 aktualisiert = 0
                 rows_seen = 0
                 rows_skipped_empty_pzn = 0
+                rows_consolidated = 0  # SP29: Mehrfach-Rabatte pro PZN zusammengefasst
                 try:
                     all_columns = [col for col, *_ in (pflicht_spalten + optionale_spalten)]
-                    with sqlite3.connect(DB_PATH) as con:
-                        for ri, row_data in enumerate(table.rows, start=1):
-                            rows_seen += 1
-                            record = {col: None for col in all_columns}
-                            for col_name, col_idx in mapping.items():
-                                if isinstance(col_idx, int) and col_idx < len(row_data):
-                                    raw = row_data[col_idx]
-                                    if col_name in rabatt_fields:
-                                        # SP28: Rabatt-Spalten via _parse_rabatt - handhabt "15%",
-                                        # "15,5%" und nackte Zahl 15 (-> 0.15).
-                                        record[col_name] = self._parse_rabatt(raw)
-                                    elif col_name in numeric_fields:
-                                        record[col_name] = self._parse_decimal_or_none(raw)
-                                    else:
-                                        record[col_name] = raw if raw not in ("", None) else None
-                            record["importdatum"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            record["quelle"] = Path(filepath).name
 
-                            # SP13: Leere PZN bewusst ueberspringen statt NULL-Eintraege zu produzieren.
-                            if "pzn" in record and (record["pzn"] is None or str(record["pzn"]).strip() == ""):
-                                rows_skipped_empty_pzn += 1
+                    # SP29: Phase 1 - alle Zeilen zu Records bauen. Wenn rabatt_fields
+                    # gesetzt sind (z.B. PK-Rabatte), pro PZN den hoechsten Wert pro
+                    # Rabatt-Feld behalten, statt zufaellig die letzte Zeile gewinnen
+                    # zu lassen. Quell-Dateien (z.B. SK-Rabatt-Listen) listen pro
+                    # Artikel oft mehrere Staffeln; der hoechste Wert ist der fuer
+                    # die Kundin/den Kunden vorteilhafteste.
+                    pending = []
+                    by_pzn = {}  # nur befuellt bei rabatt_fields
+                    consolidate = bool(rabatt_fields)
+
+                    for ri, row_data in enumerate(table.rows, start=1):
+                        rows_seen += 1
+                        record = {col: None for col in all_columns}
+                        for col_name, col_idx in mapping.items():
+                            if isinstance(col_idx, int) and col_idx < len(row_data):
+                                raw = row_data[col_idx]
+                                if col_name in rabatt_fields:
+                                    # SP28: Rabatt-Spalten via _parse_rabatt - handhabt "15%",
+                                    # "15,5%" und nackte Zahl 15 (-> 0.15).
+                                    record[col_name] = self._parse_rabatt(raw)
+                                elif col_name in numeric_fields:
+                                    record[col_name] = self._parse_decimal_or_none(raw)
+                                else:
+                                    record[col_name] = raw if raw not in ("", None) else None
+                        record["importdatum"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        record["quelle"] = Path(filepath).name
+
+                        # SP13: Leere PZN bewusst ueberspringen statt NULL-Eintraege zu produzieren.
+                        if "pzn" in record and (record["pzn"] is None or str(record["pzn"]).strip() == ""):
+                            rows_skipped_empty_pzn += 1
+                            continue
+
+                        # SP24/SP29: PZN konsistent auf 8 Stellen normalisieren - inkl.
+                        # Abschneiden von SK-Lagervariante-Suffix ' /N'.
+                        if "pzn" in record and record["pzn"] not in (None, ""):
+                            normalized = self._normalize_pzn_input(record["pzn"])
+                            if normalized:
+                                record["pzn"] = normalized
+
+                        if ri % 500 == 0:
+                            self._set_busy_message(busy, f"{Path(filepath).name}: {ri:,} Zeilen verarbeitet".replace(",", "."))
+
+                        if consolidate and record.get("pzn"):
+                            pzn_key = record["pzn"]
+                            if pzn_key in by_pzn:
+                                existing = pending[by_pzn[pzn_key]]
+                                # Pro Rabatt-Feld Max() behalten.
+                                for rf in rabatt_fields:
+                                    new_val = record.get(rf)
+                                    old_val = existing.get(rf)
+                                    if new_val is not None and (old_val is None or new_val > old_val):
+                                        existing[rf] = new_val
+                                # Andere Felder nur fuellen, wenn bisher leer.
+                                for col in all_columns:
+                                    if col in rabatt_fields:
+                                        continue
+                                    if existing.get(col) in (None, "") and record.get(col) not in (None, ""):
+                                        existing[col] = record[col]
+                                rows_consolidated += 1
                                 continue
+                            by_pzn[pzn_key] = len(pending)
+                        pending.append(record)
 
-                            # SP24: PZN konsistent auf 8 Stellen normalisieren. Sonst landen
-                            # Excel-Zahlen, ".0"-Suffixe oder fehlende fuehrende Nullen in der
-                            # DB und JOINs/WHEREs gegen tbl_austauschdatenbank (zfilled) liefern
-                            # keine Treffer (z.B. Rabatte werden nicht gefunden).
-                            if "pzn" in record and record["pzn"] not in (None, ""):
-                                normalized = self._normalize_pzn_input(record["pzn"])
-                                if normalized:
-                                    record["pzn"] = normalized
-
-                            if ri % 500 == 0:
-                                self._set_busy_message(busy, f"{Path(filepath).name}: {ri:,} Zeilen verarbeitet".replace(",", "."))
+                    # SP29: Phase 2 - konsolidierte Records in die DB schreiben.
+                    with sqlite3.connect(DB_PATH) as con:
+                        for record in pending:
                             # SP28: Pre-Check, ob der Datensatz bereits existiert. Bei
                             # 'INSERT ... ON CONFLICT DO UPDATE' wirft SQLite KEIN
                             # IntegrityError - der UPSERT verhaelt sich nach aussen wie
                             # ein normaler INSERT. Ohne Pre-Check wurde 'neu += 1' fuer
-                            # jeden UPSERT hochgezaehlt, auch wenn nur ein bestehender
-                            # Datensatz aktualisiert wurde. Folge: die Diagnose log
-                            # "66 neu eingefuegt" obwohl die Tabellengroesse unveraendert
-                            # blieb. Pre-Check ist 1 zusaetzliche Query pro Zeile, was
-                            # bei Imports (max. ein paar tausend Zeilen) unkritisch ist.
+                            # jeden UPSERT hochgezaehlt.
                             pk_col = "pzn" if "pzn" in record else "kundennummer"
                             pk_value = record.get(pk_col)
                             already_exists = False
@@ -8883,6 +8929,7 @@ class NMGApp(tk.Tk):
                     file_diag["rows_inserted"] = neu
                     file_diag["rows_updated"] = aktualisiert
                     file_diag["rows_skipped_empty_pzn"] = rows_skipped_empty_pzn
+                    file_diag["rows_consolidated"] = rows_consolidated
                 except Exception as exc:
                     file_diag["status"] = f"Importfehler: {type(exc).__name__}: {exc}"
                     fehler.append(f"{Path(filepath).name}: {exc}")
@@ -8921,6 +8968,8 @@ class NMGApp(tk.Tk):
                 msg_lines.append(f"  Aktualisiert: {d['rows_updated']:,}".replace(",", "."))
                 if d['rows_skipped_empty_pzn']:
                     msg_lines.append(f"  Uebersprungen (leere PZN): {d['rows_skipped_empty_pzn']:,}".replace(",", "."))
+                if d.get('rows_consolidated'):
+                    msg_lines.append(f"  Mehrfach-Eintraege zusammengefasst (hoechster Rabatt gewinnt): {d['rows_consolidated']:,}".replace(",", "."))
             msg_lines.append("")
 
         msg_lines.append(f"Zusammenfassung: {gesamt_neu} neu, {gesamt_aktualisiert} aktualisiert.")
@@ -8937,6 +8986,9 @@ class NMGApp(tk.Tk):
             log_event("import", title, msg, user=self.bearbeiter)
         except Exception:
             pass
+        # SP29: Statuszeile rechts (Counter, letzte Aktualisierung) sofort
+        # auffrischen, damit der User nicht neu starten muss.
+        self._refresh_status_sidebar()
 
     def _mapping_dialog(self, title, filepath, headers, pflicht, optional, current_mapping, beschreibung=""):
         """Dialog: Benutzer ordnet Spalten manuell zu. Gibt mapping-dict zurück oder None."""
@@ -9101,18 +9153,22 @@ class NMGApp(tk.Tk):
 
     def import_pk_rabatte(self):
         self._ensure_import_tables()
+        # SP29: Slowakische Spalten-Header werden ergaenzt, weil SK-Quelldateien
+        # (z.B. Apotheken-Lagerbestand) statt "Artikel" / "Rabatt" oft "tovar" /
+        # "nazov" / "zlava" benutzen. Die Aliase werden case-insensitiv und ohne
+        # Diakritika gegen die Datei-Header gematcht.
         self._import_assistent(
             title="PK Rabatte importieren",
             ziel_tabelle="nmg_rabatte",
             pflicht_spalten=[
-                ("pzn", ["PZN", "PZN-Code", "Artikel-PZN"], ["pzn"]),
+                ("pzn", ["PZN", "PZN-Code", "Artikel-PZN", "ŠÚKL", "SUKL", "Kód"], ["pzn", "sukl", "kod"]),
             ],
             optionale_spalten=[
-                ("artikelname", ["Artikelname", "Bezeichnung", "Name", "Artikel"], ["artikel", "name", "bezeichn"]),
-                ("hersteller", ["Hersteller", "Lieferant"], ["herst", "liefer"]),
-                ("rabatt_prozent", ["Rabatt %", "Rabatt Prozent", "Prozent", "PK-Rabatt"], ["rabatt", "prozent", " %"]),
-                ("rabatt_euro", ["Rabatt €", "Rabatt Euro", "Abschlag"], ["euro", "rabatt eur", "abschlag"]),
-                ("gueltigkeit", ["Gültigkeit", "Gültig bis", "Gültig ab", "Laufzeit"], ["gueltig", "laufzeit"]),
+                ("artikelname", ["Artikelname", "Bezeichnung", "Name", "Artikel", "Tovar", "Názov", "Položka"], ["artikel", "name", "bezeichn", "tovar", "nazov", "polozka"]),
+                ("hersteller", ["Hersteller", "Lieferant", "Výrobca", "Dodávateľ"], ["herst", "liefer", "vyrobca", "dodavat"]),
+                ("rabatt_prozent", ["Rabatt %", "Rabatt Prozent", "Prozent", "PK-Rabatt", "Rabatt", "Zľava", "Zlava"], ["rabatt", "prozent", " %", "zlava", "zľava"]),
+                ("rabatt_euro", ["Rabatt €", "Rabatt Euro", "Abschlag", "Zľava EUR"], ["euro", "rabatt eur", "abschlag"]),
+                ("gueltigkeit", ["Gültigkeit", "Gültig bis", "Gültig ab", "Laufzeit", "Platnosť"], ["gueltig", "laufzeit", "platnost"]),
             ],
             # Direkt in die Wahrheits-Tabelle nmg_rabatte (V1.0 SP1).
             # Spaltenmapping: pzn -> nmg_pzn, artikelname -> artikel,
