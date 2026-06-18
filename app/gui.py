@@ -1072,6 +1072,7 @@ class NMGApp(tk.Tk):
 
             "schulbank": lambda: self.show_schulbank_page("Schulbank"),
             "lern_neu": lambda: self.show_schulbank_page("Neue Lernvorschläge"),
+            "lern_biosimilar": lambda: self.show_schulbank_page("Biosimilar"),
             "lern_uebernommen": lambda: self.show_schulbank_page("Übernommen"),
             "lern_abgelehnt": lambda: self.show_schulbank_page("Abgelehnt"),
             "lern_historie": lambda: self.show_schulbank_page("Historie"),
@@ -6084,7 +6085,8 @@ class NMGApp(tk.Tk):
 
             cards = [
                 ("🆕", "Neue Lernvorschläge", "Neue, noch nicht bearbeitete Vorschläge anzeigen.", lambda: self.show_schulbank_page("Neue Lernvorschläge"), "#0b4a86"),
-                ("✅", "Übernommen", "Gelernte Vorschläge der letzten 4 Wochen anzeigen.", lambda: self.show_schulbank_page("Übernommen"), "#11823b"),
+                ("🧬", "Biosimilar", "100% Austauscheinträge aus der Austauschdatenbank.", lambda: self.show_schulbank_page("Biosimilar"), "#0a7d8a"),
+                ("✅", "Übernommen", "Manuell gelernte Vorschläge der letzten 4 Wochen anzeigen.", lambda: self.show_schulbank_page("Übernommen"), "#11823b"),
                 ("❌", "Abgelehnt", "Abgelehnte Vorschläge der letzten 4 Wochen anzeigen.", lambda: self.show_schulbank_page("Abgelehnt"), "#9b1c1c"),
                 ("🕘", "Historie", "Bearbeitbare Historie von 4 Wochen bis 6 Monate anzeigen.", lambda: self.show_schulbank_page("Historie"), "#8b5a00"),
                 ("🔎", "Manuelle Prüfung", "Mehrdeutige gelernte Austausche prüfen und bereinigen.", self.show_schulbank_manuelle_pruefung, "#6b4fb3"),
@@ -6112,6 +6114,13 @@ class NMGApp(tk.Tk):
                 ).pack(fill="x", padx=24, pady=(8, 18))
 
             self.status.set("Schulbank: Bereich auswählen.")
+            return
+
+        # SP19: Biosimilar als eigener Bereich. Inhalt kommt direkt aus
+        # tbl_austauschdatenbank (Importdaten), separat von manuell gelernten
+        # Faellen in tbl_lernvorschlaege.
+        if section == "Biosimilar":
+            self.show_schulbank_biosimilar_page()
             return
 
         self._page_header(
@@ -6292,6 +6301,42 @@ class NMGApp(tk.Tk):
             ids = selected_ids()
             if not ids:
                 return
+            # SP19: vor dem Uebernehmen pruefen, ob die PZN_alt bereits in
+            # der Biosimilar-Datenbank (tbl_austauschdatenbank) liegt.
+            # User entscheidet, ob er trotzdem uebernehmen will.
+            if status == "uebernommen":
+                pzns_to_check = []
+                for iid in tree.selection():
+                    try:
+                        vals = tree.item(iid, "values")
+                        pzn_alt = self._normalize_pzn_input(vals[1] if len(vals) > 1 else "")
+                        item_id = int(vals[0])
+                        if pzn_alt:
+                            pzns_to_check.append((item_id, pzn_alt))
+                    except Exception:
+                        pass
+                bereits_biosimilar = []
+                try:
+                    with sqlite3.connect(DB_PATH) as con:
+                        for item_id, pzn_alt in pzns_to_check:
+                            row = con.execute(
+                                "SELECT pzn_nmg, freitext_austausch FROM tbl_austauschdatenbank "
+                                "WHERE COALESCE(status,'aktiv')='aktiv' AND pzn_alt=? LIMIT 1",
+                                (pzn_alt,),
+                            ).fetchone()
+                            if row:
+                                bereits_biosimilar.append((pzn_alt, row[0] or "", row[1] or ""))
+                except Exception:
+                    pass
+                if bereits_biosimilar:
+                    summary = "\n".join(
+                        f"  - PZN {p}  ->  NMG {n or '-'}  ({t[:40]})" for p, n, t in bereits_biosimilar[:8]
+                    )
+                    if not messagebox.askyesno(
+                        "Schulbank: bereits als Biosimilar erfasst",
+                        f"{len(bereits_biosimilar)} der markierten PZN ist/sind bereits in der Biosimilar-Datenbank vorhanden:\n\n{summary}\n\nTrotzdem zusaetzlich als manuell uebernommen speichern?"
+                    ):
+                        return
             label = "gelernt" if status == "uebernommen" else ("abgelehnt" if status == "abgelehnt" else "zurückgesetzt")
             update_many(ids, status, label)
 
@@ -6350,6 +6395,220 @@ class NMGApp(tk.Tk):
         tk.Button(actionbar, text="Löschen", command=delete_selected, padx=14, pady=8).pack(side="left", padx=8)
 
         self.status.set(f"Schulbank aktiv: {len(rows)} Einträge angezeigt. Mehrfachauswahl ist möglich.")
+
+
+    def show_schulbank_biosimilar_page(self):
+        """SP19: Biosimilar-Bereich. Zeigt alle aktiven Eintraege aus
+        tbl_austauschdatenbank (100% Austausch aus Importdatei).
+        Loeschen und Doppelklick zum Aendern.
+        """
+        self.clear_page()
+        self._page_header(
+            "Schulbank – Biosimilar",
+            "100% Austauscheintraege aus der Austauschdatenbank. Daten kommen aus dem Import (Austauschdatenbank aktualisieren). Doppelklick zum Aendern."
+        )
+
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(2, weight=1)
+
+        info_var = tk.StringVar(value="Biosimilar-Eintraege werden geladen ...")
+        tk.Label(body, textvariable=info_var, bg="#ffffff", fg="#333", anchor="w", justify="left").grid(row=0, column=0, sticky="ew", pady=(0, 8))
+
+        search_var = tk.StringVar()
+        search_row = tk.Frame(body, bg="#ffffff")
+        search_row.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        tk.Label(search_row, text="Suche (PZN oder Artikel):", bg="#ffffff").pack(side="left")
+        tk.Entry(search_row, textvariable=search_var, width=40).pack(side="left", padx=8)
+
+        columns = ("id", "pzn_alt", "artikel_alt", "pzn_nmg", "artikel_nmg", "freitext_austausch", "quelle", "bearbeiter", "erstellt_am")
+        headings = {
+            "id": "ID",
+            "pzn_alt": "PZN alt",
+            "artikel_alt": "Artikel alt",
+            "pzn_nmg": "PZN NMG",
+            "artikel_nmg": "Artikel NMG",
+            "freitext_austausch": "Austauschbar gegen",
+            "quelle": "Quelle",
+            "bearbeiter": "Bearbeiter",
+            "erstellt_am": "Erstellt",
+        }
+        widths = {
+            "id": 55,
+            "pzn_alt": 90,
+            "artikel_alt": 200,
+            "pzn_nmg": 90,
+            "artikel_nmg": 200,
+            "freitext_austausch": 220,
+            "quelle": 130,
+            "bearbeiter": 110,
+            "erstellt_am": 135,
+        }
+        tree = ttk.Treeview(body, columns=columns, show="headings", selectmode="extended")
+        tree.grid(row=2, column=0, sticky="nsew")
+        for col in columns:
+            tree.heading(col, text=headings[col])
+            tree.column(col, width=widths[col], anchor="w")
+        self._make_tree_sortable(tree, columns, headings)
+        scrollbar = tk.Scrollbar(body, orient="vertical", command=tree.yview)
+        scrollbar.grid(row=2, column=0, sticky="nse")
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        row_map = {}
+
+        def load_rows(filter_text=""):
+            for iid in tree.get_children(""):
+                tree.delete(iid)
+            row_map.clear()
+            data = []
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    con.row_factory = sqlite3.Row
+                    cols = {r[1] for r in con.execute("PRAGMA table_info(tbl_austauschdatenbank)").fetchall()}
+                    if "pzn_alt" not in cols:
+                        info_var.set("tbl_austauschdatenbank existiert nicht oder hat keine Spalte pzn_alt.")
+                        return
+                    def expr(name, fallback="''"):
+                        return name if name in cols else fallback
+                    sql = f"""
+                        SELECT id,
+                               COALESCE(pzn_alt, '') AS pzn_alt,
+                               COALESCE({expr('artikel_alt')}, '') AS artikel_alt,
+                               COALESCE({expr('pzn_nmg')}, '') AS pzn_nmg,
+                               COALESCE({expr('artikel_nmg')}, '') AS artikel_nmg,
+                               COALESCE({expr('freitext_austausch')}, '') AS freitext_austausch,
+                               COALESCE({expr('quelle', "'Austauschdatenbank'")}, '') AS quelle,
+                               COALESCE({expr('bearbeiter')}, '') AS bearbeiter,
+                               COALESCE({expr('erstellt_am', "''")}, '') AS erstellt_am
+                          FROM tbl_austauschdatenbank
+                         WHERE COALESCE(status,'aktiv') = 'aktiv'
+                         ORDER BY id DESC
+                    """
+                    rows = con.execute(sql).fetchall()
+                    for r in rows:
+                        d = dict(r)
+                        if filter_text:
+                            blob = " ".join(str(v or "") for v in d.values()).lower()
+                            if filter_text.lower() not in blob:
+                                continue
+                        data.append(d)
+            except Exception as exc:
+                info_var.set(f"Biosimilar-Eintraege konnten nicht geladen werden: {exc}")
+                return
+            for d in data:
+                iid = tree.insert("", "end", values=tuple(d.get(c, "") for c in columns))
+                row_map[iid] = d
+            info_var.set(f"{len(data)} Biosimilar-Eintraege angezeigt.")
+            self.status.set(f"Biosimilar: {len(data)} Eintraege.")
+
+        def on_search(*_):
+            load_rows(search_var.get().strip())
+        search_var.trace_add("write", on_search)
+
+        def edit_row(iid):
+            d = row_map.get(iid)
+            if not d:
+                return
+            dlg = tk.Toplevel(self)
+            dlg.title("Biosimilar bearbeiten")
+            dlg.transient(self)
+            dlg.grab_set()
+            frm = tk.Frame(dlg, padx=14, pady=14)
+            frm.pack(fill="both", expand=True)
+            fields = [
+                ("PZN alt", "pzn_alt"),
+                ("Artikel alt", "artikel_alt"),
+                ("PZN NMG", "pzn_nmg"),
+                ("Artikel NMG", "artikel_nmg"),
+                ("Austauschbar gegen (Freitext)", "freitext_austausch"),
+            ]
+            entries = {}
+            for i, (label, key) in enumerate(fields):
+                tk.Label(frm, text=label + ":", anchor="w").grid(row=i, column=0, sticky="w", pady=4)
+                e = tk.Entry(frm, width=46)
+                e.insert(0, str(d.get(key) or ""))
+                e.grid(row=i, column=1, padx=8, pady=4)
+                entries[key] = e
+
+            def save():
+                new_values = {k: entries[k].get().strip() for k in entries}
+                pzn_alt = self._normalize_pzn_input(new_values["pzn_alt"])
+                pzn_nmg = self._normalize_pzn_input(new_values["pzn_nmg"])
+                if not pzn_alt:
+                    messagebox.showwarning("Biosimilar", "PZN alt darf nicht leer sein.")
+                    return
+                if not pzn_nmg and not new_values["freitext_austausch"]:
+                    messagebox.showwarning("Biosimilar", "Bitte PZN NMG oder Austauschbar-gegen-Freitext angeben.")
+                    return
+                try:
+                    with sqlite3.connect(DB_PATH) as con:
+                        cols = {r[1] for r in con.execute("PRAGMA table_info(tbl_austauschdatenbank)").fetchall()}
+                        assignments = []
+                        params = []
+                        col_map = {
+                            "pzn_alt": pzn_alt,
+                            "artikel_alt": new_values["artikel_alt"],
+                            "pzn_nmg": pzn_nmg,
+                            "artikel_nmg": new_values["artikel_nmg"],
+                            "freitext_austausch": new_values["freitext_austausch"],
+                        }
+                        for col, val in col_map.items():
+                            if col in cols:
+                                assignments.append(f"{col}=?")
+                                params.append(val)
+                        if "bearbeiter" in cols:
+                            assignments.append("bearbeiter=?")
+                            params.append(self.bearbeiter)
+                        if "aktualisiert_am" in cols:
+                            assignments.append("aktualisiert_am=CURRENT_TIMESTAMP")
+                        params.append(int(d["id"]))
+                        con.execute(
+                            f"UPDATE tbl_austauschdatenbank SET {', '.join(assignments)} WHERE id=?",
+                            params,
+                        )
+                        con.commit()
+                    dlg.destroy()
+                    load_rows(search_var.get().strip())
+                except Exception as exc:
+                    messagebox.showerror("Biosimilar", f"Speichern fehlgeschlagen:\n{exc}")
+
+            btns = tk.Frame(frm)
+            btns.grid(row=len(fields), column=0, columnspan=2, pady=(12, 0), sticky="e")
+            tk.Button(btns, text="Speichern", command=save, bg="#11823b", fg="white", relief="flat", padx=14, pady=6).pack(side="right", padx=(8, 0))
+            tk.Button(btns, text="Abbrechen", command=dlg.destroy, padx=14, pady=6).pack(side="right")
+
+        def on_double_click(event):
+            iid = tree.identify_row(event.y)
+            if iid:
+                edit_row(iid)
+        tree.bind("<Double-1>", on_double_click)
+
+        def delete_selected():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Biosimilar", "Bitte zuerst einen oder mehrere Eintraege auswaehlen.")
+                return
+            ids = [int(row_map[iid]["id"]) for iid in sel if iid in row_map]
+            if not ids:
+                return
+            if not messagebox.askyesno("Biosimilar loeschen", f"{len(ids)} Eintrag/Eintraege wirklich loeschen?\n\nDas entfernt sie aus der Austauschdatenbank."):
+                return
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    placeholders = ",".join("?" for _ in ids)
+                    con.execute(f"DELETE FROM tbl_austauschdatenbank WHERE id IN ({placeholders})", ids)
+                    con.commit()
+                load_rows(search_var.get().strip())
+            except Exception as exc:
+                messagebox.showerror("Biosimilar", f"Loeschen fehlgeschlagen:\n{exc}")
+
+        actionbar = tk.Frame(body, bg="#ffffff")
+        actionbar.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        tk.Button(actionbar, text="Aendern (oder Doppelklick)", command=lambda: edit_row(tree.selection()[0]) if tree.selection() else messagebox.showinfo("Biosimilar", "Bitte einen Eintrag waehlen."), padx=14, pady=8).pack(side="left", padx=(0, 8))
+        tk.Button(actionbar, text="Loeschen", command=delete_selected, padx=14, pady=8).pack(side="left", padx=8)
+
+        load_rows()
 
 
     def show_schulbank_manuelle_pruefung(self):
@@ -6777,10 +7036,12 @@ class NMGApp(tk.Tk):
             return combined
 
         if status_filter == "uebernommen":
-            lern_rows = _rows(base_select + f"""\nWHERE status = 'uebernommen'
+            # SP19: Uebernommen zeigt nur noch manuelle Lernvorschlaege,
+            # die Biosimilar-/Austauschdatenbank-Eintraege bekommen ihren
+            # eigenen Bereich.
+            return _rows(base_select + f"""\nWHERE status = 'uebernommen'
                   AND {recent_7}\nAND {valid_filter}
                 ORDER BY datetime(COALESCE(bearbeitet_am, erstellt_am)) DESC, id DESC\n""")
-            return _combine_unique(_austausch_rows(recent=True), lern_rows)
 
         if status_filter == "abgelehnt":
             # Abgelehnte Fälle sollen auch dann sichtbar bleiben, wenn sie fachlich unvollständig waren.
@@ -6789,10 +7050,10 @@ class NMGApp(tk.Tk):
             """)
 
         if status_filter in ("historie", "historie_uebernommen"):
-            lern_rows = _rows(base_select + f"""\nWHERE status = 'uebernommen'
+            # SP19: Historie der manuell gelernten Vorschlaege bleibt sortenrein.
+            return _rows(base_select + f"""\nWHERE status = 'uebernommen'
                   AND {older_7}\nAND {valid_filter}
                 ORDER BY datetime(COALESCE(bearbeitet_am, erstellt_am)) DESC, id DESC\n""")
-            return _combine_unique(_austausch_rows(recent=False), lern_rows)
 
         if status_filter == "historie_abgelehnt":
             return _rows(base_select + f"""\nWHERE status = 'abgelehnt'

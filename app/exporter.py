@@ -177,17 +177,17 @@ def _lookup(con: sqlite3.Connection, original_pzn: str):
         def _norm_text(value):
             return " ".join(str(value or "").strip().lower().split())
 
-        variants = {
-            (
-                _pzn(item.get("pzn_nmg")),
-                _norm_text(item.get("freitext_austausch")),
-            )
-            for item in matches
-            if _pzn(item.get("pzn_nmg")) or _norm_text(item.get("freitext_austausch"))
-        }
-        if len(variants) > 1:
-            # Mehrdeutiger Lernstand: bewusst keinen automatischen Treffer verwenden.
+        # SP19: Mehrdeutigkeit nur dann, wenn die NMG-PZNs wirklich verschieden sind.
+        # Wenn alle Treffer auf dieselbe pzn_nmg zeigen (typisch bei Biosimilar-Listen
+        # mit mehrfachen Eintraegen pro PZN_alt), den Treffer trotzdem nehmen.
+        nmg_pzns = {_pzn(item.get("pzn_nmg")) for item in matches if _pzn(item.get("pzn_nmg"))}
+        if len(nmg_pzns) > 1:
             return {}
+        if matches and not nmg_pzns:
+            # Keine NMG-PZN, nur Freitext: nur dann mehrdeutig, wenn die Freitexte abweichen.
+            freitexte = {_norm_text(item.get("freitext_austausch")) for item in matches if _norm_text(item.get("freitext_austausch"))}
+            if len(freitexte) > 1:
+                return {}
         if matches:
             austausch = matches[0]
     except Exception:
@@ -290,6 +290,65 @@ def _lookup(con: sqlite3.Connection, original_pzn: str):
 
 def _lookup_hersteller(con: sqlite3.Connection, pzn: str) -> str:
     return lookup_hersteller(con, pzn)
+
+
+def _lookup_stammdaten(con: sqlite3.Connection, pzn: str) -> dict:
+    """SP19: Fallback fuer Artikelname/DF/Pck/Herst/EK zur abgegebenen PZN.
+    Wird benutzt, wenn weder die Rohdatei noch tbl_pzn_basisdaten (selbstlernend)
+    Werte liefern. Liest aus tbl_artikelstamm, tbl_pzn_basisdaten, tbl_nmg_stamm.
+    """
+    pzn = _pzn(pzn)
+    result = {"artikelname": None, "df": None, "pck": None, "hersteller": None, "ek": None}
+    if not pzn:
+        return result
+
+    def _set(key, value):
+        if result[key] in (None, "") and value not in (None, ""):
+            result[key] = value
+
+    try:
+        row = con.execute(
+            "SELECT artikel, df, pck, herst, ek FROM tbl_artikelstamm WHERE pzn=? LIMIT 1",
+            (pzn,),
+        ).fetchone()
+        if row:
+            data = dict(row) if hasattr(row, "keys") else {"artikel": row[0], "df": row[1], "pck": row[2], "herst": row[3], "ek": row[4]}
+            _set("artikelname", data.get("artikel"))
+            _set("df", data.get("df"))
+            _set("pck", data.get("pck"))
+            _set("hersteller", data.get("herst"))
+            _set("ek", data.get("ek"))
+    except Exception:
+        pass
+
+    try:
+        row = con.execute(
+            "SELECT artikelname, df, pck, herstellerkuerzel FROM tbl_pzn_basisdaten WHERE pzn=? LIMIT 1",
+            (pzn,),
+        ).fetchone()
+        if row:
+            data = dict(row) if hasattr(row, "keys") else {"artikelname": row[0], "df": row[1], "pck": row[2], "herstellerkuerzel": row[3]}
+            _set("artikelname", data.get("artikelname"))
+            _set("df", data.get("df"))
+            _set("pck", data.get("pck"))
+            _set("hersteller", data.get("herstellerkuerzel"))
+    except Exception:
+        pass
+
+    try:
+        row = con.execute(
+            "SELECT artikelname, herstellerkuerzel, taxe_ek FROM tbl_nmg_stamm WHERE pzn=? LIMIT 1",
+            (pzn,),
+        ).fetchone()
+        if row:
+            data = dict(row) if hasattr(row, "keys") else {"artikelname": row[0], "herstellerkuerzel": row[1], "taxe_ek": row[2]}
+            _set("artikelname", data.get("artikelname"))
+            _set("hersteller", data.get("herstellerkuerzel"))
+            _set("ek", data.get("taxe_ek"))
+    except Exception:
+        pass
+
+    return result
 
 
 
@@ -511,10 +570,20 @@ def create_linden_export(input_file: str | Path, apotheke: str) -> Path:
             pck_roh = source_row[3] if len(source_row) > 3 else None
             hersteller_roh = clean_hersteller(source_row[4] if len(source_row) > 4 else None)
 
+            # SP19: Wenn weder Rohdatei noch selbstlernende Basis Werte liefert,
+            # auf Stammdaten zurueckgreifen (Artikelstamm, PZN-Basis, NMG-Stamm).
+            stamm = None
             artikel_final = artikel_roh or basis.get("artikelname")
             df_final = df_roh or basis.get("df")
             pck_final = pck_roh or basis.get("pck")
             hersteller_final = hersteller_roh or basis.get("herstellerkuerzel") or _lookup_hersteller(con, original_pzn)
+
+            if not (artikel_final and df_final and pck_final and hersteller_final):
+                stamm = _lookup_stammdaten(con, original_pzn)
+                artikel_final = artikel_final or stamm.get("artikelname")
+                df_final = df_final or stamm.get("df")
+                pck_final = pck_final or stamm.get("pck")
+                hersteller_final = hersteller_final or stamm.get("hersteller")
 
             register_basisdaten(con, original_pzn, artikel_roh, hersteller_roh, df_roh, pck_roh, input_file.name)
 
@@ -525,6 +594,10 @@ def create_linden_export(input_file: str | Path, apotheke: str) -> Path:
                 ek_final = ek_num
             else:
                 ek_final = lookup_latest_ek(con, original_pzn)
+                if ek_final is None:
+                    if stamm is None:
+                        stamm = _lookup_stammdaten(con, original_pzn)
+                    ek_final = stamm.get("ek")
 
             output_values = [
                 original_pzn, artikel_final, df_final, pck_final, hersteller_final,
