@@ -133,6 +133,14 @@ def _lookup(con: sqlite3.Connection, original_pzn: str):
     if not original_pzn:
         return {}
 
+    # SP24: pzn_norm() als SQLite-Funktion verfuegbar machen, damit JOINs und
+    # WHERE-Klauseln Format-Unterschiede tolerieren (Excel-Int, fuehrende Nullen,
+    # ".0"-Suffix). Idempotent - mehrfaches Aufrufen schadet nicht.
+    try:
+        con.create_function("pzn_norm", 1, _pzn)
+    except Exception:
+        pass
+
     def _norm_db_pzn(value):
         return _pzn(value)
 
@@ -147,7 +155,7 @@ def _lookup(con: sqlite3.Connection, original_pzn: str):
             ("tbl_pzn_basisdaten", "artikelname"),
         ):
             try:
-                row = con.execute(f"SELECT {col} FROM {table} WHERE pzn=? LIMIT 1", (pzn,)).fetchone()
+                row = con.execute(f"SELECT {col} FROM {table} WHERE pzn_norm(pzn)=pzn_norm(?) LIMIT 1", (pzn,)).fetchone()
                 if row and row[0]:
                     return str(row[0]).strip()
             except Exception:
@@ -174,8 +182,8 @@ def _lookup(con: sqlite3.Connection, original_pzn: str):
                    r.rabatt AS _rabatt_pk,
                    ns.pzn   AS _nmg_stamm_pzn
             FROM tbl_austauschdatenbank a
-            LEFT JOIN nmg_rabatte   r  ON r.nmg_pzn = a.pzn_nmg
-            LEFT JOIN tbl_nmg_stamm ns ON ns.pzn    = a.pzn_nmg
+            LEFT JOIN nmg_rabatte   r  ON pzn_norm(r.nmg_pzn) = pzn_norm(a.pzn_nmg)
+            LEFT JOIN tbl_nmg_stamm ns ON pzn_norm(ns.pzn)    = pzn_norm(a.pzn_nmg)
             WHERE COALESCE(a.status, 'aktiv') = 'aktiv'
               AND COALESCE(a.pzn_alt, '') <> ''
             ORDER BY
@@ -218,7 +226,7 @@ def _lookup(con: sqlite3.Connection, original_pzn: str):
                 return False
             try:
                 return con.execute(
-                    "SELECT 1 FROM tbl_nmg_stamm WHERE pzn=? LIMIT 1", (pzn,)
+                    "SELECT 1 FROM tbl_nmg_stamm WHERE pzn_norm(pzn)=pzn_norm(?) LIMIT 1", (pzn,)
                 ).fetchone() is not None
             except Exception:
                 return False
@@ -239,9 +247,9 @@ def _lookup(con: sqlite3.Connection, original_pzn: str):
             zusatz = "weitere: " + " | ".join(weitere_texte)
             freitext = f"{freitext} | {zusatz}" if freitext else zusatz
 
-        stamm = _rowdict(con.execute("SELECT * FROM tbl_nmg_stamm WHERE pzn=?", (nmg_pzn or '',)).fetchone()) if nmg_pzn else None
-        rabatt = _rowdict(con.execute("SELECT * FROM nmg_rabatte WHERE nmg_pzn=?", (nmg_pzn or '',)).fetchone()) if nmg_pzn else None
-        liefer = _rowdict(con.execute("SELECT * FROM tbl_lieferfaehigkeit WHERE nmg_pzn=?", (nmg_pzn or '',)).fetchone()) if nmg_pzn else None
+        stamm = _rowdict(con.execute("SELECT * FROM tbl_nmg_stamm WHERE pzn_norm(pzn)=pzn_norm(?)", (nmg_pzn or '',)).fetchone()) if nmg_pzn else None
+        rabatt = _rowdict(con.execute("SELECT * FROM nmg_rabatte WHERE pzn_norm(nmg_pzn)=pzn_norm(?)", (nmg_pzn or '',)).fetchone()) if nmg_pzn else None
+        liefer = _rowdict(con.execute("SELECT * FROM tbl_lieferfaehigkeit WHERE pzn_norm(nmg_pzn)=pzn_norm(?)", (nmg_pzn or '',)).fetchone()) if nmg_pzn else None
 
         return {
             "im_sortiment": "X" if nmg_pzn else "X Austausch mögl",
@@ -272,9 +280,9 @@ def _lookup(con: sqlite3.Connection, original_pzn: str):
             freitext = str(data.get("freitext_austausch") or data.get("produkt_neu") or "").strip()
             if nmg_pzn and (not freitext or freitext.lower().startswith("pzn nmg:")):
                 freitext = _article_name_by_pzn(nmg_pzn) or freitext
-            stamm = _rowdict(con.execute("SELECT * FROM tbl_nmg_stamm WHERE pzn=?", (nmg_pzn or '',)).fetchone()) if nmg_pzn else None
-            rabatt = _rowdict(con.execute("SELECT * FROM nmg_rabatte WHERE nmg_pzn=?", (nmg_pzn or '',)).fetchone()) if nmg_pzn else None
-            liefer = _rowdict(con.execute("SELECT * FROM tbl_lieferfaehigkeit WHERE nmg_pzn=?", (nmg_pzn or '',)).fetchone()) if nmg_pzn else None
+            stamm = _rowdict(con.execute("SELECT * FROM tbl_nmg_stamm WHERE pzn_norm(pzn)=pzn_norm(?)", (nmg_pzn or '',)).fetchone()) if nmg_pzn else None
+            rabatt = _rowdict(con.execute("SELECT * FROM nmg_rabatte WHERE pzn_norm(nmg_pzn)=pzn_norm(?)", (nmg_pzn or '',)).fetchone()) if nmg_pzn else None
+            liefer = _rowdict(con.execute("SELECT * FROM tbl_lieferfaehigkeit WHERE pzn_norm(nmg_pzn)=pzn_norm(?)", (nmg_pzn or '',)).fetchone()) if nmg_pzn else None
             return {
                 "im_sortiment": "X" if nmg_pzn else "X Austausch mögl",
                 "nmg_pzn": nmg_pzn or None,
@@ -295,7 +303,7 @@ def _lookup(con: sqlite3.Connection, original_pzn: str):
     ).fetchone())
     if ref:
         nmg_pzn_ref = _pzn(ref.get("nmg_pzn"))
-        stamm_ref = _rowdict(con.execute("SELECT * FROM tbl_nmg_stamm WHERE pzn=?", (nmg_pzn_ref or '',)).fetchone())
+        stamm_ref = _rowdict(con.execute("SELECT * FROM tbl_nmg_stamm WHERE pzn_norm(pzn)=pzn_norm(?)", (nmg_pzn_ref or '',)).fetchone())
         return {
             "im_sortiment": ref.get("im_sortiment"),
             "nmg_pzn": nmg_pzn_ref,
@@ -309,9 +317,9 @@ def _lookup(con: sqlite3.Connection, original_pzn: str):
 
     # 4) Falls die abgegebene PZN selbst NMG-Artikel ist oder Rabatt-/Lieferdaten hat.
     nmg_pzn = original_pzn
-    stamm = _rowdict(con.execute("SELECT * FROM tbl_nmg_stamm WHERE pzn=?", (nmg_pzn or '',)).fetchone())
-    rabatt = _rowdict(con.execute("SELECT * FROM nmg_rabatte WHERE nmg_pzn=?", (nmg_pzn or '',)).fetchone())
-    liefer = _rowdict(con.execute("SELECT * FROM tbl_lieferfaehigkeit WHERE nmg_pzn=?", (nmg_pzn or '',)).fetchone())
+    stamm = _rowdict(con.execute("SELECT * FROM tbl_nmg_stamm WHERE pzn_norm(pzn)=pzn_norm(?)", (nmg_pzn or '',)).fetchone())
+    rabatt = _rowdict(con.execute("SELECT * FROM nmg_rabatte WHERE pzn_norm(nmg_pzn)=pzn_norm(?)", (nmg_pzn or '',)).fetchone())
+    liefer = _rowdict(con.execute("SELECT * FROM tbl_lieferfaehigkeit WHERE pzn_norm(nmg_pzn)=pzn_norm(?)", (nmg_pzn or '',)).fetchone())
 
     if not any([stamm, rabatt, liefer]):
         return {}
@@ -341,13 +349,19 @@ def _lookup_stammdaten(con: sqlite3.Connection, pzn: str) -> dict:
     if not pzn:
         return result
 
+    # SP24: pzn_norm() bereitstellen fuer Format-Toleranz beim Lookup.
+    try:
+        con.create_function("pzn_norm", 1, _pzn)
+    except Exception:
+        pass
+
     def _set(key, value):
         if result[key] in (None, "") and value not in (None, ""):
             result[key] = value
 
     try:
         row = con.execute(
-            "SELECT artikel, df, pck, herst, ek FROM tbl_artikelstamm WHERE pzn=? LIMIT 1",
+            "SELECT artikel, df, pck, herst, ek FROM tbl_artikelstamm WHERE pzn_norm(pzn)=pzn_norm(?) LIMIT 1",
             (pzn,),
         ).fetchone()
         if row:
@@ -362,7 +376,7 @@ def _lookup_stammdaten(con: sqlite3.Connection, pzn: str) -> dict:
 
     try:
         row = con.execute(
-            "SELECT artikelname, df, pck, herstellerkuerzel FROM tbl_pzn_basisdaten WHERE pzn=? LIMIT 1",
+            "SELECT artikelname, df, pck, herstellerkuerzel FROM tbl_pzn_basisdaten WHERE pzn_norm(pzn)=pzn_norm(?) LIMIT 1",
             (pzn,),
         ).fetchone()
         if row:
@@ -376,7 +390,7 @@ def _lookup_stammdaten(con: sqlite3.Connection, pzn: str) -> dict:
 
     try:
         row = con.execute(
-            "SELECT artikelname, herstellerkuerzel, taxe_ek FROM tbl_nmg_stamm WHERE pzn=? LIMIT 1",
+            "SELECT artikelname, herstellerkuerzel, taxe_ek FROM tbl_nmg_stamm WHERE pzn_norm(pzn)=pzn_norm(?) LIMIT 1",
             (pzn,),
         ).fetchone()
         if row:
@@ -571,6 +585,10 @@ def create_linden_export(input_file: str | Path, apotheke: str) -> Path:
 
     with sqlite3.connect(DB_PATH) as con:
         con.row_factory = sqlite3.Row
+        # SP24: Damit JOINs/WHEREs auf PZN-Spalten Format-Unterschiede tolerieren
+        # (Excel-Int vs. String, fuehrende Nullen, ".0"-Suffix). _pzn() zfilled
+        # auf 8 Stellen wenn rein numerisch, sonst nimmt es den getrimmten String.
+        con.create_function("pzn_norm", 1, _pzn)
         auswertung_id = None
         statistik = {"positionen": 0, "nmg_treffer": 0, "nicht_nmg": 0, "gesamt_absatz": 0.0}
         abgleich_rows = []

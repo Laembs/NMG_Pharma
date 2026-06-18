@@ -8632,6 +8632,15 @@ class NMGApp(tk.Tk):
                                 rows_skipped_empty_pzn += 1
                                 continue
 
+                            # SP24: PZN konsistent auf 8 Stellen normalisieren. Sonst landen
+                            # Excel-Zahlen, ".0"-Suffixe oder fehlende fuehrende Nullen in der
+                            # DB und JOINs/WHEREs gegen tbl_austauschdatenbank (zfilled) liefern
+                            # keine Treffer (z.B. Rabatte werden nicht gefunden).
+                            if "pzn" in record and record["pzn"] not in (None, ""):
+                                normalized = self._normalize_pzn_input(record["pzn"])
+                                if normalized:
+                                    record["pzn"] = normalized
+
                             if ri % 500 == 0:
                                 self._set_busy_message(busy, f"{Path(filepath).name}: {ri:,} Zeilen verarbeitet".replace(",", "."))
                             try:
