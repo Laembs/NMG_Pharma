@@ -23,6 +23,7 @@ from .compare import export_abweichungsanalyse
 from .historical_import import import_historical_market_folder, import_historical_market_file
 from .austausch_db import import_austausch_excel, count_austauschdatenbank, add_austausch_entry
 from .artikel_db import import_artikelstamm_excel, count_artikelstamm
+from .vergleichssuche import search_unified, get_pzn_details
 from .file_loader import SUPPORTED_DATA_FILETYPES
 from .db_overview import get_database_overview, format_size
 from .update_manager import (
@@ -1192,6 +1193,7 @@ class NMGApp(tk.Tk):
 
             "apps": self.show_apps_page,
             "kunden_center": self.show_kunden_center,
+            "vergleichssuche": self.open_vergleichssuche_window,
             "mitarbeiter_center": self.show_mitarbeiter_center,
             "todo_center": self.show_todo_center,
             "bestell_center": self.show_bestell_center,
@@ -3632,6 +3634,7 @@ class NMGApp(tk.Tk):
             ("abweichung",       "🔍", "Abweichungsanalyse",   "Manuelle vs. Programm-Auswertung.",         self.deviation_analysis,                     "#8b5a00"),
             ("datenupdates",     "🗄", "Daten aktualisieren",  "Stammdaten und Importe pflegen.",           self.show_daten_aktualisieren_page,          "#555"),
             ("roadmap",          "📌", "Roadmap",              "Offene und erledigte Punkte.",              self.show_roadmap_page,                      "#6b4fb3"),
+            ("vergleichssuche",  "🔍", "Vergleichs-Suche",     "PZN/Artikelname schnell finden.",           self.open_vergleichssuche_window,            "#0b6e6e"),
         ]
 
     def _dashboard_all_info_widgets(self):
@@ -3747,15 +3750,13 @@ class NMGApp(tk.Tk):
         win = tk.Toplevel(self)
         win.resizable(True, True)
         win.title("Dashboard anpassen")
-        win.geometry("860x680")
-        win.minsize(640, 520)
+        # SP31: vorher 860x680 + win.state("zoomed") -> der Editor blockierte den
+        # ganzen Bildschirm. Jetzt um ~20% kleiner und ohne Zoom-State.
+        win.geometry("690x545")
+        win.minsize(512, 416)
         win.configure(bg="#f5f7fb")
         win.transient(self)
         win.grab_set()
-        try:
-            win.state("zoomed")
-        except Exception:
-            pass
 
         tk.Label(win, text="⚙️  Dashboard anpassen", font=("Arial", 16, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 2))
         tk.Label(win, text="Wähle welche Info-Bereiche und Schnellzugriff-Kacheln auf der Startseite erscheinen.\nDie Auswahl wird für dich gespeichert.", font=("Arial", 10), fg="#444", bg="#f5f7fb", justify="left").pack(anchor="w", padx=22, pady=(0, 10))
@@ -5574,6 +5575,7 @@ class NMGApp(tk.Tk):
             ("\U0001f464", "Mitarbeiter", "Mitarbeiterdaten, Profile, Vertretungen.", self.show_mitarbeiter_center, "#6b4fb3"),
             ("\u2705", "ToDo", "Aufgaben, offene Punkte und Notizen.", self.show_todo_center, "#11823b"),
             ("\U0001f6d2", "Bestellungen", "Bestellhistorie und Auswertungen.", self.show_bestell_center, "#8b5a00"),
+            ("\U0001f50d", _T("Vergleichs-Suche"), _T("PZN oder Artikelname schnell in allen Wissens-Tabellen finden."), self.open_vergleichssuche_window, "#0b6e6e"),
         ]
         for idx, (icon, title, desc, cmd, color) in enumerate(app_tiles):
             f = tk.Frame(body, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1)
@@ -5585,6 +5587,332 @@ class NMGApp(tk.Tk):
                       activebackground=color, relief="flat", font=("Arial", 11, "bold"),
                       padx=16, pady=8).pack(fill="x", padx=18, pady=(4, 18))
         self.status.set("Apps bereit.")
+
+    def open_vergleichssuche_window(self):
+        """SP31: Live-Suche in eigenem Toplevel-Fenster, parallel zum Hauptfenster nutzbar.
+        Singleton: zweiter Aufruf bringt das vorhandene Fenster nach vorn.
+        """
+        existing = getattr(self, "_vergleichssuche_window", None)
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    existing.deiconify()
+                    existing.lift()
+                    existing.focus_force()
+                    return
+            except Exception:
+                pass
+
+        win = tk.Toplevel(self)
+        win.title("NMGone — Vergleichs-Suche")
+        win.geometry("1100x650")
+        win.minsize(720, 420)
+        win.configure(bg="#ffffff")
+        self._vergleichssuche_window = win
+
+        def on_close():
+            self._vergleichssuche_window = None
+            win.destroy()
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
+        header = tk.Frame(win, bg="#ffffff")
+        header.pack(fill="x", padx=14, pady=(10, 4))
+        tk.Label(header, text=_T("Vergleichs-Suche"),
+                 font=("Arial", 15, "bold"), fg="#0b4a86", bg="#ffffff").pack(anchor="w")
+        tk.Label(header,
+                 text=_T("PZN oder Artikelname eingeben (ab 3 Zeichen). Treffer aus allen Wissens-Tabellen."),
+                 font=("Arial", 9), fg="#666", bg="#ffffff").pack(anchor="w", pady=(2, 0))
+
+        body = tk.Frame(win, bg="#ffffff")
+        body.pack(fill="both", expand=True, padx=18, pady=(4, 14))
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+
+        toolbar = tk.Frame(body, bg="#ffffff")
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        tk.Label(toolbar, text=_T("Suche") + ":", bg="#ffffff",
+                 fg="#0b4a86", font=("Arial", 10, "bold")).pack(side="left")
+        search_var = tk.StringVar()
+        search_entry = tk.Entry(toolbar, textvariable=search_var, width=42, font=("Arial", 11))
+        search_entry.pack(side="left", padx=(6, 12))
+        status_label = tk.Label(toolbar, text="", bg="#ffffff", fg="#666", font=("Arial", 9))
+        status_label.pack(side="left")
+        search_entry.focus_set()
+
+        paned = ttk.Panedwindow(body, orient="horizontal")
+        paned.grid(row=1, column=0, sticky="nsew")
+
+        # --- Linke Seite: Treffer-Liste ---
+        left = tk.Frame(paned, bg="#ffffff")
+        left.columnconfigure(0, weight=1)
+        left.rowconfigure(0, weight=1)
+        paned.add(left, weight=2)
+
+        cols = ("nmg", "austausch", "pzn", "artikel", "df", "pck", "herst")
+        heads = {
+            "nmg": "NMG",
+            "austausch": _T("Austausch"),
+            "pzn": "PZN",
+            "artikel": _T("Artikel"),
+            "df": "DF",
+            "pck": "PCK",
+            "herst": _T("Hersteller"),
+        }
+        widths = {"nmg": 40, "austausch": 70, "pzn": 90, "artikel": 320, "df": 50, "pck": 90, "herst": 110}
+
+        tree = ttk.Treeview(left, columns=cols, show="headings", selectmode="browse")
+        for c in cols:
+            tree.heading(c, text=heads[c])
+            anchor = "center" if c in ("nmg", "austausch") else "w"
+            tree.column(c, width=widths[c], anchor=anchor, stretch=(c == "artikel"))
+        tree.grid(row=0, column=0, sticky="nsew")
+        sb_left = tk.Scrollbar(left, orient="vertical", command=tree.yview)
+        sb_left.grid(row=0, column=1, sticky="ns")
+        tree.configure(yscrollcommand=sb_left.set)
+
+        # --- Rechte Seite: Detail-Panel ---
+        right = tk.Frame(paned, bg="#ffffff")
+        right.columnconfigure(0, weight=1)
+        paned.add(right, weight=3)
+
+        # Kopfzeile mit selektierter PZN + Artikelname.
+        detail_head = tk.Label(
+            right, text=_T("Bitte Treffer auswaehlen."),
+            bg="#f0f5fa", fg="#0b4a86", font=("Arial", 11, "bold"),
+            anchor="w", padx=10, pady=8,
+        )
+        detail_head.grid(row=0, column=0, columnspan=2, sticky="ew")
+
+        # Kompakte Stammdaten-Karte (Label/Wert in zwei Spalten).
+        info_card = tk.Frame(right, bg="#fcfdff", padx=10, pady=8,
+                             highlightbackground="#e0e8f0", highlightthickness=1)
+        info_card.grid(row=1, column=0, columnspan=2, sticky="ew", padx=0, pady=(0, 6))
+        info_card.columnconfigure(1, weight=1)
+        info_card.columnconfigure(3, weight=1)
+        info_labels = {}
+        info_fields = [
+            ("artikel", _T("Artikel"), 0, 0),
+            ("herst", _T("Hersteller"), 0, 2),
+            ("df", "DF", 1, 0),
+            ("pck", "PCK", 1, 2),
+            ("apu", "APU", 2, 0),
+            ("ek", "EK", 2, 2),
+            ("nmg", "NMG-Stamm", 3, 0),
+            ("rabatt", _T("PK-Rabatt"), 3, 2),
+        ]
+        for key, label, row_i, col_i in info_fields:
+            tk.Label(info_card, text=label + ":", bg="#fcfdff", fg="#666",
+                     font=("Arial", 9), anchor="w").grid(
+                row=row_i, column=col_i, sticky="w", padx=(0, 6), pady=2)
+            val = tk.Label(info_card, text="–", bg="#fcfdff", fg="#123",
+                           font=("Arial", 10, "bold"), anchor="w")
+            val.grid(row=row_i, column=col_i + 1, sticky="ew", padx=(0, 14), pady=2)
+            info_labels[key] = val
+
+        # Treeview fuer Austauschartikel (PZN | Artikel | DF | PCK | Hersteller | Quelle).
+        alt_label = tk.Label(right, text=_T("Austauschartikel"),
+                             bg="#ffffff", fg="#0b4a86", font=("Arial", 11, "bold"),
+                             anchor="w", padx=10, pady=4)
+        alt_label.grid(row=2, column=0, columnspan=2, sticky="nw", pady=(6, 0))
+
+        alt_frame = tk.Frame(right, bg="#ffffff")
+        alt_frame.grid(row=3, column=0, columnspan=2, sticky="nsew")
+        right.rowconfigure(3, weight=1)
+        alt_frame.columnconfigure(0, weight=1)
+        alt_frame.rowconfigure(0, weight=1)
+
+        alt_cols = ("pzn", "artikel", "df", "pck", "herst")
+        alt_heads = {
+            "pzn": "PZN",
+            "artikel": _T("Artikelname"),
+            "df": "DF",
+            "pck": "PCK",
+            "herst": _T("Hersteller"),
+        }
+        alt_widths = {"pzn": 80, "artikel": 280, "df": 50, "pck": 90, "herst": 100}
+        alt_tree = ttk.Treeview(alt_frame, columns=alt_cols, show="headings", selectmode="browse", height=10)
+        for c in alt_cols:
+            alt_tree.heading(c, text=alt_heads[c])
+            alt_tree.column(c, width=alt_widths[c], anchor="w", stretch=(c == "artikel"))
+        alt_tree.grid(row=0, column=0, sticky="nsew")
+        sb_alt = tk.Scrollbar(alt_frame, orient="vertical", command=alt_tree.yview)
+        sb_alt.grid(row=0, column=1, sticky="ns")
+        alt_tree.configure(yscrollcommand=sb_alt.set)
+
+        alt_status = tk.Label(right, text="", bg="#ffffff", fg="#666",
+                              font=("Arial", 9), anchor="w", padx=10)
+        alt_status.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+
+        row_map: dict[str, dict] = {}
+        pending_job = {"id": None}
+        search_seq = {"current": 0}  # nur die neueste Suche darf die UI updaten
+        detail_seq = {"current": 0}  # dito fuer Detail-Lookups beim Reihen-Wechsel
+
+        def render_results(rows):
+            for item in tree.get_children():
+                tree.delete(item)
+            row_map.clear()
+            for r in rows:
+                nmg_badge = "✓" if r["ist_nmg"] else ""
+                aus_badge = "✓" if r["hat_austausch"] else ""
+                iid = tree.insert("", "end", values=(
+                    nmg_badge,
+                    aus_badge,
+                    r["pzn"],
+                    r["artikel"] or "",
+                    r.get("df", "") or "",
+                    r.get("pck", "") or "",
+                    r["herst"] or "",
+                ))
+                row_map[iid] = r
+
+        def _fmt(value, default="–"):
+            if value in (None, ""):
+                return default
+            return str(value)
+
+        def render_details(pzn):
+            """Laedt die Details im Worker-Thread, damit Klicks die UI nicht einfrieren."""
+            detail_seq["current"] += 1
+            my_id = detail_seq["current"]
+            detail_head.configure(text=f"PZN {pzn}  ·  {_T('Lade ...')}")
+
+            def worker():
+                try:
+                    d = get_pzn_details(pzn)
+                except Exception as exc:
+                    d = exc
+
+                def apply():
+                    if my_id != detail_seq["current"]:
+                        return
+                    if isinstance(d, Exception):
+                        detail_head.configure(text=_T("Fehler beim Laden der Details"))
+                        alt_status.configure(text=str(d))
+                        return
+                    _apply_details(d)
+
+                try:
+                    win.after(0, apply)
+                except Exception:
+                    pass
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def _apply_details(d):
+            info = d.get("info") or {}
+            detail_head.configure(
+                text=f"PZN {d['pzn']}  ·  {info.get('artikel') or _T('Kein Artikelname bekannt')}"
+            )
+
+            info_labels["artikel"].configure(text=_fmt(info.get("artikel")))
+            info_labels["herst"].configure(text=_fmt(info.get("herst")))
+            info_labels["df"].configure(text=_fmt(info.get("df")))
+            info_labels["pck"].configure(text=_fmt(info.get("pck")))
+            apu = info.get("apu")
+            info_labels["apu"].configure(
+                text=f"{apu:.2f} €" if isinstance(apu, (int, float)) else "–"
+            )
+            ek = info.get("ek")
+            info_labels["ek"].configure(
+                text=f"{ek:.2f} €" if isinstance(ek, (int, float)) else "–"
+            )
+            info_labels["nmg"].configure(
+                text="Ja" if d.get("ist_nmg") else "Nein",
+                fg="#11823b" if d.get("ist_nmg") else "#888",
+            )
+            rabatt = d.get("nmg_rabatt")
+            if isinstance(rabatt, (int, float)):
+                info_labels["rabatt"].configure(text=f"{rabatt * 100:.2f} %")
+            else:
+                info_labels["rabatt"].configure(text="–")
+
+            # Austauschartikel-Tabelle befuellen.
+            for item in alt_tree.get_children():
+                alt_tree.delete(item)
+            alternativen = d.get("alternativen") or []
+            for a in alternativen:
+                pzn_disp = a["pzn"] or "–"
+                artikel = a["artikel"] or a.get("freitext") or "–"
+                alt_tree.insert("", "end", values=(
+                    pzn_disp,
+                    artikel,
+                    a["df"] or "",
+                    a["pck"] or "",
+                    a["herst"] or "",
+                ))
+
+            if alternativen:
+                alt_label.configure(text=f"{_T('Austauschartikel')} ({len(alternativen)})")
+                alt_status.configure(text="")
+            else:
+                alt_label.configure(text=_T("Austauschartikel"))
+                alt_status.configure(text=_T("Keine Austauscheintraege fuer diese PZN."))
+
+        def on_select(_event=None):
+            sel = tree.selection()
+            if not sel:
+                return
+            row = row_map.get(sel[0])
+            if row:
+                render_details(row["pzn"])
+
+        tree.bind("<<TreeviewSelect>>", on_select)
+
+        def do_search():
+            """Triggert eine neue Suche im Worker-Thread. UI bleibt responsiv."""
+            pending_job["id"] = None
+            q = search_var.get().strip()
+            if len(q) < 3:
+                render_results([])
+                status_label.configure(text=_T("Mindestens 3 Zeichen eingeben."))
+                return
+            status_label.configure(text=_T("Suche ..."))
+
+            search_seq["current"] += 1
+            my_id = search_seq["current"]
+
+            def worker():
+                try:
+                    result = search_unified(q, limit=200)
+                except Exception as exc:
+                    result = exc
+
+                def apply():
+                    # Wenn waehrenddessen eine neue Suche gestartet wurde,
+                    # alte Ergebnisse verwerfen.
+                    if my_id != search_seq["current"]:
+                        return
+                    if isinstance(result, Exception):
+                        status_label.configure(text=f"{_T('Fehler')}: {result}")
+                        return
+                    render_results(result)
+                    status_label.configure(
+                        text=_T("{n} Treffer").format(n=len(result))
+                        if "{n}" in _T("{n} Treffer") else f"{len(result)} Treffer"
+                    )
+
+                try:
+                    win.after(0, apply)
+                except Exception:
+                    pass
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def on_key(_event=None):
+            if pending_job["id"]:
+                try:
+                    win.after_cancel(pending_job["id"])
+                except Exception:
+                    pass
+            # 250 ms Debounce gegen Suche bei jedem einzelnen Tastendruck.
+            pending_job["id"] = win.after(250, do_search)
+
+        search_entry.bind("<KeyRelease>", on_key)
+        search_entry.bind("<Return>", lambda _e: do_search())
+
+        win.lift()
+        win.focus_force()
 
     def show_kunden_center(self):
         """Neues Kunden-Center: Tabelle + Detail-Dialog mit Analysen und E-Mail."""
