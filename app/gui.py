@@ -500,6 +500,43 @@ class NMGApp(tk.Tk):
         except Exception:
             pass
 
+    def _run_busy(self, work_fn, title="NMGone arbeitet", subtitle="Bitte warten ..."):
+        """SP20: Fuehrt work_fn() in einem Hintergrund-Thread aus, zeigt waehrend
+        der Ausfuehrung den modalen Busy-Dialog mit animierter Progressbar.
+        Gibt den Rueckgabewert von work_fn zurueck oder wirft die Exception
+        weiter. Backend-Funktionen muessen ihre eigenen DB-Verbindungen
+        erstellen (sqlite3 standardmaessig thread-bound).
+        """
+        import threading
+        state = {"value": None, "exc": None}
+        done_flag = tk.IntVar(master=self, value=0)
+
+        def runner():
+            try:
+                state["value"] = work_fn()
+            except BaseException as exc:
+                state["exc"] = exc
+            finally:
+                try:
+                    self.after(0, lambda: done_flag.set(1))
+                except Exception:
+                    pass
+
+        busy = self._show_busy_modal(title, subtitle)
+        threading.Thread(target=runner, daemon=True).start()
+        try:
+            self.wait_variable(done_flag)
+        finally:
+            self._close_busy_modal(busy)
+
+        if state["exc"] is not None:
+            raise state["exc"]
+        return state["value"]
+        try:
+            self.config(cursor="")
+        except Exception:
+            pass
+
     def _toggle_admin_visible(self, event=None):
         self._admin_visible = not self._admin_visible
         zustand = "EIN" if self._admin_visible else "AUS"
@@ -1666,7 +1703,11 @@ class NMGApp(tk.Tk):
                 return
             dq = row["datenquelle"] or "NMG"
             try:
-                out = export_marktanalyse_produktchancen(limit=500, min_apotheken=1, datenquelle=dq, auswertung_id=int(row["id"]))
+                out = self._run_busy(
+                    lambda: export_marktanalyse_produktchancen(limit=500, min_apotheken=1, datenquelle=dq, auswertung_id=int(row["id"])),
+                    title="Produktanalyse",
+                    subtitle="Produktchancen werden berechnet ...",
+                )
                 self.status.set(f"Produktanalyse für Analyse {row['id']} erzeugt: {out}")
                 messagebox.showinfo("Produktanalyse", f"Produktanalyse erstellt:\n{out}")
             except Exception as exc:
@@ -1685,7 +1726,11 @@ class NMGApp(tk.Tk):
             if not manuell:
                 return
             try:
-                out = export_abweichungsanalyse(manuell, str(programm))
+                out = self._run_busy(
+                    lambda: export_abweichungsanalyse(manuell, str(programm)),
+                    title="Abweichungsanalyse",
+                    subtitle="Manuelle und Programm-Auswertung vergleichen ...",
+                )
                 self.status.set(f"Abweichungsanalyse erzeugt: {out}")
                 self._roadmap_mark_abweichung_schulbank_v9_erledigt()
                 self.show_abweichungs_editor(out)
@@ -1777,14 +1822,24 @@ class NMGApp(tk.Tk):
         ok = messagebox.askyesno("ZF-Daten importieren", f"{len(files)} Datei(en) als ZF-Daten importieren?\n\nDiese Daten werden NICHT als PK-Lernstand übernommen.")
         if not ok:
             return
-        imported = 0; rows = 0; errors = []
-        for file in files:
-            try:
-                r = import_historical_market_file(file, datenquelle="ZF", analyse_name=name)
-                imported += 1
-                rows += int(r.get("rows", 0))
-            except Exception as exc:
-                errors.append(f"{Path(file).name}: {exc}")
+        def _do_zf_import():
+            imported_local = 0
+            rows_local = 0
+            errors_local = []
+            for file in files:
+                try:
+                    r = import_historical_market_file(file, datenquelle="ZF", analyse_name=name)
+                    imported_local += 1
+                    rows_local += int(r.get("rows", 0))
+                except Exception as exc:
+                    errors_local.append(f"{Path(file).name}: {exc}")
+            return imported_local, rows_local, errors_local
+
+        imported, rows, errors = self._run_busy(
+            _do_zf_import,
+            title="ZF-Daten importieren",
+            subtitle=f"Importiere {len(files)} Datei(en) ...",
+        )
         msg = f"ZF-Import fertig.\nAusgewählte Dateien: {len(files)}\nErfolgreich importiert: {imported}\nPositionen: {rows}"
         if errors:
             msg += "\n\nFehler:\n" + "\n".join(errors[:10])
@@ -1845,10 +1900,12 @@ class NMGApp(tk.Tk):
         kundentyp = self._ask_produktanalyse_kundentyp()
         if not kundentyp:
             return
-        busy = self._show_busy_modal("Produktanalyse", f"Erzeuge Produktanalyse {kundentyp}...")
         try:
-            out = export_produktanalyse_neu(kundentyp=kundentyp, monate=6)
-            self._close_busy_modal(busy)
+            out = self._run_busy(
+                lambda: export_produktanalyse_neu(kundentyp=kundentyp, monate=6),
+                title="Produktanalyse",
+                subtitle=f"Erzeuge Produktanalyse {kundentyp} ...",
+            )
             self._log_action("produktanalyse", "Produktanalyse erzeugt",
                              f"Kundentyp: {kundentyp} | Datei: {out}")
             self.status.set(f"Produktanalyse erzeugt: {out}")
@@ -1856,7 +1913,6 @@ class NMGApp(tk.Tk):
                                    f"Produktanalyse {kundentyp} erstellt:\n{out}\n\nDatei jetzt oeffnen?"):
                 _open_file(out)
         except Exception as exc:
-            self._close_busy_modal(busy)
             self._log_error("produktanalyse", "Produktanalyse", exc)
             messagebox.showerror("Produktanalyse-Fehler", str(exc))
 
@@ -2706,7 +2762,11 @@ class NMGApp(tk.Tk):
     def create_backup(self):
         self._log_action("update_backup", "Backup manuell gestartet")
         try:
-            out = backup_erstellen()
+            out = self._run_busy(
+                backup_erstellen,
+                title="Backup wird erstellt",
+                subtitle="Daten werden gesichert ...",
+            )
             self._log_action("update_backup", "Backup erstellt", str(out))
             self.status.set(f"Backup erstellt: {out}")
             messagebox.showinfo("Backup erstellt", f"Backup wurde erstellt:\n{out}")
@@ -2724,7 +2784,11 @@ class NMGApp(tk.Tk):
             details = (f"Backup-Datei:\n{file}\n\nVersion: {info.get('app_version','unbekannt')}\nErstellt: {info.get('created_at','unbekannt')}\n\nAktuelle Datenbank wird vorher automatisch gesichert. Wiederherstellen?")
             if not messagebox.askyesno("Backup wiederherstellen", details):
                 return
-            db = backup_wiederherstellen(file)
+            db = self._run_busy(
+                lambda: backup_wiederherstellen(file),
+                title="Backup wird wiederhergestellt",
+                subtitle="Daten werden zurueckgespielt ...",
+            )
             self._log_action("update_backup", "Backup wiederhergestellt", f"Quelle: {file} | Ziel: {db}")
             init_db(DB_PATH)
             self.status.set(f"Backup wiederhergestellt: {db}")
@@ -3145,7 +3209,11 @@ class NMGApp(tk.Tk):
     def _run_neue_auswertung_export(self, file, analyse_name, kundentyp=None, kundennummer="", kundenname="", zeitraum_monate=None, vorlage_slot=None):
         """Erzeugt die Auswertung und speichert sie im Analyseordner."""
         self._log_action("neue_auswertung", "Auswertungserstellung gestartet", f"Datei: {file} | Analyse: {analyse_name}")
-        out = Path(create_linden_export(file, analyse_name))
+        out = Path(self._run_busy(
+            lambda: create_linden_export(file, analyse_name),
+            title="Auswertung wird erstellt",
+            subtitle=f"NMGone wertet {Path(file).name} aus ...",
+        ))
         try:
             if kundentyp is not None:
                 self._mark_latest_auswertung_customer(kundentyp, kundennummer, kundenname or analyse_name)
@@ -8396,7 +8464,11 @@ class NMGApp(tk.Tk):
             return
 
         try:
-            result = import_austausch_excel(file, quelle="GUI-Import")
+            result = self._run_busy(
+                lambda: import_austausch_excel(file, quelle="GUI-Import"),
+                title="Austauschdatenbank importieren",
+                subtitle=f"Lese {Path(file).name} ...",
+            )
             msg = (
                 "Austauschdatenbank importiert.\n\n"
                 f"Neu angelegt: {result.get('inserted', 0)}\n"
