@@ -403,22 +403,6 @@ def datenbankstatus() -> dict:
 
 
 # ── SP14: Neue Produktanalyse PK/ZF/PK+ZF ────────────────────────────────────
-def _pzn_norm(value) -> str:
-    """SP30: PZN-Normalisierung (gleich wie in Neue Auswertung/Schulbank).
-    Schneidet SK-Lagervariante-Suffix ' /N' ab, entfernt ' .0', zieht alle
-    Ziffern raus und linkspad auf 8 Stellen. Wird als SQLite-Funktion
-    registriert, damit Joins zwischen tbl_auswertungspositionen und der
-    Austausch/Biosimilar-Datenbank tolerant gegen Format-Unterschiede sind.
-    """
-    text = str(value or "").strip()
-    if "/" in text:
-        text = text.split("/", 1)[0].strip()
-    if text.endswith(".0") and text[:-2].isdigit():
-        text = text[:-2]
-    digits = "".join(ch for ch in text if ch.isdigit())
-    return digits.zfill(8) if digits else ""
-
-
 def _produktanalyse_datenquellen(kundentyp: str) -> list[str]:
     """Mapping zwischen kundentyp ('PK'/'ZF'/'PK+ZF') und den
     tbl_auswertungen.datenquelle-Werten, die wir filtern muessen.
@@ -448,25 +432,21 @@ def _produktanalyse_rows(con: sqlite3.Connection, kundentyp: str, monate: int = 
     Stammdaten (Artikelname, DF, PCK, Hersteller) und EK kommen aus
     tbl_artikelstamm. Gesamtumsatz = Gesamtabsatz x Artikelstamm-EK.
 
+    V1.1 SP1: PZNs in allen vier Wissens-Tabellen sind beim Insert bereits
+    normalisiert (8-stellig, nur Ziffern). pzn_norm()-UDFs in JOIN-/EXISTS-
+    Klauseln zwingen SQLite zum Full-Table-Scan und verhindern die
+    vorhandenen Indizes (idx_tbl_auswertungspositionen_pzn,
+    idx_austauschdatenbank_pzn_alt, PK auf tbl_nmg_stamm/tbl_artikelstamm).
+    Direktvergleich mit `=` nutzt die Indizes und ist ~10-100x schneller.
+
     SP30 ergaenzt:
       - analyse_anzahl = COUNT(DISTINCT auswertung_id) (= "Vorkommen")
       - erste_sichtung = MIN(tbl_auswertungen.datum)
       - letzte_sichtung = MAX(tbl_auswertungen.datum)
-      - Austausch-/NMG-/Biosimilar-Filter ueber pzn_norm() statt nackten
-        String-Vergleich, sodass leicht abweichend formatierte PZNs nicht
-        am Filter vorbeirutschen.
-      - kunden_anzahl-Vorbereitung: bewusst getrennt vom analyse_anzahl-
-        Konzept im Kommentar erwaehnt. Sobald Auswertungen einem Kunden
+      - kunden_anzahl-Vorbereitung: sobald Auswertungen einem Kunden
         zugeordnet werden (SP31+), kommt zusaetzlich
         COUNT(DISTINCT kunde_id) AS kunden_anzahl.
     """
-    # SP30: pzn_norm() als SQLite-Funktion registrieren - identisch zur
-    # _normalize_pzn_input-Logik aus gui.py und exporter.py.
-    try:
-        con.create_function("pzn_norm", 1, _pzn_norm)
-    except Exception:
-        pass
-
     datenquellen = _produktanalyse_datenquellen(kundentyp)
     placeholders = ",".join("?" * len(datenquellen))
     sql = f"""
@@ -489,7 +469,6 @@ def _produktanalyse_rows(con: sqlite3.Connection, kundentyp: str, monate: int = 
         )
         SELECT
             g.pzn,
-            -- SP15: alle Stammdaten aus tbl_artikelstamm.
             COALESCE(ast.artikel, '') AS artikelname,
             COALESCE(ast.df, '') AS df,
             COALESCE(ast.pck, '') AS pck,
@@ -497,29 +476,23 @@ def _produktanalyse_rows(con: sqlite3.Connection, kundentyp: str, monate: int = 
             g.apotheken,
             g.gesamtabsatz_6m,
             COALESCE(g.durchschnitt_absatz_6m, 0) AS durchschnitt_absatz_6m,
-            -- SP15: EK aus tbl_artikelstamm.ek (Listen-EK / Taxe-EK / Import-EK).
             COALESCE(ast.ek, 0) AS effektiver_ek,
             g.gesamtabsatz_6m * COALESCE(ast.ek, 0) AS moeglicher_gesamtumsatz,
-            -- SP30: Vorkommen-Kennzahlen.
             g.analyse_anzahl,
             g.erste_sichtung,
             g.letzte_sichtung
         FROM gruppiert g
         LEFT JOIN tbl_artikelstamm ast ON ast.pzn = g.pzn
-        LEFT JOIN tbl_nmg_stamm nmg ON pzn_norm(nmg.pzn) = pzn_norm(g.pzn)
+        LEFT JOIN tbl_nmg_stamm nmg ON nmg.pzn = g.pzn
         WHERE nmg.pzn IS NULL
-          -- SP15/SP30: Austausch-Artikel (alte Tabelle) ausschliessen.
           AND NOT EXISTS (
               SELECT 1 FROM tbl_austauschartikel aa
-              WHERE pzn_norm(aa.original_pzn) = pzn_norm(g.pzn)
+              WHERE aa.original_pzn = g.pzn
                 AND (COALESCE(aa.nmg_pzn, '') <> '' OR COALESCE(aa.austauschbar_gegen, '') <> '')
           )
-          -- SP15/SP30: Austausch- + Biosimilar-Datenbank ausschliessen.
-          -- (Schulbank-Biosimilar liest dieselbe Tabelle, daher deckt der
-          -- Filter beide Faelle ab.)
           AND NOT EXISTS (
               SELECT 1 FROM tbl_austauschdatenbank ad
-              WHERE pzn_norm(ad.pzn_alt) = pzn_norm(g.pzn)
+              WHERE ad.pzn_alt = g.pzn
                 AND (COALESCE(ad.pzn_nmg, '') <> '' OR COALESCE(ad.freitext_austausch, '') <> '')
                 AND COALESCE(ad.status, 'aktiv') = 'aktiv'
           )
