@@ -403,6 +403,22 @@ def datenbankstatus() -> dict:
 
 
 # ── SP14: Neue Produktanalyse PK/ZF/PK+ZF ────────────────────────────────────
+def _pzn_norm(value) -> str:
+    """SP30: PZN-Normalisierung (gleich wie in Neue Auswertung/Schulbank).
+    Schneidet SK-Lagervariante-Suffix ' /N' ab, entfernt ' .0', zieht alle
+    Ziffern raus und linkspad auf 8 Stellen. Wird als SQLite-Funktion
+    registriert, damit Joins zwischen tbl_auswertungspositionen und der
+    Austausch/Biosimilar-Datenbank tolerant gegen Format-Unterschiede sind.
+    """
+    text = str(value or "").strip()
+    if "/" in text:
+        text = text.split("/", 1)[0].strip()
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return digits.zfill(8) if digits else ""
+
+
 def _produktanalyse_datenquellen(kundentyp: str) -> list[str]:
     """Mapping zwischen kundentyp ('PK'/'ZF'/'PK+ZF') und den
     tbl_auswertungen.datenquelle-Werten, die wir filtern muessen.
@@ -417,18 +433,40 @@ def _produktanalyse_datenquellen(kundentyp: str) -> list[str]:
 
 
 def _produktanalyse_rows(con: sqlite3.Connection, kundentyp: str, monate: int = 6) -> list[sqlite3.Row]:
-    """SP15: Liefert die Zeilen fuer eine Produktanalyse.
+    """SP15/SP30: Liefert die Zeilen fuer eine Produktanalyse.
 
     Filter:
       - Auswertungen der letzten N Monate, ausgewaehlte Datenquellen
-      - PZN NICHT im NMG-Stamm
+      - PZN NICHT im NMG-Stamm (= kein NMG-Artikel)
       - PZN hat KEINEN Austausch-Eintrag (tbl_austauschartikel/tbl_austauschdatenbank)
         -> wenn fuer eine alte PZN bereits eine NMG-Ersatz-PZN hinterlegt ist,
         ist die alte keine "Chance" mehr, sondern bereits substituiert.
+      - Biosimilar-Datenbank: technisch identisch zu tbl_austauschdatenbank
+        (Schulbank-Biosimilar zeigt dieselbe Tabelle ohne weiteren Filter);
+        der Austausch-Filter unten deckt damit beide Faelle ab.
 
     Stammdaten (Artikelname, DF, PCK, Hersteller) und EK kommen aus
     tbl_artikelstamm. Gesamtumsatz = Gesamtabsatz x Artikelstamm-EK.
+
+    SP30 ergaenzt:
+      - analyse_anzahl = COUNT(DISTINCT auswertung_id) (= "Vorkommen")
+      - erste_sichtung = MIN(tbl_auswertungen.datum)
+      - letzte_sichtung = MAX(tbl_auswertungen.datum)
+      - Austausch-/NMG-/Biosimilar-Filter ueber pzn_norm() statt nackten
+        String-Vergleich, sodass leicht abweichend formatierte PZNs nicht
+        am Filter vorbeirutschen.
+      - kunden_anzahl-Vorbereitung: bewusst getrennt vom analyse_anzahl-
+        Konzept im Kommentar erwaehnt. Sobald Auswertungen einem Kunden
+        zugeordnet werden (SP31+), kommt zusaetzlich
+        COUNT(DISTINCT kunde_id) AS kunden_anzahl.
     """
+    # SP30: pzn_norm() als SQLite-Funktion registrieren - identisch zur
+    # _normalize_pzn_input-Logik aus gui.py und exporter.py.
+    try:
+        con.create_function("pzn_norm", 1, _pzn_norm)
+    except Exception:
+        pass
+
     datenquellen = _produktanalyse_datenquellen(kundentyp)
     placeholders = ",".join("?" * len(datenquellen))
     sql = f"""
@@ -436,6 +474,9 @@ def _produktanalyse_rows(con: sqlite3.Connection, kundentyp: str, monate: int = 
             SELECT
                 p.pzn,
                 COUNT(DISTINCT a.apotheke) AS apotheken,
+                COUNT(DISTINCT p.auswertung_id) AS analyse_anzahl,
+                MIN(a.datum) AS erste_sichtung,
+                MAX(a.datum) AS letzte_sichtung,
                 SUM(COALESCE(p.absatz_6m, 0)) AS gesamtabsatz_6m,
                 AVG(NULLIF(p.absatz_6m, 0)) AS durchschnitt_absatz_6m
             FROM tbl_auswertungspositionen p
@@ -458,21 +499,27 @@ def _produktanalyse_rows(con: sqlite3.Connection, kundentyp: str, monate: int = 
             COALESCE(g.durchschnitt_absatz_6m, 0) AS durchschnitt_absatz_6m,
             -- SP15: EK aus tbl_artikelstamm.ek (Listen-EK / Taxe-EK / Import-EK).
             COALESCE(ast.ek, 0) AS effektiver_ek,
-            g.gesamtabsatz_6m * COALESCE(ast.ek, 0) AS moeglicher_gesamtumsatz
+            g.gesamtabsatz_6m * COALESCE(ast.ek, 0) AS moeglicher_gesamtumsatz,
+            -- SP30: Vorkommen-Kennzahlen.
+            g.analyse_anzahl,
+            g.erste_sichtung,
+            g.letzte_sichtung
         FROM gruppiert g
         LEFT JOIN tbl_artikelstamm ast ON ast.pzn = g.pzn
-        LEFT JOIN tbl_nmg_stamm nmg ON nmg.pzn = g.pzn
+        LEFT JOIN tbl_nmg_stamm nmg ON pzn_norm(nmg.pzn) = pzn_norm(g.pzn)
         WHERE nmg.pzn IS NULL
-          -- SP15: Austausch-Artikel (alte Tabelle) ausschliessen.
+          -- SP15/SP30: Austausch-Artikel (alte Tabelle) ausschliessen.
           AND NOT EXISTS (
               SELECT 1 FROM tbl_austauschartikel aa
-              WHERE aa.original_pzn = g.pzn
+              WHERE pzn_norm(aa.original_pzn) = pzn_norm(g.pzn)
                 AND (COALESCE(aa.nmg_pzn, '') <> '' OR COALESCE(aa.austauschbar_gegen, '') <> '')
           )
-          -- SP15: Austausch-Artikel (neue Tabelle) ausschliessen.
+          -- SP15/SP30: Austausch- + Biosimilar-Datenbank ausschliessen.
+          -- (Schulbank-Biosimilar liest dieselbe Tabelle, daher deckt der
+          -- Filter beide Faelle ab.)
           AND NOT EXISTS (
               SELECT 1 FROM tbl_austauschdatenbank ad
-              WHERE ad.pzn_alt = g.pzn
+              WHERE pzn_norm(ad.pzn_alt) = pzn_norm(g.pzn)
                 AND (COALESCE(ad.pzn_nmg, '') <> '' OR COALESCE(ad.freitext_austausch, '') <> '')
                 AND COALESCE(ad.status, 'aktiv') = 'aktiv'
           )
@@ -511,18 +558,22 @@ def _produktanalyse_fill_sheet(ws, label: str, rows, basis_auswertungen: int, ba
     """
     ws.cell(1, 1).value = f"Produktanalyse {label}: Neue Produktchancen (Artikel nicht im NMG-Stamm)"
     ws.cell(1, 1).font = Font(bold=True, size=14, color="0B4A86")
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=10)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=13)
 
     ws.cell(2, 1).value = f"Basis: {basis_auswertungen:,} gespeicherte Auswertungen, {basis_positionen:,} Positionen (letzte 6 Monate)".replace(",", ".")
     ws.cell(2, 1).font = Font(italic=True, color="555555")
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=10)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=13)
 
     ws.cell(3, 1).value = "Nicht im NMG-Stamm. Hersteller wird aus dem Artikelstamm gezogen. Gesamtumsatz = Gesamtabsatz x EK (Taxe-EK falls vorhanden, sonst Durchschnitts-EK aus den Auswertungen)."
     ws.cell(3, 1).font = Font(italic=True, color="555555")
-    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=10)
+    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=13)
 
+    # SP30: 3 neue Spalten am Ende - Vorkommen + Erste/Letzte Sichtung.
+    # Reihenfolge der alten Spalten unveraendert, Sortierung unveraendert
+    # (Umsatz-orientiert) - laut User-Entscheidung minimal-invasiv anhaengen.
     headers = ["Rang", "PZN", "Artikelname", "DF", "PCK", "Hersteller", "Apotheken",
-               "Gesamtabsatz 6M", "Ø Absatz 6M", "möglicher Gesamtumsatz"]
+               "Gesamtabsatz 6M", "Ø Absatz 6M", "möglicher Gesamtumsatz",
+               "Vorkommen", "Erste Sichtung", "Letzte Sichtung"]
     for i, h in enumerate(headers, start=1):
         c = ws.cell(5, i)
         c.value = h
@@ -530,7 +581,7 @@ def _produktanalyse_fill_sheet(ws, label: str, rows, basis_auswertungen: int, ba
         c.fill = PatternFill("solid", fgColor="0B4A86")
         c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    widths = [6, 12, 38, 8, 8, 18, 10, 14, 14, 20]
+    widths = [6, 12, 38, 8, 8, 18, 10, 14, 14, 20, 11, 14, 14]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -546,10 +597,14 @@ def _produktanalyse_fill_sheet(ws, label: str, rows, basis_auswertungen: int, ba
         ws.cell(rw, 8).value = round(_safe_num(r["gesamtabsatz_6m"]), 2)
         ws.cell(rw, 9).value = round(_safe_num(r["durchschnitt_absatz_6m"]), 2)
         ws.cell(rw, 10).value = round(_safe_num(r["moeglicher_gesamtumsatz"]), 2)
+        # SP30: Vorkommen-Kennzahlen.
+        ws.cell(rw, 11).value = int(r["analyse_anzahl"] or 0)
+        ws.cell(rw, 12).value = (r["erste_sichtung"] or "")[:10]
+        ws.cell(rw, 13).value = (r["letzte_sichtung"] or "")[:10]
 
     ws.freeze_panes = "A6"
     if rows:
-        ws.auto_filter.ref = f"A5:J{5 + len(rows)}"
+        ws.auto_filter.ref = f"A5:M{5 + len(rows)}"
 
 
 def export_produktanalyse_neu(kundentyp: str = "PK", monate: int = 6) -> Path:

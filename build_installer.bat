@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 echo =====================================================
-echo   NMGone Installer Build V1.0 SP29 (1.0.29)
+echo   NMGone Installer Build V1.0 SP30 (1.0.30)
 echo =====================================================
 echo.
 
@@ -25,16 +25,16 @@ set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
 if not exist "%ISCC%" set "ISCC=%ProgramFiles%\Inno Setup 6\ISCC.exe"
 
 if exist "%ISCC%" (
-  "%ISCC%" installer\NMGone_Setup_1_0_29.iss
+  "%ISCC%" installer\NMGone_Setup_1_0_30.iss
   if errorlevel 1 (
     echo Inno Setup fehlgeschlagen.
     pause
     exit /b 1
   )
   echo.
-  echo Setup-Datei: dist_setup\NMGone_Setup_1_0_29.exe
+  echo Setup-Datei: dist_setup\NMGone_Setup_1_0_30.exe
 ) else (
   echo Inno Setup 6 nicht gefunden. Installiere via: winget install JRSoftware.InnoSetup
-  echo Skript-Vorlage liegt unter installer\NMGone_Setup_1_0_29.iss
+  echo Skript-Vorlage liegt unter installer\NMGone_Setup_1_0_30.iss
 )
 pause
