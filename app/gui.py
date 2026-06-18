@@ -1054,10 +1054,7 @@ class NMGApp(tk.Tk):
         kritische_namen = {"NMG Artikel", "PK Rabatte", "Austauschdatenbank"}
         leere = []
         for name, _value, count in items:
-            try:
-                n = int(count or 0)
-            except Exception:
-                n = 0
+            n = self._count_main(count)
             if name in kritische_namen and n <= 0:
                 leere.append(name)
         if not leere:
@@ -1247,8 +1244,37 @@ class NMGApp(tk.Tk):
             return "noch nie"
         return dt.strftime("%d.%m.%Y %H:%M")
 
+    def _count_main(self, count):
+        """SP28: Aus count (int oder (gesamt, sub)-Tuple) den Haupt-Zaehler.
+        Wird fuer Ampel + Start-Warnung verwendet."""
+        if isinstance(count, tuple):
+            try:
+                return int(count[0] or 0)
+            except Exception:
+                return 0
+        try:
+            return int(count or 0)
+        except Exception:
+            return 0
+
     def _format_count(self, count):
-        """SP26: Anzahl-Eintraege benutzerfreundlich formatieren."""
+        """SP26/SP28: Anzahl-Eintraege benutzerfreundlich formatieren.
+        Wenn count ein (gesamt, sub)-Tuple ist, zeigen beide Werte.
+        Beispiel: (105, 39) -> "105 Eintr., 39 mit Wert".
+        """
+        if isinstance(count, tuple):
+            try:
+                gesamt = int(count[0] or 0)
+                sub = int(count[1] or 0)
+            except Exception:
+                gesamt, sub = 0, 0
+            if gesamt <= 0:
+                return "leer"
+            haupt = f"{gesamt:,}".replace(",", ".") + " Eintr."
+            if sub < gesamt:
+                sub_str = f"{sub:,}".replace(",", ".")
+                return f"{haupt}, {sub_str} mit Wert"
+            return haupt
         try:
             n = int(count or 0)
         except Exception:
@@ -1261,20 +1287,14 @@ class NMGApp(tk.Tk):
         """SP26: Ampel beruecksichtigt sowohl Datum als auch leere Tabellen.
         count == 0 -> ⚪ leer. Sonst normale Datums-Ampel.
         """
-        try:
-            n = int(count or 0)
-        except Exception:
-            n = 0
+        n = self._count_main(count)
         if n <= 0:
             return "⚪"
         return self._status_ampel(value) or "⚪"
 
     def _status_ampel_combined_color(self, value, count):
         """SP26: Textfarbe. Leere Tabellen werden rot, sonst Datums-Farbe."""
-        try:
-            n = int(count or 0)
-        except Exception:
-            n = 0
+        n = self._count_main(count)
         if n <= 0:
             return "#b00020"
         return self._status_ampel_color(value)
@@ -1341,6 +1361,16 @@ class NMGApp(tk.Tk):
         except Exception:
             return 0
 
+    def _count_pk_rabatte_combo(self, con):
+        """SP28: PK Rabatte mit zwei Zahlen: (gesamt, mit echtem Rabatt-Wert).
+        Wenn die beiden Werte stark auseinanderlaufen, ist der Import zwar
+        gelaufen, der Rabatt-Parser ist aber gescheitert - die Auswertung
+        kann dann keine Rabatte schreiben.
+        """
+        gesamt = self._count_table_safe(con, "SELECT COUNT(*) FROM nmg_rabatte")
+        mit_rabatt = self._count_table_safe(con, "SELECT COUNT(*) FROM nmg_rabatte WHERE rabatt IS NOT NULL")
+        return (gesamt, mit_rabatt)
+
     def _get_data_update_status_items(self):
         """Rechter Statusbereich: letzte Aktualisierung + Anzahl Eintraege.
         Rueckgabe je Eintrag: (name, letztes_datum, anzahl).
@@ -1367,13 +1397,17 @@ class NMGApp(tk.Tk):
                         self._count_table_safe(con, "SELECT COUNT(*) FROM tbl_nmg_stamm"),
                     ),
                     (
+                        # SP28: Anzeige zeigt Gesamtgroesse UND wieviele wirklich
+                        # einen Rabatt-Wert haben. Wenn beide Zahlen auseinanderlaufen,
+                        # ist der Import zwar gelaufen, der Rabatt-Parser ist aber an
+                        # den Werten gescheitert.
                         "PK Rabatte",
                         self._get_last_data_update(con, [
                             ("SELECT MAX(letzte_aktualisierung) FROM nmg_rabatte", ()),
                             ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(typ) IN ('pk_rabatte','partnerkonditionen_rabatte','rabatte')", ()),
                             ("SELECT MAX(datum) FROM tbl_import_log WHERE lower(datei) LIKE '%rabatt%'", ()),
                         ]),
-                        self._count_table_safe(con, "SELECT COUNT(*) FROM nmg_rabatte WHERE rabatt IS NOT NULL"),
+                        self._count_pk_rabatte_combo(con),
                     ),
                     (
                         "Artikelstamm",
@@ -8611,17 +8645,62 @@ class NMGApp(tk.Tk):
         except ValueError:
             return None
 
+    @staticmethod
+    def _parse_rabatt(value):
+        """SP28: Spezial-Parser fuer Rabatt-Werte aus Excel.
+
+        Akzeptiert:
+        - '15%'   -> 0.15  (Text mit Prozent)
+        - '15,5%' -> 0.155
+        - '0,15'  -> 0.15  (deutscher Dezimalbruch)
+        - 0.15    -> 0.15  (Excel-Zahl mit Prozentformat)
+        - 15      -> 0.15  (Heuristik: Wert > 1 = als ganze Prozent gemeint)
+        - 1.0     -> 1.0   (= 100%, wird belassen)
+        Vorher: '15%' lief in float() -> ValueError -> None.
+        Dadurch waren importierte Rabatte alle NULL, die Auswertung
+        konnte keinen Rabatt anzeigen.
+        """
+        if value is None:
+            return None
+        is_percent_text = False
+        if isinstance(value, (int, float)):
+            v = float(value)
+        else:
+            s = str(value).strip().replace(",", ".")
+            if not s:
+                return None
+            if s.endswith("%"):
+                is_percent_text = True
+                s = s[:-1].strip()
+                if not s:
+                    return None
+            try:
+                v = float(s)
+            except ValueError:
+                return None
+        if is_percent_text:
+            return v / 100.0
+        # Heuristik: ein nackter Wert > 1 ist als Prozentpunkt-Zahl gemeint.
+        if v > 1.0:
+            return v / 100.0
+        return v
+
     # ── GENERISCHER IMPORT-ASSISTENT ────────────────────────────────────────────
     def _import_assistent(self, title, ziel_tabelle, pflicht_spalten, optionale_spalten,
-                           insert_sql, mapping_key, beschreibung="", numeric_fields=None):
+                           insert_sql, mapping_key, beschreibung="", numeric_fields=None,
+                           rabatt_fields=None):
         """Generischer Import-Assistent: xlsx/csv/txt → Datenbank.
         Erkennt Spalten automatisch, bietet Mapping-Dialog bei Unklarheit.
 
         numeric_fields: Liste der Spaltennamen, die als Zahl (REAL) in die DB
         sollen. Diese werden ueber _parse_decimal_or_none normalisiert
         (Komma -> Punkt, leer -> None). Default: keine.
+        rabatt_fields: SP28 - Spaltennamen, die als Rabatt-Prozent interpretiert
+        werden sollen ('15%', '15,5%', 15 -> 0.15). Eine echte Untermenge von
+        numeric_fields. Default: keine.
         """
         numeric_fields = set(numeric_fields or [])
+        rabatt_fields = set(rabatt_fields or [])
         from .file_loader import load_table, SUPPORTED_DATA_FILETYPES, find_column, normalize_header
         from tkinter import filedialog
 
@@ -8731,7 +8810,11 @@ class NMGApp(tk.Tk):
                             for col_name, col_idx in mapping.items():
                                 if isinstance(col_idx, int) and col_idx < len(row_data):
                                     raw = row_data[col_idx]
-                                    if col_name in numeric_fields:
+                                    if col_name in rabatt_fields:
+                                        # SP28: Rabatt-Spalten via _parse_rabatt - handhabt "15%",
+                                        # "15,5%" und nackte Zahl 15 (-> 0.15).
+                                        record[col_name] = self._parse_rabatt(raw)
+                                    elif col_name in numeric_fields:
                                         record[col_name] = self._parse_decimal_or_none(raw)
                                     else:
                                         record[col_name] = raw if raw not in ("", None) else None
@@ -8754,16 +8837,38 @@ class NMGApp(tk.Tk):
 
                             if ri % 500 == 0:
                                 self._set_busy_message(busy, f"{Path(filepath).name}: {ri:,} Zeilen verarbeitet".replace(",", "."))
+                            # SP28: Pre-Check, ob der Datensatz bereits existiert. Bei
+                            # 'INSERT ... ON CONFLICT DO UPDATE' wirft SQLite KEIN
+                            # IntegrityError - der UPSERT verhaelt sich nach aussen wie
+                            # ein normaler INSERT. Ohne Pre-Check wurde 'neu += 1' fuer
+                            # jeden UPSERT hochgezaehlt, auch wenn nur ein bestehender
+                            # Datensatz aktualisiert wurde. Folge: die Diagnose log
+                            # "66 neu eingefuegt" obwohl die Tabellengroesse unveraendert
+                            # blieb. Pre-Check ist 1 zusaetzliche Query pro Zeile, was
+                            # bei Imports (max. ein paar tausend Zeilen) unkritisch ist.
+                            pk_col = "pzn" if "pzn" in record else "kundennummer"
+                            pk_value = record.get(pk_col)
+                            already_exists = False
+                            if pk_value:
+                                try:
+                                    cur_chk = con.execute(
+                                        f'SELECT 1 FROM "{ziel_tabelle}" WHERE {pk_col}=? LIMIT 1',
+                                        (pk_value,),
+                                    )
+                                    already_exists = cur_chk.fetchone() is not None
+                                except Exception:
+                                    already_exists = False
                             try:
                                 con.execute(insert_sql, record)
-                                neu += 1
+                                if already_exists:
+                                    aktualisiert += 1
+                                else:
+                                    neu += 1
                             except sqlite3.IntegrityError:
                                 set_parts = ", ".join(f"{k}=:{k}" for k in record if k not in ("pzn", "kundennummer"))
                                 try:
-                                    pk_col = "pzn" if "pzn" in record else "kundennummer"
                                     con.execute(f"UPDATE {ziel_tabelle} SET {set_parts} WHERE {pk_col}=:{pk_col}", record)
                                     aktualisiert += 1
-                                    neu = max(0, neu - 1)
                                 except Exception as exc2:
                                     if len([f for f in fehler if "[update-fallback]" in f]) < 3:
                                         fehler.append(f"{Path(filepath).name} [update-fallback]: {type(exc2).__name__}: {exc2}")
@@ -9024,6 +9129,7 @@ class NMGApp(tk.Tk):
             mapping_key="pk_rabatte",
             beschreibung="Partnerkonditionen-Rabatte importieren. Erwartet PZN und Rabattspalte(n).",
             numeric_fields=["rabatt_prozent", "rabatt_euro"],
+            rabatt_fields=["rabatt_prozent"],
         )
 
     def import_apu_data(self):
