@@ -157,15 +157,20 @@ def _lookup(con: sqlite3.Connection, original_pzn: str):
     # 1) Höchste Priorität: neue Austauschdatenbank / Schulbank-Lernstand.
     # SP20: Mehrere aktive Treffer = mehrere Austausch-Moeglichkeiten; erster Treffer
     # wird primaer, alle weiteren werden im Freitext "austauschbar gegen" zusaetzlich gelistet.
+    # SP21: Reihenfolge nach hoechstem PK-Rabatt (nmg_rabatte.rabatt) zuerst, bei
+    # Gleichstand nach Aktualisierungsdatum (stabil = neueste zuerst).
     austausch = None
     weitere = []
     try:
         rows = con.execute("""
-            SELECT *
-            FROM tbl_austauschdatenbank
-            WHERE COALESCE(status, 'aktiv') = 'aktiv'
-              AND COALESCE(pzn_alt, '') <> ''
-            ORDER BY datetime(COALESCE(aktualisiert_am, erstellt_am, gueltig_ab, '1970-01-01')) DESC, id DESC
+            SELECT a.*, COALESCE(r.rabatt, 0) AS _rabatt_pk
+            FROM tbl_austauschdatenbank a
+            LEFT JOIN nmg_rabatte r ON r.nmg_pzn = a.pzn_nmg
+            WHERE COALESCE(a.status, 'aktiv') = 'aktiv'
+              AND COALESCE(a.pzn_alt, '') <> ''
+            ORDER BY COALESCE(r.rabatt, 0) DESC,
+                     datetime(COALESCE(a.aktualisiert_am, a.erstellt_am, a.gueltig_ab, '1970-01-01')) DESC,
+                     a.id DESC
         """).fetchall()
         matches = []
         for candidate in rows:
