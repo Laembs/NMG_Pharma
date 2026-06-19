@@ -51,24 +51,73 @@ def _is_pzn_input(query: str) -> bool:
     return non_digit == 0
 
 
+# V1.1 SP4: Filter-Tags in der Sucheingabe.
+_KNOWN_FILTERS = {"nmg", "austausch", "schulbank", "wirkstoff", "herst"}
+
+
+def _parse_query(raw: str) -> tuple[str, set[str]]:
+    """Trennt die User-Eingabe in Suchbegriff und Filter-Set.
+
+    Tokens, die mit '#' beginnen und einen bekannten Filter-Namen tragen,
+    werden in das Filter-Set aufgenommen. Alles andere bleibt Suchbegriff.
+
+    Beispiele:
+        'gliv #nmg'          -> ('gliv', {'nmg'})
+        '#schulbank ramipril' -> ('ramipril', {'schulbank'})
+        'noris #nmg #herst'  -> ('noris', {'nmg', 'herst'})
+        '#unbekannt foo'     -> ('foo', set())     # unbekannte Tags ignoriert
+        'gliv'               -> ('gliv', set())
+    """
+    tokens = (raw or "").split()
+    filters: set[str] = set()
+    rest: list[str] = []
+    for tok in tokens:
+        if tok.startswith("#") and len(tok) > 1:
+            name = tok[1:].lower()
+            if name in _KNOWN_FILTERS:
+                filters.add(name)
+                continue
+            # Unbekannte #-Tags werden verworfen, damit der User merkt,
+            # dass sie keinen Effekt haben. Sonst landen sie versehentlich
+            # als Such-LIKE in den Wissens-Tabellen und liefern Null-Treffer.
+            continue
+        rest.append(tok)
+    return " ".join(rest).strip(), filters
+
+
 def search_unified(query: str, limit: int = 200) -> list[dict]:
     """Liefert dedupliziert pro PZN. Jeder Eintrag:
-        pzn, artikel, df, pck, herst, ist_nmg, hat_austausch.
+        pzn, artikel, df, pck, herst, wirkstoff, staerke,
+        ist_nmg, hat_austausch, hat_schulbank, via (Set: 'name', 'herst',
+        'wirkstoff').
+
+    V1.1 SP4: Filter-Syntax mit '#'. Beispiele:
+        'gliv #nmg'               -> nur NMG-Stamm-Treffer fuer 'gliv'
+        'noris #nmg #austausch'   -> NMG-Stamm UND Austausch-Eintrag
+        '#schulbank #wirkstoff'   -> nur Schulbank + Wirkstoff-Match
+    UND-Logik. Unbekannte #-Tags werden verworfen.
     """
-    q = (query or "").strip()
-    if len(q) < 3:
+    raw = (query or "").strip()
+    if not raw:
+        return []
+    search_q, filters = _parse_query(raw)
+    if len(search_q) < 3 and not filters:
+        return []
+    if len(search_q) < 3 and filters:
+        # Nur Filter ohne Suchbegriff -> kein Match-Driver, leeres Ergebnis.
         return []
 
     results: dict[str, dict] = {}
 
     with _connect() as con:
-        is_pzn = _is_pzn_input(q)
-        pzn_digits = "".join(ch for ch in q if ch.isdigit())
+        is_pzn = _is_pzn_input(search_q)
+        pzn_digits = "".join(ch for ch in search_q if ch.isdigit())
         pzn_like = f"%{pzn_digits}%"
-        name_like = f"%{q.lower()}%"
+        name_like = f"%{search_q.lower()}%"
+        name_lower = search_q.lower()
 
         def add(pzn_raw, artikel=None, df=None, pck=None, herst=None,
-                wirkstoff=None, staerke=None, *, source=""):
+                wirkstoff=None, staerke=None, *, source="", via=None):
             pzn = _pzn_norm(pzn_raw)
             if not pzn:
                 return
@@ -82,6 +131,8 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                 "staerke": "",
                 "ist_nmg": False,
                 "hat_austausch": False,
+                "hat_schulbank": False,
+                "via": set(),
             })
             if artikel and not row["artikel"]:
                 row["artikel"] = str(artikel).strip()
@@ -99,12 +150,17 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                 row["ist_nmg"] = True
             if source == "austausch":
                 row["hat_austausch"] = True
+            if source == "schulbank":
+                row["hat_austausch"] = True
+                row["hat_schulbank"] = True
+            if via:
+                row["via"].add(via)
 
-        # --- 1. tbl_austauschdatenbank ---
+        # --- 1. tbl_austauschdatenbank (mit Quelle-Tracking V1.1 SP4) ---
         try:
             if is_pzn:
                 rows = con.execute("""
-                    SELECT pzn_alt, artikel_alt, pzn_nmg, artikel_nmg
+                    SELECT pzn_alt, artikel_alt, pzn_nmg, artikel_nmg, quelle
                     FROM tbl_austauschdatenbank
                     WHERE status = 'aktiv'
                       AND (pzn_alt LIKE ? OR pzn_nmg LIKE ?)
@@ -112,7 +168,7 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                 """, (pzn_like, pzn_like, limit)).fetchall()
             else:
                 rows = con.execute("""
-                    SELECT pzn_alt, artikel_alt, pzn_nmg, artikel_nmg
+                    SELECT pzn_alt, artikel_alt, pzn_nmg, artikel_nmg, quelle
                     FROM tbl_austauschdatenbank
                     WHERE status = 'aktiv'
                       AND (LOWER(COALESCE(artikel_alt,'')) LIKE ?
@@ -121,10 +177,11 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                     LIMIT ?
                 """, (name_like, name_like, name_like, limit)).fetchall()
             for r in rows:
+                src = "schulbank" if (r["quelle"] or "").strip().lower() == "schulbank" else "austausch"
                 if r["pzn_alt"]:
-                    add(r["pzn_alt"], artikel=r["artikel_alt"], source="austausch")
+                    add(r["pzn_alt"], artikel=r["artikel_alt"], source=src)
                 if r["pzn_nmg"]:
-                    add(r["pzn_nmg"], artikel=r["artikel_nmg"], source="austausch")
+                    add(r["pzn_nmg"], artikel=r["artikel_nmg"], source=src)
         except sqlite3.OperationalError:
             pass
 
@@ -145,7 +202,7 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
         except sqlite3.OperationalError:
             pass
 
-        # --- 3. tbl_artikelstamm (mit Hersteller-Match V1.1 SP2) ---
+        # --- 3. tbl_artikelstamm (mit Match-Source-Tracking V1.1 SP4) ---
         try:
             if is_pzn:
                 rows = con.execute(
@@ -161,11 +218,19 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                     (name_like, name_like, limit),
                 ).fetchall()
             for r in rows:
-                add(r["pzn"], artikel=r["artikel"], df=r["df"], pck=r["pck"], herst=r["herst"])
+                # Tracking: welches Feld hat den Match getrieben? (#herst-Filter)
+                via_set = []
+                if not is_pzn:
+                    if name_lower in (r["artikel"] or "").lower():
+                        via_set.append("name")
+                    if name_lower in (r["herst"] or "").lower():
+                        via_set.append("herst")
+                for v in via_set or [None]:
+                    add(r["pzn"], artikel=r["artikel"], df=r["df"], pck=r["pck"], herst=r["herst"], via=v)
         except sqlite3.OperationalError:
             pass
 
-        # --- 4. tbl_pzn_basisdaten (mit Hersteller-Match V1.1 SP2) ---
+        # --- 4. tbl_pzn_basisdaten (mit Match-Source-Tracking V1.1 SP4) ---
         try:
             if is_pzn:
                 rows = con.execute(
@@ -181,11 +246,19 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                     (name_like, name_like, limit),
                 ).fetchall()
             for r in rows:
-                add(r["pzn"], artikel=r["artikelname"], df=r["df"], pck=r["pck"], herst=r["herstellerkuerzel"])
+                via_set = []
+                if not is_pzn:
+                    if name_lower in (r["artikelname"] or "").lower():
+                        via_set.append("name")
+                    if name_lower in (r["herstellerkuerzel"] or "").lower():
+                        via_set.append("herst")
+                for v in via_set or [None]:
+                    add(r["pzn"], artikel=r["artikelname"], df=r["df"], pck=r["pck"],
+                        herst=r["herstellerkuerzel"], via=v)
         except sqlite3.OperationalError:
             pass
 
-        # --- 5. tbl_wirkstoff_staerke (V1.1 SP2) ---
+        # --- 5. tbl_wirkstoff_staerke (V1.1 SP2; via='wirkstoff' V1.1 SP4) ---
         # Wirkstoff- und Staerke-Suche; PZN-Suche ist hier ueberfluessig, weil
         # die Stammtabellen die PZN bereits abdecken. Nur fuer Text-Eingaben.
         if not is_pzn:
@@ -198,7 +271,32 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                     (name_like, name_like, limit),
                 ).fetchall()
                 for r in rows:
-                    add(r["pzn"], wirkstoff=r["wirkstoff"], staerke=r["staerke"])
+                    add(r["pzn"], wirkstoff=r["wirkstoff"], staerke=r["staerke"], via="wirkstoff")
+            except sqlite3.OperationalError:
+                pass
+
+        # Nachfueller fuer Schulbank: wenn die initiale Austausch-Query den
+        # Treffer nicht via Schulbank-Eintrag gefunden hat (sondern z.B. via
+        # Artikelname-Match aus tbl_artikelstamm), wissen wir die Quelle nicht.
+        # Wenn Filter '#schulbank' gesetzt ist, holen wir die Quellen fuer alle
+        # bisherigen Treffer in einer Sammelabfrage nach.
+        if "schulbank" in filters and results:
+            pzns = list(results.keys())
+            placeholders = ",".join("?" * len(pzns))
+            try:
+                rows = con.execute(
+                    f"""SELECT pzn_alt, pzn_nmg, quelle FROM tbl_austauschdatenbank
+                        WHERE status='aktiv'
+                          AND (pzn_alt IN ({placeholders}) OR pzn_nmg IN ({placeholders}))""",
+                    pzns + pzns,
+                ).fetchall()
+                for r in rows:
+                    if (r["quelle"] or "").strip().lower() != "schulbank":
+                        continue
+                    for p in (r["pzn_alt"], r["pzn_nmg"]):
+                        if p and p in results:
+                            results[p]["hat_schulbank"] = True
+                            results[p]["hat_austausch"] = True
             except sqlite3.OperationalError:
                 pass
 
@@ -239,7 +337,26 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
             except sqlite3.OperationalError:
                 pass
 
+    # V1.1 SP4: Post-Hoc-Filter mit UND-Logik anwenden.
+    # via-Set wird vor der Rueckgabe entfernt (intern, fuer GUI nicht relevant).
     out = list(results.values())
+    if filters:
+        def keep(r) -> bool:
+            if "nmg" in filters and not r["ist_nmg"]:
+                return False
+            if "austausch" in filters and not r["hat_austausch"]:
+                return False
+            if "schulbank" in filters and not r["hat_schulbank"]:
+                return False
+            if "wirkstoff" in filters and "wirkstoff" not in r["via"]:
+                return False
+            if "herst" in filters and "herst" not in r["via"]:
+                return False
+            return True
+        out = [r for r in out if keep(r)]
+    for r in out:
+        r.pop("via", None)
+
     out.sort(key=lambda r: (not r["ist_nmg"], (r["artikel"] or "").lower(), r["pzn"]))
     return out[:limit]
 
