@@ -608,6 +608,125 @@ class NMGApp(tk.Tk):
         except Exception:
             pass
 
+    # V1.1 SP15: Background-Jobs ---------------------------------------------
+    def _bg_status_toast(self, text: str, fg: str = "#0a7d2c", duration_ms: int = 8000):
+        """Zeigt eine kurze Erfolgs-/Fehler-Meldung in der Status-Leiste unten.
+        Nach `duration_ms` wird der Status auf 'bereit' zurueckgesetzt.
+        """
+        try:
+            self.status.set(text)
+        except Exception:
+            return
+        # Toast-Auto-Reset
+        token = getattr(self, "_status_toast_token", 0) + 1
+        self._status_toast_token = token
+
+        def _reset():
+            if getattr(self, "_status_toast_token", -1) == token:
+                try:
+                    self.status.set("")
+                except Exception:
+                    pass
+        try:
+            self.after(duration_ms, _reset)
+        except Exception:
+            pass
+
+    def _bg_create_widget(self, title: str, subtitle: str):
+        """Erzeugt eine Mini-Status-Box im rechten Header-Bereich.
+        Liefert ein dict mit den Tk-Variablen zum Update.
+        """
+        box = tk.Frame(self._bg_jobs_panel, bg="#e8f1fb",
+                       highlightbackground="#a8c5e8", highlightthickness=1)
+        box.pack(side="top", anchor="ne", padx=0, pady=(0, 6))
+
+        title_var = tk.StringVar(value=title)
+        sub_var = tk.StringVar(value=subtitle)
+        tk.Label(box, textvariable=title_var, font=("Arial", 9, "bold"),
+                 fg="#0b4a86", bg="#e8f1fb", anchor="w").pack(
+            anchor="w", padx=10, pady=(6, 0))
+        tk.Label(box, textvariable=sub_var, font=("Arial", 9),
+                 fg="#444", bg="#e8f1fb", anchor="w", wraplength=300).pack(
+            anchor="w", padx=10, pady=(0, 4))
+        pb = ttk.Progressbar(box, mode="indeterminate", length=280)
+        pb.pack(padx=10, pady=(0, 8))
+        pb.start(12)
+        return {"box": box, "title_var": title_var, "sub_var": sub_var, "pb": pb}
+
+    def _bg_destroy_widget(self, ctx):
+        try:
+            ctx["pb"].stop()
+        except Exception:
+            pass
+        try:
+            ctx["box"].destroy()
+        except Exception:
+            pass
+
+    def _run_background(self, work_fn, title: str = "NMGone arbeitet",
+                         subtitle: str = "Laeuft im Hintergrund ...",
+                         progress: bool = True, on_done=None,
+                         on_error=None):
+        """V1.1 SP15: Startet work_fn in einem Hintergrund-Thread, OHNE Modal-
+        Dialog. Stattdessen erscheint rechts oben im Header eine Mini-Status-
+        Box mit Titel + Subtitle + indeterminate Progressbar.
+
+        Wenn progress=True, bekommt work_fn ein progress(text)-Callable als
+        erstes Argument (thread-safe via self.after).
+
+        on_done(result) wird im UI-Thread aufgerufen wenn fertig.
+        on_error(exc) wird im UI-Thread aufgerufen bei Exception.
+
+        UI bleibt waehrend des Jobs klickbar - mehrere Jobs koennen parallel
+        laufen und stapeln sich vertikal.
+        """
+        import threading
+        ctx = self._bg_create_widget(title, subtitle)
+
+        def update_progress(text):
+            try:
+                self.after(0, lambda t=text: ctx["sub_var"].set(t))
+            except Exception:
+                pass
+
+        def runner():
+            try:
+                if progress:
+                    result = work_fn(update_progress)
+                else:
+                    result = work_fn()
+            except BaseException as exc:
+                def _on_err():
+                    self._bg_destroy_widget(ctx)
+                    if on_error:
+                        try:
+                            on_error(exc)
+                        except Exception:
+                            pass
+                    else:
+                        self._bg_status_toast(f"{title}: Fehler - {exc}", fg="#9b1c1c")
+                try:
+                    self.after(0, _on_err)
+                except Exception:
+                    pass
+                return
+
+            def _on_ok():
+                self._bg_destroy_widget(ctx)
+                if on_done:
+                    try:
+                        on_done(result)
+                    except Exception:
+                        pass
+                else:
+                    self._bg_status_toast(f"{title}: fertig")
+            try:
+                self.after(0, _on_ok)
+            except Exception:
+                pass
+
+        threading.Thread(target=runner, daemon=True).start()
+
     def _run_busy(self, work_fn, title="NMGone arbeitet", subtitle="Bitte warten ...",
                    progress: bool = False):
         """SP20: Fuehrt work_fn() in einem Hintergrund-Thread aus, zeigt waehrend
@@ -747,8 +866,11 @@ class NMGApp(tk.Tk):
         main.rowconfigure(1, weight=1)
 
         # Oberer Programmkopf entfernt: Startseite soll direkt mit dem Arbeitsbereich beginnen.
+        # V1.1 SP15: rechts im Header zeigen wir Background-Jobs (z.B. Imports).
         header = tk.Frame(main, bg="#f5f7fb")
         header.grid(row=0, column=0, columnspan=2, sticky="ew", padx=0, pady=0)
+        self._bg_jobs_panel = tk.Frame(header, bg="#f5f7fb")
+        self._bg_jobs_panel.pack(side="right", padx=(0, 22), pady=(8, 0), anchor="ne")
 
         self.page = tk.Frame(main, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
         self.page.grid(row=1, column=0, sticky="nsew", padx=(22, 12), pady=10)
@@ -8644,24 +8766,32 @@ LIMIT 500
         ):
             return
 
-        try:
-            # V1.1 SP12: Fortschritts-Dialog, damit der User sieht, dass das
-            # Programm arbeitet (Import kann je nach Dateigroesse dauern).
-            # V1.1 SP14: Subtitle wird pro Datei aktualisiert ('Datei 5 von 96').
-            stats = self._run_busy(
-                lambda update: import_manual_analysis_files(
-                    files, analyse_typ=analyse_typ, bearbeiter=self.bearbeiter,
-                    progress_callback=update),
-                title=f"Manuelle {analyse_typ}-Analysen importieren",
-                subtitle=f"Datei 1 von {len(files)} ...",
-                progress=True,
-            )
-        except Exception as exc:
-            messagebox.showerror("Manuelle Analysen", str(exc))
-            return
+        # V1.1 SP15: Import laeuft im Hintergrund. Status oben rechts.
+        # UI bleibt klickbar. Nach Abschluss laeuft on_main_done im UI-Thread
+        # (dort sind messagebox + interaktiver Retry-Pfad wieder OK).
 
+        def on_main_done(stats):
+            self._handle_manual_import_done(files, analyse_typ, stats)
+
+        def on_main_error(exc):
+            messagebox.showerror("Manuelle Analysen", str(exc))
+
+        self._run_background(
+            lambda update: import_manual_analysis_files(
+                files, analyse_typ=analyse_typ, bearbeiter=self.bearbeiter,
+                progress_callback=update),
+            title=f"Manuelle {analyse_typ}-Analysen ({len(files)} Dateien)",
+            subtitle=f"Datei 1 von {len(files)} ...",
+            progress=True,
+            on_done=on_main_done,
+            on_error=on_main_error,
+        )
+
+    def _handle_manual_import_done(self, files, analyse_typ, stats):
+        """V1.1 SP15: Post-Import-Logik (lief frueher synchron nach _run_busy).
+        Wird im UI-Thread als on_done-Callback aus _run_background aufgerufen.
+        """
         # Wenn einzelne Dateien fehlschlagen, kann optional das bekannte Mapping geöffnet werden.
-        # Das Mapping erzeugt eine Standarddatei, die danach als manuelle Analyse importiert wird.
         if stats.get("failed"):
             retry_errors = list(stats.get("errors", []))
             if messagebox.askyesno(
@@ -8683,19 +8813,27 @@ LIMIT 500
                     except Exception as mapped_exc:
                         stats.setdefault("errors", []).append(f"{Path(file).name} Mapping: {mapped_exc}")
                 if mapped_temp_files:
-                    retry_stats = self._run_busy(
+                    # Retry auch im Hintergrund laufen lassen.
+                    def on_retry_done(retry_stats):
+                        for key in ("selected", "imported", "duplicates", "failed", "positions", "learning_suggestions"):
+                            stats[key] = int(stats.get(key, 0) or 0) + int(retry_stats.get(key, 0) or 0)
+                        stats.setdefault("duplicate_files", []).extend(retry_stats.get("duplicate_files", []))
+                        stats.setdefault("errors", []).extend(retry_stats.get("errors", []))
+                        self._show_manual_import_stats(analyse_typ, stats)
+                    self._run_background(
                         lambda update: import_manual_analysis_files(
                             mapped_temp_files, analyse_typ=analyse_typ,
                             bearbeiter=self.bearbeiter, progress_callback=update),
-                        title=f"Manuelle {analyse_typ}-Analysen importieren",
-                        subtitle=f"Datei 1 von {len(mapped_temp_files)} (Retry) ...",
+                        title=f"Manuelle {analyse_typ}-Analysen (Retry, {len(mapped_temp_files)} Dateien)",
+                        subtitle=f"Datei 1 von {len(mapped_temp_files)} ...",
                         progress=True,
+                        on_done=on_retry_done,
                     )
-                    for key in ("selected", "imported", "duplicates", "failed", "positions", "learning_suggestions"):
-                        stats[key] = int(stats.get(key, 0) or 0) + int(retry_stats.get(key, 0) or 0)
-                    stats.setdefault("duplicate_files", []).extend(retry_stats.get("duplicate_files", []))
-                    stats.setdefault("errors", []).extend(retry_stats.get("errors", []))
+                    return
+        self._show_manual_import_stats(analyse_typ, stats)
 
+    def _show_manual_import_stats(self, analyse_typ, stats):
+        """V1.1 SP15: Statistik-Messagebox + Status-Toast nach Abschluss."""
         msg = (
             f"Manuelle {analyse_typ}-Analysen importiert.\n\n"
             f"Ausgewählt: {stats.get('selected', 0)}\n"
@@ -8723,7 +8861,11 @@ LIMIT 500
             )
         except Exception:
             pass
-        self.status.set(msg)
+        # Toast in der Status-Leiste, plus Statistik-Messagebox.
+        self._bg_status_toast(
+            f"Manuelle {analyse_typ}-Analysen importiert: {stats.get('imported',0)} neu, {stats.get('duplicates',0)} schon vorhanden."
+        )
+        messagebox.showinfo(f"Manuelle {analyse_typ}-Analysen", msg)
         messagebox.showinfo("Manuelle Analysen", msg)
 
 
