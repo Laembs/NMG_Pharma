@@ -5,6 +5,10 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V1.1 SP14", "2026-06-19", [
+        "Manuelle Imports: Fortschritts-Anzeige im Busy-Dialog. Zeigt 'Datei 5 von 96: foo.xlsx' statt 'Bitte warten'.",
+        "Neuer _run_busy(..., progress=True)-Modus: Worker bekommt ein progress(text)-Callable und kann den Subtitle waehrend der Verarbeitung aktualisieren.",
+    ]),
     ("V1.1 SP13", "2026-06-19", [
         "Manueller Analysen Import deutlich schneller: pro Excel-Zeile war vorher 2-3 Einzel-Queries als implizite Transaktion. Bei 5000 Zeilen = 10.000-15.000 Transaktionen, dauerte minutenlang.",
         "Fix: Inserts werden gesammelt und als executemany in einer Transaktion geschrieben; Duplikat-Check liest bestehende Schluessel einmal als Set.",
