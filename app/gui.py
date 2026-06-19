@@ -608,20 +608,38 @@ class NMGApp(tk.Tk):
         except Exception:
             pass
 
-    def _run_busy(self, work_fn, title="NMGone arbeitet", subtitle="Bitte warten ..."):
+    def _run_busy(self, work_fn, title="NMGone arbeitet", subtitle="Bitte warten ...",
+                   progress: bool = False):
         """SP20: Fuehrt work_fn() in einem Hintergrund-Thread aus, zeigt waehrend
         der Ausfuehrung den modalen Busy-Dialog mit animierter Progressbar.
         Gibt den Rueckgabewert von work_fn zurueck oder wirft die Exception
         weiter. Backend-Funktionen muessen ihre eigenen DB-Verbindungen
         erstellen (sqlite3 standardmaessig thread-bound).
+
+        V1.1 SP14: Wenn progress=True, bekommt work_fn ein progress(text)-
+        Callable als erstes Argument. Damit kann das Backend die Subtitle-
+        Anzeige aktualisieren (z.B. 'Datei 5 von 96'). Aufrufer:
+            self._run_busy(lambda update: my_fn(args, progress=update),
+                           title=..., subtitle=..., progress=True)
         """
         import threading
         state = {"value": None, "exc": None}
         done_flag = tk.IntVar(master=self, value=0)
+        busy = self._show_busy_modal(title, subtitle)
+
+        def update_progress(text):
+            # Thread-safe: GUI nur ueber self.after vom Worker aus aendern.
+            try:
+                self.after(0, lambda t=text: self._set_busy_message(busy, t))
+            except Exception:
+                pass
 
         def runner():
             try:
-                state["value"] = work_fn()
+                if progress:
+                    state["value"] = work_fn(update_progress)
+                else:
+                    state["value"] = work_fn()
             except BaseException as exc:
                 state["exc"] = exc
             finally:
@@ -630,7 +648,6 @@ class NMGApp(tk.Tk):
                 except Exception:
                     pass
 
-        busy = self._show_busy_modal(title, subtitle)
         threading.Thread(target=runner, daemon=True).start()
         try:
             self.wait_variable(done_flag)
@@ -8630,10 +8647,14 @@ LIMIT 500
         try:
             # V1.1 SP12: Fortschritts-Dialog, damit der User sieht, dass das
             # Programm arbeitet (Import kann je nach Dateigroesse dauern).
+            # V1.1 SP14: Subtitle wird pro Datei aktualisiert ('Datei 5 von 96').
             stats = self._run_busy(
-                lambda: import_manual_analysis_files(files, analyse_typ=analyse_typ, bearbeiter=self.bearbeiter),
+                lambda update: import_manual_analysis_files(
+                    files, analyse_typ=analyse_typ, bearbeiter=self.bearbeiter,
+                    progress_callback=update),
                 title=f"Manuelle {analyse_typ}-Analysen importieren",
-                subtitle=f"Importiere {len(files)} Datei(en) ...",
+                subtitle=f"Datei 1 von {len(files)} ...",
+                progress=True,
             )
         except Exception as exc:
             messagebox.showerror("Manuelle Analysen", str(exc))
@@ -8663,9 +8684,12 @@ LIMIT 500
                         stats.setdefault("errors", []).append(f"{Path(file).name} Mapping: {mapped_exc}")
                 if mapped_temp_files:
                     retry_stats = self._run_busy(
-                        lambda: import_manual_analysis_files(mapped_temp_files, analyse_typ=analyse_typ, bearbeiter=self.bearbeiter),
+                        lambda update: import_manual_analysis_files(
+                            mapped_temp_files, analyse_typ=analyse_typ,
+                            bearbeiter=self.bearbeiter, progress_callback=update),
                         title=f"Manuelle {analyse_typ}-Analysen importieren",
-                        subtitle=f"Importiere {len(mapped_temp_files)} korrigierte Datei(en) ...",
+                        subtitle=f"Datei 1 von {len(mapped_temp_files)} (Retry) ...",
+                        progress=True,
                     )
                     for key in ("selected", "imported", "duplicates", "failed", "positions", "learning_suggestions"):
                         stats[key] = int(stats.get(key, 0) or 0) + int(retry_stats.get(key, 0) or 0)

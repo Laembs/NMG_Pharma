@@ -323,7 +323,9 @@ def _latest_auswertung_id(con: sqlite3.Connection) -> int | None:
         return None
 
 
-def import_manual_analysis_files(paths: Iterable[str | Path], analyse_typ: str, bearbeiter: str = "") -> dict:
+def import_manual_analysis_files(paths: Iterable[str | Path], analyse_typ: str,
+                                  bearbeiter: str = "",
+                                  progress_callback=None) -> dict:
     """Importiert geprüfte manuelle Analysen als Historien-/Analysebasis.
 
     - keine neue fachliche Auswertung rechnen
@@ -331,6 +333,9 @@ def import_manual_analysis_files(paths: Iterable[str | Path], analyse_typ: str, 
     - Dubletten über SHA256 überspringen
     - Daten in tbl_auswertungen/tbl_auswertungspositionen übernehmen
     - vorhandene Austausch-/NMG-Entscheidungen als Schulbank-Vorschläge anlegen
+
+    V1.1 SP14: optionaler progress_callback(text: str). Wird pro Datei
+    vor der Verarbeitung aufgerufen, z.B. 'Datei 5 von 96: foo.xlsx'.
     """
     analyse_typ = (analyse_typ or "").upper().strip()
     if analyse_typ == "PK":
@@ -358,11 +363,20 @@ def import_manual_analysis_files(paths: Iterable[str | Path], analyse_typ: str, 
         con.row_factory = sqlite3.Row
         _ensure_tables(con)
 
+    # V1.1 SP14: Materialisieren damit wir die Gesamtzahl fuer Progress kennen.
+    paths_list = list(paths)
+    total = len(paths_list)
+
     with TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        for item in paths:
+        for idx, item in enumerate(paths_list, 1):
             stats["selected"] += 1
             path = Path(item)
+            if progress_callback:
+                try:
+                    progress_callback(f"Datei {idx} von {total}: {path.name}")
+                except Exception:
+                    pass
             try:
                 if not path.exists():
                     raise FileNotFoundError(path)
