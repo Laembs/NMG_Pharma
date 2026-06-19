@@ -908,9 +908,12 @@ def create_linden_export(input_file: str | Path, apotheke: str) -> Path:
     input_file = Path(input_file)
     if not DB_PATH.exists():
         init_db(DB_PATH)
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     safe_name = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in apotheke.strip()) or "Apotheke"
-    out = OUTPUT_DIR / f"Auswertung_{safe_name}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+    # V1.1 SP12: Strukturiert nach OUTPUT_DIR/PK/<Jahr>/Q<n>/
+    # create_linden_export ist der PK-Auswertungs-Pfad (Apotheken-Excel).
+    # ZF kommt aus import_historical_market_file und erzeugt gar keine Excel.
+    from .config import jahr_quartal_pfad
+    out = jahr_quartal_pfad(OUTPUT_DIR, "PK") / f"Auswertung_{safe_name}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
 
     rows, input_mapping = _read_input_rows(input_file)
     wb = Workbook()

@@ -7,7 +7,7 @@ from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-from .config import OUTPUT_DIR, DB_PATH
+from .config import OUTPUT_DIR, DB_PATH, jahr_quartal_pfad
 
 
 COMPARE_FIELDS = [
@@ -545,7 +545,8 @@ def export_abweichungsanalyse(manuelle_datei, programm_datei):
         for ch in man_path.stem
     )[:45]
 
-    out = OUTPUT_DIR / f"Abweichungsanalyse_{safe}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+    # V1.1 SP12: Strukturiert nach OUTPUT_DIR/Abweichungsanalyse/<Jahr>/Q<n>/
+    out = jahr_quartal_pfad(OUTPUT_DIR, "Abweichungsanalyse") / f"Abweichungsanalyse_{safe}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
     wb.save(out)
 
     return out

@@ -4,7 +4,7 @@ import sqlite3
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
-from .config import DB_PATH, OUTPUT_DIR
+from .config import DB_PATH, OUTPUT_DIR, jahr_quartal_pfad
 from .db import init_db
 
 
@@ -786,7 +786,8 @@ def export_produktanalyse_neu(kundentyp: str = "PK", monate: int = 6) -> Path:
     if label not in ("PK", "ZF", "PK+ZF"):
         raise ValueError(f"Unbekannter Kundentyp: {kundentyp}")
 
-    out = OUTPUT_DIR / f"Produktanalyse_{label.replace('+', '_und_')}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+    # V1.1 SP12: Strukturierter Ablage-Pfad ausgaben/Produktanalyse/<Jahr>/Q<n>/
+    out = jahr_quartal_pfad(OUTPUT_DIR, "Produktanalyse") / f"Produktanalyse_{label.replace('+', '_und_')}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
 
     wb = Workbook()
     # Default-Sheet entfernen, wir fuegen unsere selbst an.

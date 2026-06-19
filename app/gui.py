@@ -50,18 +50,64 @@ def neutral_button(parent, text, command, **kwargs):
     return tk.Button(parent, text=text, command=command, **opts)
 
 
+def _close_de_popup_on_click_outside(de, event):
+    """V1.1 SP12: Schliesst den DateEntry-Popup-Kalender, wenn der Klick
+    ausserhalb des Entries und seines Popups war. tkcalendar schliesst
+    sonst nicht automatisch wenn man irgendwohin klickt.
+    """
+    try:
+        top = getattr(de, "_top_cal", None)
+        if top is None:
+            return
+        try:
+            if not top.winfo_ismapped():
+                return
+        except tk.TclError:
+            return
+        w = event.widget
+        # Wenn der Klick innerhalb des Entries oder des Popup-Toplevels war,
+        # nichts zu tun. Wandern den Widget-Baum nach oben durch.
+        try:
+            cur = w
+            while cur is not None:
+                if cur is de or cur is top:
+                    return
+                cur = cur.master
+        except Exception:
+            pass
+        try:
+            top.withdraw()
+        except tk.TclError:
+            pass
+    except Exception:
+        pass
+
+
 def _make_date_entry(parent, textvariable, width: int = 12, **kwargs):
     """V1.1 SP10: Liefert ein DateEntry-Widget (tkcalendar) oder ein
     klassisches tk.Entry mit Datums-Hint, je nach Verfuegbarkeit.
     Beide schreiben den Wert als 'YYYY-MM-DD' in die textvariable.
+    V1.1 SP12: Popup-Kalender schliesst sich, wenn ausserhalb geklickt wird.
     """
     if _HAS_TKCAL:
-        return _TkCalDateEntry(
+        de = _TkCalDateEntry(
             parent, textvariable=textvariable, date_pattern="yyyy-mm-dd",
             width=width, background="#0b4a86", foreground="white",
             borderwidth=1, headersbackground="#0b4a86",
             headersforeground="white", **kwargs,
         )
+        # Globalen Click-Listener installieren - feuert auch fuer Klicks
+        # auf andere Widgets im selben Toplevel. Cleanup nicht noetig, weil
+        # bei DateEntry-Destruction der Handler harmlos no-op zurueckkommt.
+        try:
+            de.winfo_toplevel().bind_all(
+                "<Button-1>",
+                lambda e, _de=de: _close_de_popup_on_click_outside(_de, e),
+                add="+",
+            )
+        except Exception:
+            pass
+        return de
     return tk.Entry(parent, textvariable=textvariable, width=width, **kwargs)
 from copy import copy as copy_cell_style
 from openpyxl import load_workbook, Workbook
@@ -1858,13 +1904,29 @@ LIMIT 500
             pass
 
         def _sa_reload(*_args):
-            ft = _sa_search_var.get().strip().lower()
-            f_apo = _sa_apo_var.get().strip().lower()
-            f_knr = _sa_knr_var.get().strip().lower()
-            f_kname = _sa_kname_var.get().strip().lower()
-            f_von = _sa_von_var.get().strip()
-            f_bis = _sa_bis_var.get().strip()
-            for item in listbox.get_children(): listbox.delete(item)
+            # V1.1 SP12 Bug-Fix: nach Seitenwechsel kann die alte StringVar
+            # noch ihren trace feuern, obwohl die Treeview schon zerstoert ist.
+            # Dann wirft listbox.get_children() / .delete() 'Item end not found'.
+            # Defensive Guard: Widget-Existenz pruefen.
+            try:
+                if not listbox.winfo_exists():
+                    return
+            except tk.TclError:
+                return
+            try:
+                ft = _sa_search_var.get().strip().lower()
+                f_apo = _sa_apo_var.get().strip().lower()
+                f_knr = _sa_knr_var.get().strip().lower()
+                f_kname = _sa_kname_var.get().strip().lower()
+                f_von = _sa_von_var.get().strip()
+                f_bis = _sa_bis_var.get().strip()
+            except tk.TclError:
+                return
+            try:
+                for item in listbox.get_children():
+                    listbox.delete(item)
+            except tk.TclError:
+                return
             _sa_row_map.clear()
             mode = filter_mode.get()
             # V1.1 SP10: Produktanalyse-Modus scannt OUTPUT_DIR statt der DB.
@@ -1913,8 +1975,10 @@ LIMIT 500
             """
             try:
                 from .config import OUTPUT_DIR as _OUT
+                # V1.1 SP12: rglob, weil Produktanalysen jetzt in
+                # OUTPUT_DIR/Produktanalyse/<Jahr>/Q<n>/ landen.
                 pa_files = sorted(
-                    _OUT.glob("Produktanalyse_*.xlsx"),
+                    _OUT.rglob("Produktanalyse_*.xlsx"),
                     key=lambda p: p.stat().st_mtime, reverse=True,
                 )
             except Exception:
@@ -3914,22 +3978,36 @@ LIMIT 500
         ]
 
     def _dashboard_get_active_tiles(self):
-        saved = self._get_meta_value("dashboard_aktive_kacheln", "")
-        if saved:
-            return set(saved.split(","))
-        return {t[0] for t in self._dashboard_all_tiles()[:7]}
+        # V1.1 SP12 Bug-Fix: Sentinel '_NONE_' unterscheidet "nie gesetzt"
+        # (Default zurueckgeben) von "explizit leer abgewaehlt" (leeres Set).
+        # '_EMPTY_' = explizit leer. Vorher: leerer String fiel auf Default
+        # zurueck -> 'Alles abwaehlen' hat nie funktioniert.
+        saved = self._get_meta_value("dashboard_aktive_kacheln", "_NONE_")
+        if saved == "_NONE_":
+            return {t[0] for t in self._dashboard_all_tiles()[:7]}
+        if not saved or saved == "_EMPTY_":
+            return set()
+        return set(saved.split(","))
 
     def _dashboard_set_active_tiles(self, active_set):
-        self._set_meta_value("dashboard_aktive_kacheln", ",".join(sorted(active_set)))
+        if not active_set:
+            self._set_meta_value("dashboard_aktive_kacheln", "_EMPTY_")
+        else:
+            self._set_meta_value("dashboard_aktive_kacheln", ",".join(sorted(active_set)))
 
     def _dashboard_get_active_info(self):
-        saved = self._get_meta_value("dashboard_aktive_info", "")
-        if saved:
-            return set(saved.split(","))
-        return {"info_ampel", "info_todos", "info_analysen"}
+        saved = self._get_meta_value("dashboard_aktive_info", "_NONE_")
+        if saved == "_NONE_":
+            return {"info_ampel", "info_todos", "info_analysen"}
+        if not saved or saved == "_EMPTY_":
+            return set()
+        return set(saved.split(","))
 
     def _dashboard_set_active_info(self, active_set):
-        self._set_meta_value("dashboard_aktive_info", ",".join(sorted(active_set)))
+        if not active_set:
+            self._set_meta_value("dashboard_aktive_info", "_EMPTY_")
+        else:
+            self._set_meta_value("dashboard_aktive_info", ",".join(sorted(active_set)))
 
     def _dashboard_info_panel(self, parent, active_info):
         """Kompakter Info-Streifen oben auf der Startseite."""
@@ -4019,8 +4097,11 @@ LIMIT 500
         win.title("Dashboard anpassen")
         # SP31: vorher 860x680 + win.state("zoomed") -> der Editor blockierte den
         # ganzen Bildschirm. Jetzt um ~20% kleiner und ohne Zoom-State.
-        win.geometry("690x545")
-        win.minsize(512, 416)
+        # V1.1 SP12: Hoehe wieder vergroessert (720x780), sonst war der
+        # Speicher-Button unten abgeschnitten und musste manuell aufgezogen
+        # werden. minsize hochgesetzt damit man den Button immer sieht.
+        win.geometry("720x780")
+        win.minsize(640, 600)
         win.configure(bg="#f5f7fb")
         win.transient(self)
         win.grab_set()
@@ -4456,13 +4537,16 @@ LIMIT 500
             self.open_vergleichssuche_window()
 
     def _global_suche_widget(self, parent, *, initial_limit: int = 3,
-                              tree_height: int = 6):
-        """V1.1 SP7 / SP9: Globales Such-Widget.
+                              tree_height: int = 6, hide_when_empty: bool = False):
+        """V1.1 SP7 / SP9 / SP12: Globales Such-Widget.
         Sucht parallel in Kunden, gespeicherten Analysen und Artikeln.
         Doppelklick oder Button 'Anzeigen' springt zum passenden Bereich.
 
         V1.1 SP9: zeigt nur die ersten `initial_limit` Treffer; bei mehr
         Treffern erscheint ein 'Mehr anzeigen'-Button am unteren Rand.
+        V1.1 SP12: hide_when_empty=True versteckt die Treffer-Tabelle so
+        lange, bis es mindestens einen Treffer gibt - damit das Widget
+        auf der Startseite kompakt bleibt.
         """
         box = tk.Frame(parent, bg="#e8f1fb", highlightbackground="#a8c5e8", highlightthickness=1)
         box.pack(fill="x", padx=18, pady=(10, 0))
@@ -4484,9 +4568,11 @@ LIMIT 500
         status_lbl = tk.Label(entry_row, text="", bg="#e8f1fb", fg="#555", font=("Arial", 9))
         status_lbl.pack(side="left")
 
-        # Treeview fuer Treffer.
+        # Treeview fuer Treffer. V1.1 SP12: bei hide_when_empty erst sichtbar
+        # wenn Treffer da sind.
         tree_frame = tk.Frame(box, bg="#e8f1fb")
-        tree_frame.pack(fill="x", padx=10, pady=(0, 4))
+        if not hide_when_empty:
+            tree_frame.pack(fill="x", padx=10, pady=(0, 4))
         cols = ("typ", "label", "detail")
         heads = {"typ": "Typ", "label": "Bezeichnung", "detail": "Details"}
         widths = {"typ": 90, "label": 360, "detail": 260}
@@ -4529,7 +4615,13 @@ LIMIT 500
             if total == 0:
                 status_lbl.configure(text="" if not query_var.get().strip() else "0 Treffer")
                 more_row.pack_forget()
+                # V1.1 SP12: keine Treffer -> Tabelle verstecken (Startseite kompakt).
+                if hide_when_empty:
+                    tree_frame.pack_forget()
                 return
+            # V1.1 SP12: jetzt zeigen sobald es Treffer gibt.
+            if hide_when_empty and not tree_frame.winfo_ismapped():
+                tree_frame.pack(fill="x", padx=10, pady=(0, 4))
             if shown < total:
                 status_lbl.configure(text=f"{shown} von {total} Treffern")
                 more_btn.configure(text=f"Mehr anzeigen ({total - shown})")
@@ -4757,7 +4849,10 @@ LIMIT 500
         # --- V1.1 SP7: Globale Suche (Kunde / Analyse / Artikel) ---
         # ersetzt das alte Austausch-Suche-Widget (SP16); die Vergleichs-Suche
         # ist jetzt ein eigenes Tool und uebernimmt die Artikel-Recherche.
-        self._global_suche_widget(inner)
+        # V1.1 SP12: kompakter Modus - Tabelle nur sichtbar wenn Treffer da,
+        # Hoehe 3 Zeilen (Toplevel-Tool ist die ausfuehrliche Variante).
+        self._global_suche_widget(inner, initial_limit=3, tree_height=3,
+                                  hide_when_empty=True)
 
         # --- Schnellnotiz + Suche ---
         self._schnellnotiz_widget(inner)
@@ -8533,7 +8628,13 @@ LIMIT 500
             return
 
         try:
-            stats = import_manual_analysis_files(files, analyse_typ=analyse_typ, bearbeiter=self.bearbeiter)
+            # V1.1 SP12: Fortschritts-Dialog, damit der User sieht, dass das
+            # Programm arbeitet (Import kann je nach Dateigroesse dauern).
+            stats = self._run_busy(
+                lambda: import_manual_analysis_files(files, analyse_typ=analyse_typ, bearbeiter=self.bearbeiter),
+                title=f"Manuelle {analyse_typ}-Analysen importieren",
+                subtitle=f"Importiere {len(files)} Datei(en) ...",
+            )
         except Exception as exc:
             messagebox.showerror("Manuelle Analysen", str(exc))
             return
@@ -8561,7 +8662,11 @@ LIMIT 500
                     except Exception as mapped_exc:
                         stats.setdefault("errors", []).append(f"{Path(file).name} Mapping: {mapped_exc}")
                 if mapped_temp_files:
-                    retry_stats = import_manual_analysis_files(mapped_temp_files, analyse_typ=analyse_typ, bearbeiter=self.bearbeiter)
+                    retry_stats = self._run_busy(
+                        lambda: import_manual_analysis_files(mapped_temp_files, analyse_typ=analyse_typ, bearbeiter=self.bearbeiter),
+                        title=f"Manuelle {analyse_typ}-Analysen importieren",
+                        subtitle=f"Importiere {len(mapped_temp_files)} korrigierte Datei(en) ...",
+                    )
                     for key in ("selected", "imported", "duplicates", "failed", "positions", "learning_suggestions"):
                         stats[key] = int(stats.get(key, 0) or 0) + int(retry_stats.get(key, 0) or 0)
                     stats.setdefault("duplicate_files", []).extend(retry_stats.get("duplicate_files", []))
@@ -8713,6 +8818,13 @@ LIMIT 500
                         pass
                 self.status.set(f"Admin: {len(ids)} Auswertung(en) und {pos_count} Positionen gelöscht. Backup: {backup_path}")
                 messagebox.showinfo("Admin", f"Gelöscht: {len(ids)} Auswertung(en)\nPositionen: {pos_count}\nBackup:\n{backup_path}")
+                # V1.1 SP12 Bug-Fix: dahinterliegende Seite refreshen, sonst
+                # zeigt 'Gespeicherte Analysen' weiter die geloeschten Items.
+                try:
+                    win.destroy()
+                    self.open_saved_analyses()
+                except Exception:
+                    pass
             except Exception as exc:
                 messagebox.showerror("Admin", f"Auswertungen konnten nicht gelöscht werden:\n{exc}")
 
