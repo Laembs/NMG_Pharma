@@ -502,6 +502,133 @@ def _produktanalyse_rows(con: sqlite3.Connection, kundentyp: str, monate: int = 
     return con.execute(sql, datenquellen).fetchall()
 
 
+def _produktanalyse_rows_nmg(con: sqlite3.Connection, kundentyp: str, monate: int = 6) -> list[sqlite3.Row]:
+    """V1.1 SP6: Liefert PZNs aus den Auswertungen, die IM NMG-Stamm sind.
+    Disjunkt zur Hauptliste, sortiert wie die Hauptliste (Umsatz DESC).
+    """
+    datenquellen = _produktanalyse_datenquellen(kundentyp)
+    placeholders = ",".join("?" * len(datenquellen))
+    sql = f"""
+        WITH gruppiert AS (
+            SELECT
+                p.pzn,
+                COUNT(DISTINCT a.apotheke) AS apotheken,
+                COUNT(DISTINCT p.auswertung_id) AS analyse_anzahl,
+                MIN(a.datum) AS erste_sichtung,
+                MAX(a.datum) AS letzte_sichtung,
+                SUM(COALESCE(p.absatz_6m, 0)) AS gesamtabsatz_6m,
+                AVG(NULLIF(p.absatz_6m, 0)) AS durchschnitt_absatz_6m
+            FROM tbl_auswertungspositionen p
+            JOIN tbl_auswertungen a ON a.id = p.auswertung_id
+            WHERE p.pzn IS NOT NULL AND p.pzn <> ''
+              AND COALESCE(p.absatz_6m, 0) > 0
+              AND COALESCE(a.datenquelle, 'NMG') IN ({placeholders})
+              AND a.datum >= date('now', '-{int(monate)} months')
+            GROUP BY p.pzn
+        )
+        SELECT
+            g.pzn,
+            COALESCE(nmg.artikelname, ast.artikel, '') AS artikelname,
+            COALESCE(ast.df, '') AS df,
+            COALESCE(ast.pck, '') AS pck,
+            COALESCE(nmg.herstellerkuerzel, ast.herst, '') AS hersteller_stamm,
+            g.apotheken,
+            g.gesamtabsatz_6m,
+            COALESCE(g.durchschnitt_absatz_6m, 0) AS durchschnitt_absatz_6m,
+            COALESCE(ast.ek, nmg.taxe_ek, 0) AS effektiver_ek,
+            g.gesamtabsatz_6m * COALESCE(ast.ek, nmg.taxe_ek, 0) AS moeglicher_gesamtumsatz,
+            g.analyse_anzahl,
+            g.erste_sichtung,
+            g.letzte_sichtung
+        FROM gruppiert g
+        JOIN tbl_nmg_stamm nmg ON nmg.pzn = g.pzn
+        LEFT JOIN tbl_artikelstamm ast ON ast.pzn = g.pzn
+        ORDER BY moeglicher_gesamtumsatz DESC, g.gesamtabsatz_6m DESC
+    """
+    con.row_factory = sqlite3.Row
+    return con.execute(sql, datenquellen).fetchall()
+
+
+def _produktanalyse_rows_austausch(con: sqlite3.Connection, kundentyp: str, monate: int = 6) -> list[sqlite3.Row]:
+    """V1.1 SP6: Liefert PZNs aus den Auswertungen, die einen Austausch-
+    Eintrag haben aber NICHT im NMG-Stamm sind. Disjunkt zur Hauptliste
+    und zur NMG-Liste. Liefert zusaetzlich Ersatz-PZN, Ersatz-Artikel,
+    Quelle (aus tbl_austauschdatenbank bevorzugt, sonst tbl_austauschartikel).
+    """
+    datenquellen = _produktanalyse_datenquellen(kundentyp)
+    placeholders = ",".join("?" * len(datenquellen))
+    sql = f"""
+        WITH gruppiert AS (
+            SELECT
+                p.pzn,
+                COUNT(DISTINCT a.apotheke) AS apotheken,
+                COUNT(DISTINCT p.auswertung_id) AS analyse_anzahl,
+                MIN(a.datum) AS erste_sichtung,
+                MAX(a.datum) AS letzte_sichtung,
+                SUM(COALESCE(p.absatz_6m, 0)) AS gesamtabsatz_6m,
+                AVG(NULLIF(p.absatz_6m, 0)) AS durchschnitt_absatz_6m
+            FROM tbl_auswertungspositionen p
+            JOIN tbl_auswertungen a ON a.id = p.auswertung_id
+            WHERE p.pzn IS NOT NULL AND p.pzn <> ''
+              AND COALESCE(p.absatz_6m, 0) > 0
+              AND COALESCE(a.datenquelle, 'NMG') IN ({placeholders})
+              AND a.datum >= date('now', '-{int(monate)} months')
+            GROUP BY p.pzn
+        ),
+        ad_best AS (
+            -- pro PZN nur EIN Austausch-Eintrag aus der Datenbank
+            SELECT pzn_alt,
+                   MAX(pzn_nmg)      AS ersatz_pzn,
+                   MAX(artikel_nmg)  AS ersatz_artikel,
+                   MAX(freitext_austausch) AS freitext,
+                   MAX(quelle)       AS quelle
+            FROM tbl_austauschdatenbank
+            WHERE status = 'aktiv'
+              AND (COALESCE(pzn_nmg,'') <> '' OR COALESCE(freitext_austausch,'') <> '')
+            GROUP BY pzn_alt
+        ),
+        aa_best AS (
+            SELECT original_pzn,
+                   MAX(nmg_pzn)          AS ersatz_pzn,
+                   MAX(austauschbar_gegen) AS ersatz_artikel
+            FROM tbl_austauschartikel
+            WHERE (COALESCE(nmg_pzn,'') <> '' OR COALESCE(austauschbar_gegen,'') <> '')
+            GROUP BY original_pzn
+        )
+        SELECT
+            g.pzn,
+            COALESCE(ast.artikel, '') AS artikelname,
+            COALESCE(ast.df, '') AS df,
+            COALESCE(ast.pck, '') AS pck,
+            COALESCE(ast.herst, '') AS hersteller_stamm,
+            g.apotheken,
+            g.gesamtabsatz_6m,
+            COALESCE(g.durchschnitt_absatz_6m, 0) AS durchschnitt_absatz_6m,
+            COALESCE(ast.ek, 0) AS effektiver_ek,
+            g.gesamtabsatz_6m * COALESCE(ast.ek, 0) AS moeglicher_gesamtumsatz,
+            g.analyse_anzahl,
+            g.erste_sichtung,
+            g.letzte_sichtung,
+            -- Ersatz: zuerst aus der Datenbank, sonst aus der alten Tabelle
+            COALESCE(ad.ersatz_pzn, aa.ersatz_pzn, '') AS ersatz_pzn,
+            COALESCE(ad.ersatz_artikel, aa.ersatz_artikel, ad.freitext, '') AS ersatz_artikel,
+            CASE
+                WHEN ad.pzn_alt IS NOT NULL THEN COALESCE(ad.quelle, 'Austauschdatenbank')
+                WHEN aa.original_pzn IS NOT NULL THEN 'Alte Austauschartikel-Tabelle'
+                ELSE ''
+            END AS quelle
+        FROM gruppiert g
+        LEFT JOIN tbl_artikelstamm ast ON ast.pzn = g.pzn
+        LEFT JOIN ad_best ad ON ad.pzn_alt = g.pzn
+        LEFT JOIN aa_best aa ON aa.original_pzn = g.pzn
+        WHERE NOT EXISTS (SELECT 1 FROM tbl_nmg_stamm nmg WHERE nmg.pzn = g.pzn)
+          AND (ad.pzn_alt IS NOT NULL OR aa.original_pzn IS NOT NULL)
+        ORDER BY moeglicher_gesamtumsatz DESC, g.gesamtabsatz_6m DESC
+    """
+    con.row_factory = sqlite3.Row
+    return con.execute(sql, datenquellen).fetchall()
+
+
 def _produktanalyse_basis_info(con: sqlite3.Connection, kundentyp: str, monate: int = 6) -> tuple[int, int]:
     """Zaehlt Auswertungen + Positionen im gefilterten Zeitraum.
     Wird oben in der Excel als Basis-Information ausgegeben.
@@ -524,37 +651,78 @@ def _produktanalyse_basis_info(con: sqlite3.Connection, kundentyp: str, monate: 
     return aw, pos
 
 
-def _produktanalyse_fill_sheet(ws, label: str, rows, basis_auswertungen: int, basis_positionen: int):
-    """Befuellt ein Worksheet im Vorlagen-Format des Users:
-    Zeile 1 Titel, Zeile 2 Basis-Info, Zeile 3 Beschreibung, Zeile 5 Header,
-    ab Zeile 6 Daten.
+_SHEET_KIND_META = {
+    "haupt": {
+        "title": "Produktanalyse {label}: Neue Produktchancen (Artikel nicht im NMG-Stamm)",
+        "desc": (
+            "Nicht im NMG-Stamm und kein Austausch-Eintrag. Hersteller "
+            "und EK aus dem Artikelstamm. Gesamtumsatz = Gesamtabsatz x EK."
+        ),
+        "color": "0B4A86",
+    },
+    "nmg": {
+        "title": "Produktanalyse {label}: Artikel bereits im NMG-Sortiment",
+        "desc": (
+            "PZNs aus den Auswertungen, die im NMG-Stamm liegen. Diese "
+            "Artikel sind bereits eigenes Sortiment - sinnvoll als Cross-"
+            "Sell-Indikator. Hersteller bevorzugt aus NMG-Stamm."
+        ),
+        "color": "117a30",
+    },
+    "austausch": {
+        "title": "Produktanalyse {label}: Austausch vorhanden",
+        "desc": (
+            "PZNs aus den Auswertungen, fuer die ein Austausch-Eintrag "
+            "existiert (Schulbank, Biosimilar oder alte Austauschartikel-"
+            "Tabelle). Ersatz-PZN und Quelle in den rechten Spalten."
+        ),
+        "color": "8b5a00",
+    },
+}
+
+
+def _produktanalyse_fill_sheet(ws, label: str, rows, basis_auswertungen: int,
+                                basis_positionen: int, kind: str = "haupt"):
+    """V1.1 SP6: Befuellt ein Worksheet im Vorlagen-Format des Users.
+
+    kind:
+      'haupt'     -> Hauptliste (13 Spalten)
+      'nmg'       -> Artikel im NMG-Stamm (13 Spalten, gleiches Layout)
+      'austausch' -> Austausch vorhanden (16 Spalten: + Ersatz-PZN,
+                     Ersatz-Artikel, Quelle)
     """
-    ws.cell(1, 1).value = f"Produktanalyse {label}: Neue Produktchancen (Artikel nicht im NMG-Stamm)"
-    ws.cell(1, 1).font = Font(bold=True, size=14, color="0B4A86")
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=13)
+    meta = _SHEET_KIND_META.get(kind, _SHEET_KIND_META["haupt"])
+    is_austausch = kind == "austausch"
 
-    ws.cell(2, 1).value = f"Basis: {basis_auswertungen:,} gespeicherte Auswertungen, {basis_positionen:,} Positionen (letzte 6 Monate)".replace(",", ".")
-    ws.cell(2, 1).font = Font(italic=True, color="555555")
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=13)
-
-    ws.cell(3, 1).value = "Nicht im NMG-Stamm. Hersteller wird aus dem Artikelstamm gezogen. Gesamtumsatz = Gesamtabsatz x EK (Taxe-EK falls vorhanden, sonst Durchschnitts-EK aus den Auswertungen)."
-    ws.cell(3, 1).font = Font(italic=True, color="555555")
-    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=13)
-
-    # SP30: 3 neue Spalten am Ende - Vorkommen + Erste/Letzte Sichtung.
-    # Reihenfolge der alten Spalten unveraendert, Sortierung unveraendert
-    # (Umsatz-orientiert) - laut User-Entscheidung minimal-invasiv anhaengen.
     headers = ["Rang", "PZN", "Artikelname", "DF", "PCK", "Hersteller", "Apotheken",
                "Gesamtabsatz 6M", "Ø Absatz 6M", "möglicher Gesamtumsatz",
                "Vorkommen", "Erste Sichtung", "Letzte Sichtung"]
+    widths  = [6, 12, 38, 8, 8, 18, 10, 14, 14, 20, 11, 14, 14]
+    if is_austausch:
+        headers += ["Ersatz-PZN", "Ersatz-Artikel", "Quelle"]
+        widths  += [12, 38, 22]
+    last_col = len(headers)
+    end_col_letter = get_column_letter(last_col)
+
+    ws.cell(1, 1).value = meta["title"].format(label=label)
+    ws.cell(1, 1).font = Font(bold=True, size=14, color=meta["color"])
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
+
+    ws.cell(2, 1).value = f"Basis: {basis_auswertungen:,} gespeicherte Auswertungen, {basis_positionen:,} Positionen (letzte 6 Monate)".replace(",", ".")
+    ws.cell(2, 1).font = Font(italic=True, color="555555")
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=last_col)
+
+    ws.cell(3, 1).value = meta["desc"]
+    ws.cell(3, 1).font = Font(italic=True, color="555555")
+    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=last_col)
+
     for i, h in enumerate(headers, start=1):
         c = ws.cell(5, i)
         c.value = h
         c.font = Font(bold=True, color="FFFFFF")
-        c.fill = PatternFill("solid", fgColor="0B4A86")
+        c.fill = PatternFill("solid", fgColor=meta["color"])
         c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    widths = [6, 12, 38, 8, 8, 18, 10, 14, 14, 20, 11, 14, 14]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -570,14 +738,17 @@ def _produktanalyse_fill_sheet(ws, label: str, rows, basis_auswertungen: int, ba
         ws.cell(rw, 8).value = round(_safe_num(r["gesamtabsatz_6m"]), 2)
         ws.cell(rw, 9).value = round(_safe_num(r["durchschnitt_absatz_6m"]), 2)
         ws.cell(rw, 10).value = round(_safe_num(r["moeglicher_gesamtumsatz"]), 2)
-        # SP30: Vorkommen-Kennzahlen.
         ws.cell(rw, 11).value = int(r["analyse_anzahl"] or 0)
         ws.cell(rw, 12).value = (r["erste_sichtung"] or "")[:10]
         ws.cell(rw, 13).value = (r["letzte_sichtung"] or "")[:10]
+        if is_austausch:
+            ws.cell(rw, 14).value = r["ersatz_pzn"]
+            ws.cell(rw, 15).value = r["ersatz_artikel"]
+            ws.cell(rw, 16).value = r["quelle"]
 
     ws.freeze_panes = "A6"
     if rows:
-        ws.auto_filter.ref = f"A5:M{5 + len(rows)}"
+        ws.auto_filter.ref = f"A5:{end_col_letter}{5 + len(rows)}"
 
 
 def export_produktanalyse_neu(kundentyp: str = "PK", monate: int = 6) -> Path:
@@ -628,10 +799,22 @@ def export_produktanalyse_neu(kundentyp: str = "PK", monate: int = 6) -> Path:
             sheets_to_make = [(label, label)]
 
         for sheet_name, ktyp in sheets_to_make:
+            aw, pos = _produktanalyse_basis_info(con, ktyp, monate)
+
+            # Hauptliste: neue Produktchancen
             ws = wb.create_sheet(title=sheet_name)
             rows = _produktanalyse_rows(con, ktyp, monate)
-            aw, pos = _produktanalyse_basis_info(con, ktyp, monate)
-            _produktanalyse_fill_sheet(ws, sheet_name, rows, aw, pos)
+            _produktanalyse_fill_sheet(ws, sheet_name, rows, aw, pos, kind="haupt")
+
+            # V1.1 SP6: Im NMG-Sortiment (Excel-Sheet-Name max 31 Zeichen)
+            ws_nmg = wb.create_sheet(title=f"{sheet_name} NMG-Sortiment"[:31])
+            rows_nmg = _produktanalyse_rows_nmg(con, ktyp, monate)
+            _produktanalyse_fill_sheet(ws_nmg, sheet_name, rows_nmg, aw, pos, kind="nmg")
+
+            # V1.1 SP6: Austausch vorhanden
+            ws_aus = wb.create_sheet(title=f"{sheet_name} Austausch"[:31])
+            rows_aus = _produktanalyse_rows_austausch(con, ktyp, monate)
+            _produktanalyse_fill_sheet(ws_aus, sheet_name, rows_aus, aw, pos, kind="austausch")
 
     wb.save(out)
     return out
