@@ -5,6 +5,12 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V1.1 SP17", "2026-06-19", [
+        "Manueller Import: nicht-erkannte Dateien werden uebersprungen statt pro-Datei modal abgefragt.",
+        "TXT-Sammeldatei 'nicht_erkannte_dateien_TIMESTAMP.txt' in importierte_analysen/<typ>/<Jahr>/Q<n>/ mit Liste der Dateinamen + Fehlertext.",
+        "Am Ende EINE einmalige Sammel-Frage 'Sollen die N nicht-erkannten Dateien manuell gemapped werden?' (statt Pro-Datei-Dialog).",
+        "Aufraeum: doppelte Statistik-Messagebox am Import-Ende war drin, jetzt nur noch einmal.",
+    ]),
     ("V1.1 SP16", "2026-06-19", [
         "Import-Performance fuer rohdaten-Modus (Excel ohne Standard-Header).",
         "Vorher: pro Zeile mehrere SQL-Queries mit pzn_norm()-UDF in WHERE - Full-Table-Scan ueber zigtausend Eintraege.",
