@@ -633,10 +633,24 @@ class NMGApp(tk.Tk):
             pass
 
     def _bg_create_widget(self, title: str, subtitle: str):
-        """Erzeugt eine Mini-Status-Box im rechten Header-Bereich.
-        Liefert ein dict mit den Tk-Variablen zum Update.
+        """Erzeugt eine Mini-Status-Box. Liefert dict mit Tk-Variablen.
+
+        SP19: _bg_jobs_panel kann fehlen wenn die rechte Sidebar eingeklappt
+        ist oder gerade neu aufgebaut wird (Item-end-Probleme). Vorher knallte
+        das hier mit AttributeError/TclError und der Job startete nicht -
+        der Bug war seit SP18 verantwortlich dafuer dass "Neue Auswertung"
+        scheinbar nichts mehr macht. Jetzt: lazy attach am Hauptfenster.
         """
-        box = tk.Frame(self._bg_jobs_panel, bg="#e8f1fb",
+        panel = getattr(self, "_bg_jobs_panel", None)
+        try:
+            alive = bool(panel and panel.winfo_exists())
+        except Exception:
+            alive = False
+        if not alive:
+            panel = tk.Frame(self, bg="#f5f7fb")
+            panel.place(relx=1.0, x=-18, y=18, anchor="ne")
+            self._bg_jobs_panel = panel
+        box = tk.Frame(panel, bg="#e8f1fb",
                        highlightbackground="#a8c5e8", highlightthickness=1)
         box.pack(side="top", anchor="ne", padx=0, pady=(0, 6))
 
@@ -696,13 +710,27 @@ class NMGApp(tk.Tk):
                 else:
                     result = work_fn()
             except BaseException as exc:
+                # SP19: Worker-Exception immer ins Fehler-Log schreiben.
+                # Vorher konnten Fehler in work_fn unsichtbar verschwinden.
+                try:
+                    self._log_error(title, "Background-Worker-Fehler", exc)
+                except Exception:
+                    pass
                 def _on_err():
                     self._bg_destroy_widget(ctx)
                     if on_error:
                         try:
                             on_error(exc)
-                        except Exception:
-                            pass
+                        except Exception as cb_exc:
+                            # SP19: on_error-Callback-Fehler nicht schlucken.
+                            try:
+                                self._log_error(title, "on_error-Callback-Fehler", cb_exc)
+                            except Exception:
+                                pass
+                            try:
+                                messagebox.showerror(title, f"{exc}\n\n(Folgefehler im on_error-Handler: {cb_exc})")
+                            except Exception:
+                                pass
                     else:
                         self._bg_status_toast(f"{title}: Fehler - {exc}", fg="#9b1c1c")
                 try:
@@ -716,8 +744,18 @@ class NMGApp(tk.Tk):
                 if on_done:
                     try:
                         on_done(result)
-                    except Exception:
-                        pass
+                    except Exception as cb_exc:
+                        # SP19: on_done-Callback-Fehler nicht schlucken.
+                        # Vorher: 'Auswertung erstellt' aber post_export crasht
+                        # in shutil.copy2/Vorlage -> User sieht stumm nichts.
+                        try:
+                            self._log_error(title, "on_done-Callback-Fehler", cb_exc)
+                        except Exception:
+                            pass
+                        try:
+                            messagebox.showerror(title, f"Nachverarbeitung fehlgeschlagen:\n{cb_exc}")
+                        except Exception:
+                            pass
                 else:
                     self._bg_status_toast(f"{title}: fertig")
             try:
@@ -3844,9 +3882,23 @@ LIMIT 500
         im UI-Thread aufgerufen. Bei UnknownInputFormatError kommt der Format-
         Assistent-Dialog (interaktiv im UI-Thread).
         """
+        # SP19: Doppelklick-Schutz. Verhindert dass der "Auswertung starten"-Button
+        # waehrend einer laufenden Auswertung wieder feuert (Log zeigte 90 Aufrufe
+        # in einer Sekunde -> stille Mehrfachstarts mit DB-Locks/Konflikten).
+        if getattr(self, "_auswertung_running", False):
+            try:
+                messagebox.showinfo(
+                    "Auswertung läuft",
+                    "Es läuft bereits eine Auswertung. Bitte warten, bis sie fertig ist."
+                )
+            except Exception:
+                pass
+            return
+        self._auswertung_running = True
         self._log_action("neue_auswertung", "Auswertungserstellung gestartet", f"Datei: {file} | Analyse: {analyse_name}")
 
         def post_export(out_raw):
+            self._auswertung_running = False
             out = Path(out_raw)
             try:
                 if kundentyp is not None:
@@ -3878,6 +3930,7 @@ LIMIT 500
                     pass
 
         def on_export_error(exc):
+            self._auswertung_running = False
             # UnknownInputFormatError -> interaktiver Format-Assistent.
             if isinstance(exc, UnknownInputFormatError):
                 self.status.set(str(exc))
