@@ -1199,6 +1199,7 @@ class NMGApp(tk.Tk):
             "apps": self.show_apps_page,
             "kunden_center": self.show_kunden_center,
             "vergleichssuche": self.open_vergleichssuche_window,
+            "globale_suche": self.open_globale_suche_window,
             "mitarbeiter_center": self.show_mitarbeiter_center,
             "todo_center": self.show_todo_center,
             "bestell_center": self.show_bestell_center,
@@ -3701,6 +3702,7 @@ class NMGApp(tk.Tk):
             ("datenupdates",     "🗄", "Daten aktualisieren",  "Stammdaten und Importe pflegen.",           self.show_daten_aktualisieren_page,          "#555"),
             ("roadmap",          "📌", "Roadmap",              "Offene und erledigte Punkte.",              self.show_roadmap_page,                      "#6b4fb3"),
             ("vergleichssuche",  "🔍", "Vergleichs-Suche",     "PZN/Artikelname schnell finden.",           self.open_vergleichssuche_window,            "#0b6e6e"),
+            ("globale_suche",    "🔍", "Globale Suche",        "Kunde, Analyse oder Artikel finden.",       self.open_globale_suche_window,              "#0b4a86"),
         ]
 
     def _dashboard_all_info_widgets(self):
@@ -4255,10 +4257,14 @@ class NMGApp(tk.Tk):
             self._vergleichssuche_pre_query = payload.get("query", "")
             self.open_vergleichssuche_window()
 
-    def _global_suche_widget(self, parent):
-        """V1.1 SP7: Globales Such-Widget oben auf der Startseite.
+    def _global_suche_widget(self, parent, *, initial_limit: int = 3,
+                              tree_height: int = 6):
+        """V1.1 SP7 / SP9: Globales Such-Widget.
         Sucht parallel in Kunden, gespeicherten Analysen und Artikeln.
         Doppelklick oder Button 'Anzeigen' springt zum passenden Bereich.
+
+        V1.1 SP9: zeigt nur die ersten `initial_limit` Treffer; bei mehr
+        Treffern erscheint ein 'Mehr anzeigen'-Button am unteren Rand.
         """
         box = tk.Frame(parent, bg="#e8f1fb", highlightbackground="#a8c5e8", highlightthickness=1)
         box.pack(fill="x", padx=18, pady=(10, 0))
@@ -4282,11 +4288,12 @@ class NMGApp(tk.Tk):
 
         # Treeview fuer Treffer.
         tree_frame = tk.Frame(box, bg="#e8f1fb")
-        tree_frame.pack(fill="x", padx=10, pady=(0, 8))
+        tree_frame.pack(fill="x", padx=10, pady=(0, 4))
         cols = ("typ", "label", "detail")
         heads = {"typ": "Typ", "label": "Bezeichnung", "detail": "Details"}
         widths = {"typ": 90, "label": 360, "detail": 260}
-        tree = ttk.Treeview(tree_frame, columns=cols, show="headings", selectmode="browse", height=6)
+        tree = ttk.Treeview(tree_frame, columns=cols, show="headings",
+                            selectmode="browse", height=tree_height)
         for c in cols:
             tree.heading(c, text=heads[c])
             tree.column(c, width=widths[c], anchor="w", stretch=(c == "label"))
@@ -4295,20 +4302,56 @@ class NMGApp(tk.Tk):
         sb.pack(side="right", fill="y")
         tree.configure(yscrollcommand=sb.set)
 
+        # V1.1 SP9: 'Mehr anzeigen'-Button-Zeile, default versteckt.
+        more_row = tk.Frame(box, bg="#e8f1fb")
+        more_btn = tk.Button(more_row, text="Mehr anzeigen",
+                             bg="#0b4a86", fg="white", relief="flat",
+                             font=("Arial", 10, "bold"), padx=12, pady=4)
+        more_btn.pack()
+
         row_map: dict[str, dict] = {}
         pending = {"id": None}
         seq = {"current": 0}
+        all_results: list[dict] = []
+        state = {"shown": initial_limit}
 
-        def render(rows: list[dict]):
+        def _render_subset(subset: list[dict]):
             for iid in tree.get_children():
                 tree.delete(iid)
             row_map.clear()
-            for entry in rows:
+            for entry in subset:
                 iid = tree.insert("", "end", values=(
                     entry["typlabel"], entry["label"], entry["detail"],
                 ))
                 row_map[iid] = entry
-            status_lbl.configure(text=f"{len(rows)} Treffer" if rows else "")
+
+        def _update_status_and_button():
+            total = len(all_results)
+            shown = min(state["shown"], total)
+            if total == 0:
+                status_lbl.configure(text="" if not query_var.get().strip() else "0 Treffer")
+                more_row.pack_forget()
+                return
+            if shown < total:
+                status_lbl.configure(text=f"{shown} von {total} Treffern")
+                more_btn.configure(text=f"Mehr anzeigen ({total - shown})")
+                more_row.pack(fill="x", padx=10, pady=(0, 6))
+            else:
+                status_lbl.configure(text=f"{total} Treffer")
+                more_row.pack_forget()
+
+        def render(rows: list[dict]):
+            nonlocal all_results
+            all_results = list(rows)
+            state["shown"] = initial_limit
+            _render_subset(all_results[:state["shown"]])
+            _update_status_and_button()
+
+        def show_more():
+            state["shown"] = len(all_results)
+            _render_subset(all_results)
+            _update_status_and_button()
+        more_btn.configure(command=show_more)
 
         def do_search():
             pending["id"] = None
@@ -4372,6 +4415,64 @@ class NMGApp(tk.Tk):
             render([])
             entry.focus_set()
         tk.Button(entry_row, text="Leeren", command=_clear, padx=10, pady=4).pack(side="left")
+
+        return {"entry": entry, "query_var": query_var, "do_search": do_search}
+
+    def open_globale_suche_window(self):
+        """V1.1 SP9: Globale Suche als eigenes Toplevel-Fenster.
+        Singleton: zweiter Aufruf bringt das vorhandene Fenster nach vorn.
+        """
+        existing = getattr(self, "_globale_suche_window", None)
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    existing.deiconify()
+                    existing.lift()
+                    existing.focus_force()
+                    return
+            except Exception:
+                pass
+
+        win = tk.Toplevel(self)
+        win.title("NMGone — Globale Suche")
+        win.geometry("950x520")
+        win.minsize(680, 380)
+        win.configure(bg="#ffffff")
+        self._globale_suche_window = win
+
+        def on_close():
+            self._globale_suche_window = None
+            win.destroy()
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
+        header = tk.Frame(win, bg="#ffffff")
+        header.pack(fill="x", padx=14, pady=(12, 4))
+        tk.Label(header, text="Globale Suche",
+                 font=("Arial", 15, "bold"), fg="#0b4a86", bg="#ffffff").pack(anchor="w")
+        tk.Label(header,
+                 text=("Sucht parallel in Kunden, gespeicherten Analysen und Artikeln. "
+                       "Doppelklick auf einen Treffer oeffnet die passende Seite."),
+                 font=("Arial", 9), fg="#666", bg="#ffffff").pack(anchor="w", pady=(2, 6))
+
+        body = tk.Frame(win, bg="#ffffff")
+        body.pack(fill="both", expand=True, padx=4, pady=(0, 14))
+
+        # Widget mit groesserer Treeview (10 Zeilen statt 6).
+        ctx = self._global_suche_widget(body, initial_limit=3, tree_height=12)
+
+        # V1.1 SP9: Pre-Search-Mechanismus analog Vergleichs-Suche.
+        pre = getattr(self, "_globale_suche_pre_query", "") or ""
+        if pre:
+            ctx["query_var"].set(pre)
+            self._globale_suche_pre_query = ""
+            win.after(50, ctx["do_search"])
+
+        win.lift()
+        win.focus_force()
+        try:
+            ctx["entry"].focus_set()
+        except Exception:
+            pass
 
     def show_startseite(self):
         self.clear_page()
@@ -5744,10 +5845,15 @@ class NMGApp(tk.Tk):
             ("\u2705", "ToDo", "Aufgaben, offene Punkte und Notizen.", self.show_todo_center, "#11823b"),
             ("\U0001f6d2", "Bestellungen", "Bestellhistorie und Auswertungen.", self.show_bestell_center, "#8b5a00"),
             ("\U0001f50d", _T("Vergleichs-Suche"), _T("PZN oder Artikelname schnell in allen Wissens-Tabellen finden."), self.open_vergleichssuche_window, "#0b6e6e"),
+            # V1.1 SP9: Globale Suche als App-Kachel.
+            ("\U0001f50d", "Globale Suche", "Kunden, Analysen und Artikel uebergreifend finden.", self.open_globale_suche_window, "#0b4a86"),
         ]
+        # V1.1 SP9: bei mehr als 4 Tiles in Mehrzeilen-Grid umbrechen.
+        cols_per_row = 4
         for idx, (icon, title, desc, cmd, color) in enumerate(app_tiles):
+            r, c = divmod(idx, cols_per_row)
             f = tk.Frame(body, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1)
-            f.grid(row=0, column=idx, sticky="nsew", padx=10, pady=10, ipadx=4, ipady=4)
+            f.grid(row=r, column=c, sticky="nsew", padx=10, pady=10, ipadx=4, ipady=4)
             tk.Label(f, text=icon, font=("Arial", 36), bg="#f8fbff", fg=color).pack(pady=(20, 6))
             tk.Label(f, text=title, font=("Arial", 14, "bold"), bg="#f8fbff", fg="#123").pack()
             tk.Label(f, text=desc, justify="center", bg="#f8fbff", fg="#555", font=("Arial", 10)).pack(padx=14, pady=8)
