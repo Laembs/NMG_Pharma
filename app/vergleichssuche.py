@@ -51,38 +51,43 @@ def _is_pzn_input(query: str) -> bool:
     return non_digit == 0
 
 
-# V1.1 SP4: Filter-Tags in der Sucheingabe.
-_KNOWN_FILTERS = {"nmg", "austausch", "schulbank", "wirkstoff", "herst"}
+# V1.1 SP4/SP5: Filter-Tags in der Sucheingabe.
+# System-Filter sind reservierte Wörter. Alle anderen #-Tags werden als
+# Hersteller-Filter mit Wert interpretiert (z.B. '#hexal' = Hersteller
+# enthaelt 'hexal').
+_SYSTEM_FILTERS = {"nmg", "austausch", "schulbank", "wirkstoff"}
 
 
-def _parse_query(raw: str) -> tuple[str, set[str]]:
-    """Trennt die User-Eingabe in Suchbegriff und Filter-Set.
+def _parse_query(raw: str) -> tuple[str, set[str], list[str]]:
+    """Trennt die User-Eingabe in Suchbegriff, System-Filter und
+    Hersteller-Filter.
 
-    Tokens, die mit '#' beginnen und einen bekannten Filter-Namen tragen,
-    werden in das Filter-Set aufgenommen. Alles andere bleibt Suchbegriff.
+    System-Filter: #nmg, #austausch, #schulbank, #wirkstoff.
+    Alles andere #xyz wird als Hersteller-Filter mit Wert 'xyz' behandelt.
 
     Beispiele:
-        'gliv #nmg'          -> ('gliv', {'nmg'})
-        '#schulbank ramipril' -> ('ramipril', {'schulbank'})
-        'noris #nmg #herst'  -> ('noris', {'nmg', 'herst'})
-        '#unbekannt foo'     -> ('foo', set())     # unbekannte Tags ignoriert
-        'gliv'               -> ('gliv', set())
+        'gliv #nmg'           -> ('gliv', {'nmg'}, [])
+        'gliv #hexal'         -> ('gliv', set(), ['hexal'])
+        'gliv #nmg #hexal'    -> ('gliv', {'nmg'}, ['hexal'])
+        '#ratio gliv'         -> ('gliv', set(), ['ratio'])
+        'gliv'                -> ('gliv', set(), [])
     """
     tokens = (raw or "").split()
-    filters: set[str] = set()
+    system: set[str] = set()
+    hersteller: list[str] = []
     rest: list[str] = []
     for tok in tokens:
         if tok.startswith("#") and len(tok) > 1:
             name = tok[1:].lower()
-            if name in _KNOWN_FILTERS:
-                filters.add(name)
+            if not name:
                 continue
-            # Unbekannte #-Tags werden verworfen, damit der User merkt,
-            # dass sie keinen Effekt haben. Sonst landen sie versehentlich
-            # als Such-LIKE in den Wissens-Tabellen und liefern Null-Treffer.
+            if name in _SYSTEM_FILTERS:
+                system.add(name)
+            else:
+                hersteller.append(name)
             continue
         rest.append(tok)
-    return " ".join(rest).strip(), filters
+    return " ".join(rest).strip(), system, hersteller
 
 
 def search_unified(query: str, limit: int = 200) -> list[dict]:
@@ -91,30 +96,40 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
         ist_nmg, hat_austausch, hat_schulbank, via (Set: 'name', 'herst',
         'wirkstoff').
 
-    V1.1 SP4: Filter-Syntax mit '#'. Beispiele:
+    V1.1 SP4/SP5: Filter-Syntax mit '#'. Beispiele:
         'gliv #nmg'               -> nur NMG-Stamm-Treffer fuer 'gliv'
-        'noris #nmg #austausch'   -> NMG-Stamm UND Austausch-Eintrag
-        '#schulbank #wirkstoff'   -> nur Schulbank + Wirkstoff-Match
-    UND-Logik. Unbekannte #-Tags werden verworfen.
+        'gliv #hexal'             -> nur Treffer, deren Hersteller 'hexal'
+                                     enthaelt
+        'gliv #nmg #hexal'        -> NMG-Stamm UND Hersteller hexal
+        '#ratio glivec'           -> Hersteller ratio fuer Glivec
+    System-Filter: #nmg, #austausch, #schulbank, #wirkstoff.
+    Alle anderen #-Tags = Hersteller-Filter mit Wert.
+    UND-Logik bei mehreren Filtern.
     """
     raw = (query or "").strip()
     if not raw:
         return []
-    search_q, filters = _parse_query(raw)
-    if len(search_q) < 3 and not filters:
-        return []
-    if len(search_q) < 3 and filters:
-        # Nur Filter ohne Suchbegriff -> kein Match-Driver, leeres Ergebnis.
+    search_q, filters, herst_filters = _parse_query(raw)
+    if len(search_q) < 3:
+        # Nur Filter ohne 3+ Zeichen Suchbegriff -> kein Match-Driver,
+        # leeres Ergebnis.
         return []
 
     results: dict[str, dict] = {}
+
+    # V1.1 SP5: Wenn Filter aktiv sind, wuerde das pro-Query-LIMIT von
+    # `limit` Treffer nach Post-Hoc-Filter haeufig leeres Resultat liefern,
+    # weil die ersten N Treffer den Filter zufaellig nicht passieren. Wir
+    # holen daher pro Query ein groesseres Sample und filtern danach.
+    # internes Limit = 10x oder 2000, was groesser ist.
+    has_filter = bool(filters) or bool(herst_filters)
+    sql_limit = max(limit * 10, 2000) if has_filter else limit
 
     with _connect() as con:
         is_pzn = _is_pzn_input(search_q)
         pzn_digits = "".join(ch for ch in search_q if ch.isdigit())
         pzn_like = f"%{pzn_digits}%"
         name_like = f"%{search_q.lower()}%"
-        name_lower = search_q.lower()
 
         def add(pzn_raw, artikel=None, df=None, pck=None, herst=None,
                 wirkstoff=None, staerke=None, *, source="", via=None):
@@ -165,7 +180,7 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                     WHERE status = 'aktiv'
                       AND (pzn_alt LIKE ? OR pzn_nmg LIKE ?)
                     LIMIT ?
-                """, (pzn_like, pzn_like, limit)).fetchall()
+                """, (pzn_like, pzn_like, sql_limit)).fetchall()
             else:
                 rows = con.execute("""
                     SELECT pzn_alt, artikel_alt, pzn_nmg, artikel_nmg, quelle
@@ -175,7 +190,7 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                            OR LOWER(COALESCE(artikel_nmg,'')) LIKE ?
                            OR LOWER(COALESCE(freitext_austausch,'')) LIKE ?)
                     LIMIT ?
-                """, (name_like, name_like, name_like, limit)).fetchall()
+                """, (name_like, name_like, name_like, sql_limit)).fetchall()
             for r in rows:
                 src = "schulbank" if (r["quelle"] or "").strip().lower() == "schulbank" else "austausch"
                 if r["pzn_alt"]:
@@ -190,24 +205,24 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
             if is_pzn:
                 rows = con.execute(
                     "SELECT pzn, artikelname, herstellerkuerzel FROM tbl_nmg_stamm WHERE pzn LIKE ? LIMIT ?",
-                    (pzn_like, limit),
+                    (pzn_like, sql_limit),
                 ).fetchall()
             else:
                 rows = con.execute(
                     "SELECT pzn, artikelname, herstellerkuerzel FROM tbl_nmg_stamm WHERE LOWER(COALESCE(artikelname,'')) LIKE ? LIMIT ?",
-                    (name_like, limit),
+                    (name_like, sql_limit),
                 ).fetchall()
             for r in rows:
                 add(r["pzn"], artikel=r["artikelname"], herst=r["herstellerkuerzel"], source="nmg")
         except sqlite3.OperationalError:
             pass
 
-        # --- 3. tbl_artikelstamm (mit Match-Source-Tracking V1.1 SP4) ---
+        # --- 3. tbl_artikelstamm (mit Hersteller-Match V1.1 SP2) ---
         try:
             if is_pzn:
                 rows = con.execute(
                     "SELECT pzn, artikel, df, pck, herst FROM tbl_artikelstamm WHERE pzn LIKE ? LIMIT ?",
-                    (pzn_like, limit),
+                    (pzn_like, sql_limit),
                 ).fetchall()
             else:
                 rows = con.execute(
@@ -215,27 +230,19 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                        WHERE LOWER(COALESCE(artikel,'')) LIKE ?
                           OR LOWER(COALESCE(herst,'')) LIKE ?
                        LIMIT ?""",
-                    (name_like, name_like, limit),
+                    (name_like, name_like, sql_limit),
                 ).fetchall()
             for r in rows:
-                # Tracking: welches Feld hat den Match getrieben? (#herst-Filter)
-                via_set = []
-                if not is_pzn:
-                    if name_lower in (r["artikel"] or "").lower():
-                        via_set.append("name")
-                    if name_lower in (r["herst"] or "").lower():
-                        via_set.append("herst")
-                for v in via_set or [None]:
-                    add(r["pzn"], artikel=r["artikel"], df=r["df"], pck=r["pck"], herst=r["herst"], via=v)
+                add(r["pzn"], artikel=r["artikel"], df=r["df"], pck=r["pck"], herst=r["herst"])
         except sqlite3.OperationalError:
             pass
 
-        # --- 4. tbl_pzn_basisdaten (mit Match-Source-Tracking V1.1 SP4) ---
+        # --- 4. tbl_pzn_basisdaten (mit Hersteller-Match V1.1 SP2) ---
         try:
             if is_pzn:
                 rows = con.execute(
                     "SELECT pzn, artikelname, herstellerkuerzel, df, pck FROM tbl_pzn_basisdaten WHERE pzn LIKE ? LIMIT ?",
-                    (pzn_like, limit),
+                    (pzn_like, sql_limit),
                 ).fetchall()
             else:
                 rows = con.execute(
@@ -243,18 +250,11 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                        WHERE LOWER(COALESCE(artikelname,'')) LIKE ?
                           OR LOWER(COALESCE(herstellerkuerzel,'')) LIKE ?
                        LIMIT ?""",
-                    (name_like, name_like, limit),
+                    (name_like, name_like, sql_limit),
                 ).fetchall()
             for r in rows:
-                via_set = []
-                if not is_pzn:
-                    if name_lower in (r["artikelname"] or "").lower():
-                        via_set.append("name")
-                    if name_lower in (r["herstellerkuerzel"] or "").lower():
-                        via_set.append("herst")
-                for v in via_set or [None]:
-                    add(r["pzn"], artikel=r["artikelname"], df=r["df"], pck=r["pck"],
-                        herst=r["herstellerkuerzel"], via=v)
+                add(r["pzn"], artikel=r["artikelname"], df=r["df"], pck=r["pck"],
+                    herst=r["herstellerkuerzel"])
         except sqlite3.OperationalError:
             pass
 
@@ -268,7 +268,7 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                        WHERE LOWER(COALESCE(wirkstoff,'')) LIKE ?
                           OR LOWER(COALESCE(staerke,'')) LIKE ?
                        LIMIT ?""",
-                    (name_like, name_like, limit),
+                    (name_like, name_like, sql_limit),
                 ).fetchall()
                 for r in rows:
                     add(r["pzn"], wirkstoff=r["wirkstoff"], staerke=r["staerke"], via="wirkstoff")
@@ -337,10 +337,10 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
             except sqlite3.OperationalError:
                 pass
 
-    # V1.1 SP4: Post-Hoc-Filter mit UND-Logik anwenden.
+    # V1.1 SP4/SP5: Post-Hoc-Filter mit UND-Logik anwenden.
     # via-Set wird vor der Rueckgabe entfernt (intern, fuer GUI nicht relevant).
     out = list(results.values())
-    if filters:
+    if filters or herst_filters:
         def keep(r) -> bool:
             if "nmg" in filters and not r["ist_nmg"]:
                 return False
@@ -350,8 +350,14 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                 return False
             if "wirkstoff" in filters and "wirkstoff" not in r["via"]:
                 return False
-            if "herst" in filters and "herst" not in r["via"]:
-                return False
+            # SP5: Hersteller-Filter. Jeder Teilstring muss im herst-Feld
+            # vorkommen (case-insensitive). UND-Logik: bei mehreren
+            # Hersteller-Filtern muss jeder einzeln matchen - das wird
+            # meist 0 Treffer geben, aber so ist die Semantik konsistent.
+            if herst_filters:
+                herst_lower = (r.get("herst") or "").lower()
+                if not all(h in herst_lower for h in herst_filters):
+                    return False
             return True
         out = [r for r in out if keep(r)]
     for r in out:
