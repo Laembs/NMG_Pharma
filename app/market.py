@@ -482,9 +482,11 @@ def _produktanalyse_rows(con: sqlite3.Connection, kundentyp: str, monate: int = 
             g.erste_sichtung,
             g.letzte_sichtung
         FROM gruppiert g
-        LEFT JOIN tbl_artikelstamm ast ON ast.pzn = g.pzn
+        JOIN tbl_artikelstamm ast ON ast.pzn = g.pzn
         LEFT JOIN tbl_nmg_stamm nmg ON nmg.pzn = g.pzn
         WHERE nmg.pzn IS NULL
+          -- V1.1 SP10: nur Artikel mit Namen im Artikelstamm
+          AND COALESCE(ast.artikel, '') <> ''
           AND NOT EXISTS (
               SELECT 1 FROM tbl_austauschartikel aa
               WHERE aa.original_pzn = g.pzn
@@ -543,6 +545,8 @@ def _produktanalyse_rows_nmg(con: sqlite3.Connection, kundentyp: str, monate: in
         FROM gruppiert g
         JOIN tbl_nmg_stamm nmg ON nmg.pzn = g.pzn
         LEFT JOIN tbl_artikelstamm ast ON ast.pzn = g.pzn
+        -- V1.1 SP10: nur Treffer mit Artikelnamen (NMG-Stamm oder Artikelstamm)
+        WHERE COALESCE(nmg.artikelname, ast.artikel, '') <> ''
         ORDER BY moeglicher_gesamtumsatz DESC, g.gesamtabsatz_6m DESC
     """
     con.row_factory = sqlite3.Row
@@ -618,11 +622,13 @@ def _produktanalyse_rows_austausch(con: sqlite3.Connection, kundentyp: str, mona
                 ELSE ''
             END AS quelle
         FROM gruppiert g
-        LEFT JOIN tbl_artikelstamm ast ON ast.pzn = g.pzn
+        JOIN tbl_artikelstamm ast ON ast.pzn = g.pzn
         LEFT JOIN ad_best ad ON ad.pzn_alt = g.pzn
         LEFT JOIN aa_best aa ON aa.original_pzn = g.pzn
         WHERE NOT EXISTS (SELECT 1 FROM tbl_nmg_stamm nmg WHERE nmg.pzn = g.pzn)
           AND (ad.pzn_alt IS NOT NULL OR aa.original_pzn IS NOT NULL)
+          -- V1.1 SP10: nur Artikel mit Namen im Artikelstamm
+          AND COALESCE(ast.artikel, '') <> ''
         ORDER BY moeglicher_gesamtumsatz DESC, g.gesamtabsatz_6m DESC
     """
     con.row_factory = sqlite3.Row

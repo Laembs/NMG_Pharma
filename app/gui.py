@@ -9,6 +9,30 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from pathlib import Path
 from datetime import datetime
+
+# V1.1 SP10: tkcalendar fuer Datum-Picker. Optional - falls nicht vorhanden,
+# faellt der Code auf tk.Entry mit YYYY-MM-DD-Format zurueck.
+try:
+    from tkcalendar import DateEntry as _TkCalDateEntry
+    _HAS_TKCAL = True
+except Exception:
+    _TkCalDateEntry = None
+    _HAS_TKCAL = False
+
+
+def _make_date_entry(parent, textvariable, width: int = 12, **kwargs):
+    """V1.1 SP10: Liefert ein DateEntry-Widget (tkcalendar) oder ein
+    klassisches tk.Entry mit Datums-Hint, je nach Verfuegbarkeit.
+    Beide schreiben den Wert als 'YYYY-MM-DD' in die textvariable.
+    """
+    if _HAS_TKCAL:
+        return _TkCalDateEntry(
+            parent, textvariable=textvariable, date_pattern="yyyy-mm-dd",
+            width=width, background="#0b4a86", foreground="white",
+            borderwidth=1, headersbackground="#0b4a86",
+            headersforeground="white", **kwargs,
+        )
+    return tk.Entry(parent, textvariable=textvariable, width=width, **kwargs)
 from copy import copy as copy_cell_style
 from openpyxl import load_workbook, Workbook
 from openpyxl.utils import get_column_letter
@@ -1714,14 +1738,20 @@ class NMGApp(tk.Tk):
         tk.Label(search_bar, text="Datum von:", bg="#ffffff", fg="#0b4a86",
                  font=("Arial", 9)).pack(side="left")
         _sa_von_var = tk.StringVar()
-        tk.Entry(search_bar, textvariable=_sa_von_var, width=11).pack(side="left", padx=(4, 4))
+        _make_date_entry(search_bar, _sa_von_var, width=11).pack(side="left", padx=(4, 4))
 
         tk.Label(search_bar, text="bis:", bg="#ffffff", fg="#0b4a86",
                  font=("Arial", 9)).pack(side="left")
         _sa_bis_var = tk.StringVar()
-        tk.Entry(search_bar, textvariable=_sa_bis_var, width=11).pack(side="left", padx=(4, 4))
+        _make_date_entry(search_bar, _sa_bis_var, width=11).pack(side="left", padx=(4, 4))
 
-        tk.Label(search_bar, text="(YYYY-MM-DD)  ·  Doppelklick = Kunden zuordnen",
+        # V1.1 SP10: Datum-Felder leer lassen wenn der Picker direkt das
+        # heutige Datum schreibt - sonst greift der Filter sofort und schluckt
+        # alle Treffer.
+        _sa_von_var.set("")
+        _sa_bis_var.set("")
+
+        tk.Label(search_bar, text="Doppelklick = Kunden zuordnen",
                  bg="#ffffff", fg="#888", font=("Arial", 9)).pack(side="left", padx=8)
 
         filter_bar = tk.Frame(body, bg="#ffffff")
@@ -1730,9 +1760,23 @@ class NMGApp(tk.Tk):
         tk.Label(filter_bar, text="Anzeigen:", bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).pack(side="left", padx=(0, 6))
         def set_filter_mode(value):
             filter_mode.set(value)
-            _sa_reload(_sa_search_var.get().strip())
-        for label, value in (("Alle", "ALLE"), ("PK", "NMG"), ("ZF", "ZF"), ("Neue Auswertungen", "NEU"), ("mit Datei", "DATEI")):
-            tk.Button(filter_bar, text=label, command=lambda v=value: set_filter_mode(v), padx=10, pady=4).pack(side="left", padx=(0, 5))
+            _sa_reload()
+        # V1.1 SP10: 'IMPORT' = via bemerkung 'historischer Analyseimport%',
+        # 'PROGRAMM' = der Rest (create_linden_export), 'PA' = Produktanalyse-
+        # Excels aus OUTPUT_DIR (Spezialmodus, scannt Dateisystem).
+        for label, value in (
+            ("Alle", "ALLE"),
+            ("PK", "NMG"),
+            ("ZF", "ZF"),
+            ("Importiert", "IMPORT"),
+            ("Programm", "PROGRAMM"),
+            ("Produktanalyse", "PA"),
+            ("Neue Ausw.", "NEU"),
+            ("mit Datei", "DATEI"),
+        ):
+            tk.Button(filter_bar, text=label,
+                      command=lambda v=value: set_filter_mode(v),
+                      padx=10, pady=4).pack(side="left", padx=(0, 5))
 
         # Treeview mit Kundenspalten
         _sa_cols = ("id", "datum", "typ", "apotheke", "kundennummer", "kundenname", "positionen", "treffer")
@@ -1768,9 +1812,13 @@ class NMGApp(tk.Tk):
         try:
             with sqlite3.connect(DB_PATH) as con:
                 con.row_factory = sqlite3.Row
-                rows = con.execute("""\nSELECT id, datum, apotheke, quelldatei, ausgabedatei, anzahl_positionen,
-                           nmg_treffer, nicht_nmg, COALESCE(datenquelle,'NMG') AS datenquelle\nFROM tbl_auswertungen
-                    ORDER BY datetime(datum) DESC, id DESC\nLIMIT 500
+                rows = con.execute("""
+SELECT id, datum, apotheke, quelldatei, ausgabedatei, anzahl_positionen,
+       nmg_treffer, nicht_nmg, COALESCE(datenquelle,'NMG') AS datenquelle,
+       COALESCE(bemerkung,'') AS bemerkung
+FROM tbl_auswertungen
+ORDER BY datetime(datum) DESC, id DESC
+LIMIT 500
                 """).fetchall()
         except Exception as exc:
             messagebox.showerror("Gespeicherte Analysen", f"Datenbank konnte nicht gelesen werden:\n{exc}")
@@ -1796,6 +1844,11 @@ class NMGApp(tk.Tk):
             f_bis = _sa_bis_var.get().strip()
             for item in listbox.get_children(): listbox.delete(item)
             _sa_row_map.clear()
+            mode = filter_mode.get()
+            # V1.1 SP10: Produktanalyse-Modus scannt OUTPUT_DIR statt der DB.
+            if mode == "PA":
+                _sa_show_produktanalyse_files(ft, f_apo, f_von, f_bis)
+                return
             for row in rows:
                 dq = "PK" if row["datenquelle"] == "NMG" else row["datenquelle"]
                 apo = str(row["apotheke"] or "")
@@ -1803,12 +1856,19 @@ class NMGApp(tk.Tk):
                 kname = str(row["kundenname"] if "kundenname" in row.keys() else "")
                 vals = (row["id"], str(row["datum"] or "")[:16], dq, apo, knr, kname,
                         row["anzahl_positionen"] or 0, row["nmg_treffer"] or 0)
-                mode = filter_mode.get()
                 if mode in ("NMG", "ZF") and str(row["datenquelle"] or "NMG") != mode:
                     continue
                 if mode == "DATEI" and not find_output_file(row):
                     continue
                 if mode == "NEU" and apo.lower().startswith(("manuell", "zf import", "zf daten")):
+                    continue
+                # V1.1 SP10: 'IMPORT' = historischer Analyseimport,
+                # 'PROGRAMM' = alles andere (create_linden_export etc.).
+                bem = str(row["bemerkung"] if "bemerkung" in row.keys() else "")
+                is_import = bem.lower().startswith("historischer analyseimport")
+                if mode == "IMPORT" and not is_import:
+                    continue
+                if mode == "PROGRAMM" and is_import:
                     continue
                 # V1.1 SP8: feingranulare Felder (UND-Logik)
                 if f_apo and f_apo not in apo.lower(): continue
@@ -1824,6 +1884,40 @@ class NMGApp(tk.Tk):
                     if ft not in combined: continue
                 iid = listbox.insert("", "end", values=vals)
                 _sa_row_map[iid] = dict(row)
+
+        def _sa_show_produktanalyse_files(ft, f_apo, f_von, f_bis):
+            """V1.1 SP10: Listet Produktanalyse-Excels aus OUTPUT_DIR.
+            Doppelklick / 'Auswertung oeffnen' oeffnet die Excel direkt.
+            """
+            try:
+                from .config import OUTPUT_DIR as _OUT
+                pa_files = sorted(
+                    _OUT.glob("Produktanalyse_*.xlsx"),
+                    key=lambda p: p.stat().st_mtime, reverse=True,
+                )
+            except Exception:
+                pa_files = []
+            for p in pa_files:
+                mtime = datetime.fromtimestamp(p.stat().st_mtime)
+                datum_iso = mtime.strftime("%Y-%m-%d")
+                datum_disp = mtime.strftime("%Y-%m-%d %H:%M")
+                name = p.stem
+                vals = (0, datum_disp, "PA", name, "", "", 0, 0)
+                if f_apo and f_apo not in name.lower(): continue
+                if f_von and datum_iso < f_von: continue
+                if f_bis and datum_iso > f_bis: continue
+                if ft:
+                    combined = " ".join(str(v) for v in vals).lower()
+                    if ft not in combined: continue
+                iid = listbox.insert("", "end", values=vals)
+                # Pseudo-Row mit ausgabedatei fuer "Auswertung oeffnen".
+                _sa_row_map[iid] = {
+                    "id": 0, "datum": datum_disp, "apotheke": name,
+                    "ausgabedatei": str(p), "datenquelle": "PA",
+                    "anzahl_positionen": 0, "nmg_treffer": 0,
+                    "kundennummer": "", "kundenname": "", "bemerkung": "Produktanalyse-Datei",
+                    "_ist_pa_datei": True,
+                }
         _sa_reload()
         for _v in (_sa_search_var, _sa_apo_var, _sa_knr_var, _sa_kname_var, _sa_von_var, _sa_bis_var):
             _v.trace_add("write", _sa_reload)
@@ -1962,6 +2056,11 @@ class NMGApp(tk.Tk):
                   command=self._archivieren_zeitraum_dialog,
                   bg="#0b6e6e", fg="white", relief="flat",
                   font=("Arial", 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(14, 5))
+        # V1.1 SP10: Zeitraum-Loeschen
+        tk.Button(side, text="🗑  Zeitraum LOESCHEN",
+                  command=self._loeschen_zeitraum_dialog,
+                  bg="#9b1c1c", fg="white", relief="flat",
+                  font=("Arial", 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(0, 5))
         tk.Button(side, text="🗂  Archive verwalten",
                   command=self._archive_verwalten_dialog,
                   bg="#3867b7", fg="white", relief="flat",
@@ -8722,6 +8821,138 @@ class NMGApp(tk.Tk):
         self.show_datenbankuebersicht_page()
 
     # V1.1 SP8: Zeitraum-Archivierung + Archiv-Verwaltung ─────────────────────
+    def _loeschen_zeitraum_dialog(self):
+        """V1.1 SP10: Endgueltig loeschen aller Auswertungen im Zeitraum.
+        Im Unterschied zu _archivieren_zeitraum_dialog: kein ZIP-Backup, die
+        Daten sind nach LOESCHEN-Confirm + Admin-Passwort unwiderruflich weg.
+        """
+        from .archiv_db import _normalize_zeitraum, zaehle_zeitraum  # lokaler Import vermeidet Modul-Zyklus
+
+        win = tk.Toplevel(self)
+        win.title("Auswertungen im Zeitraum LOESCHEN")
+        win.geometry("520x380")
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+        win.columnconfigure(0, weight=1)
+
+        tk.Label(win, text="Auswertungen im Zeitraum endgueltig loeschen",
+                 font=("Arial", 14, "bold"), fg="#9b1c1c", bg="#f5f7fb").pack(
+            anchor="w", padx=20, pady=(18, 4))
+        tk.Label(win,
+                 text=("Alle Auswertungen im Datumsbereich werden aus der Datenbank "
+                       "GELOESCHT. Kein ZIP-Backup, keine Wiederherstellung. "
+                       "Vorher wird automatisch ein voller DB-Backup erstellt "
+                       "(ueber backup_erstellen)."),
+                 bg="#f5f7fb", fg="#9b1c1c", wraplength=480, justify="left").pack(
+            anchor="w", padx=20, pady=(0, 14))
+
+        form = tk.Frame(win, bg="#f5f7fb")
+        form.pack(padx=20, pady=(0, 10), anchor="w")
+        tk.Label(form, text="Datum von:",
+                 bg="#f5f7fb", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky="w", pady=4)
+        von_var = tk.StringVar()
+        _make_date_entry(form, von_var, width=14, font=("Arial", 11)).grid(row=0, column=1, padx=(8, 0))
+        tk.Label(form, text="Datum bis:",
+                 bg="#f5f7fb", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=1, column=0, sticky="w", pady=4)
+        bis_var = tk.StringVar()
+        _make_date_entry(form, bis_var, width=14, font=("Arial", 11)).grid(row=1, column=1, padx=(8, 0))
+
+        vorschau_lbl = tk.Label(win, text="", bg="#f5f7fb", fg="#0b4a86",
+                                font=("Arial", 10, "bold"))
+        vorschau_lbl.pack(anchor="w", padx=20, pady=(8, 0))
+
+        def vorschau():
+            try:
+                c = zaehle_zeitraum(von_var.get(), bis_var.get())
+                vorschau_lbl.configure(text=f"{c} Auswertungen im Zeitraum.",
+                                        fg="#0b4a86")
+            except Exception as exc:
+                vorschau_lbl.configure(text=f"Fehler: {exc}", fg="#9b1c1c")
+
+        def do_delete():
+            try:
+                anzahl = zaehle_zeitraum(von_var.get(), bis_var.get())
+                von_iso, bis_iso = _normalize_zeitraum(von_var.get(), bis_var.get())
+            except Exception as exc:
+                messagebox.showerror("Loeschen", f"Datumsformat unklar:\n{exc}")
+                return
+            if anzahl == 0:
+                messagebox.showinfo("Loeschen", "Keine Auswertungen im Zeitraum.")
+                return
+            pwd = simpledialog.askstring("Admin-Bereich",
+                                          "Admin-Passwort eingeben:",
+                                          show="*")
+            if pwd is None:
+                return
+            if pwd != ADMIN_DB_PASSWORD:
+                messagebox.showerror("Admin-Bereich", "Passwort falsch.")
+                return
+            confirm = simpledialog.askstring(
+                "Sicherheitsabfrage",
+                f"{anzahl} Auswertungen werden ENDGUELTIG geloescht. "
+                "Zum Bestaetigen bitte LOESCHEN eingeben:")
+            if confirm != "LOESCHEN":
+                messagebox.showinfo("Loeschen", "Vorgang abgebrochen.")
+                return
+            try:
+                backup_path = backup_erstellen()
+            except Exception as exc:
+                messagebox.showerror("Backup", f"Backup fehlgeschlagen, Loeschvorgang abgebrochen:\n{exc}")
+                return
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    con.execute("PRAGMA foreign_keys = ON")
+                    aw_ids = [r[0] for r in con.execute(
+                        "SELECT id FROM tbl_auswertungen WHERE date(datum) >= date(?) AND date(datum) <= date(?)",
+                        (von_iso, bis_iso),
+                    ).fetchall()]
+                    if not aw_ids:
+                        messagebox.showinfo("Loeschen", "Keine Auswertungen mehr im Zeitraum.")
+                        return
+                    placeholders = ",".join("?" for _ in aw_ids)
+                    pos_count = con.execute(
+                        f"SELECT COUNT(*) FROM tbl_auswertungspositionen WHERE auswertung_id IN ({placeholders})",
+                        aw_ids,
+                    ).fetchone()[0]
+                    con.execute(
+                        f"DELETE FROM tbl_auswertungspositionen WHERE auswertung_id IN ({placeholders})",
+                        aw_ids,
+                    )
+                    try:
+                        con.execute(
+                            f"DELETE FROM tbl_importierte_analysen WHERE auswertung_id IN ({placeholders})",
+                            aw_ids,
+                        )
+                    except Exception:
+                        pass
+                    con.execute(
+                        f"DELETE FROM tbl_auswertungen WHERE id IN ({placeholders})",
+                        aw_ids,
+                    )
+                    con.commit()
+            except Exception as exc:
+                messagebox.showerror("Loeschen", f"Loeschvorgang fehlgeschlagen:\n{exc}")
+                return
+            msg = (f"Geloescht: {len(aw_ids)} Auswertungen, {pos_count} Positionen.\n"
+                   f"Backup vorher: {backup_path}")
+            self._log_action("auswertungen", "Zeitraum geloescht", msg.replace("\n", " | "))
+            self.status.set(f"{len(aw_ids)} Auswertungen geloescht.")
+            messagebox.showinfo("Loeschen abgeschlossen", msg)
+            win.destroy()
+            self.open_saved_analyses()
+
+        btn_bar = tk.Frame(win, bg="#f5f7fb")
+        btn_bar.pack(side="bottom", fill="x", padx=20, pady=16)
+        tk.Button(btn_bar, text="Abbrechen", command=win.destroy,
+                  padx=14, pady=6).pack(side="right")
+        tk.Button(btn_bar, text="🔐 LOESCHEN  →", command=do_delete,
+                  bg="#9b1c1c", fg="white", relief="flat",
+                  font=("Arial", 10, "bold"), padx=16, pady=7).pack(side="right", padx=(0, 8))
+        tk.Button(btn_bar, text="Vorschau zaehlen", command=vorschau,
+                  bg="#0b4a86", fg="white", relief="flat",
+                  font=("Arial", 10, "bold"), padx=14, pady=6).pack(side="right", padx=(0, 8))
+
     def _archivieren_zeitraum_dialog(self):
         """Dialog: von/bis-Datum -> Vorschau -> Confirm -> ZIP erstellen,
         DB-Zeilen loeschen.
@@ -8747,14 +8978,14 @@ class NMGApp(tk.Tk):
 
         form = tk.Frame(win, bg="#f5f7fb")
         form.pack(padx=20, pady=(0, 10), anchor="w")
-        tk.Label(form, text="Datum von (YYYY-MM-DD):",
+        tk.Label(form, text="Datum von:",
                  bg="#f5f7fb", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky="w", pady=4)
         von_var = tk.StringVar()
-        tk.Entry(form, textvariable=von_var, width=14, font=("Arial", 11)).grid(row=0, column=1, padx=(8, 0))
-        tk.Label(form, text="Datum bis (YYYY-MM-DD):",
+        _make_date_entry(form, von_var, width=14, font=("Arial", 11)).grid(row=0, column=1, padx=(8, 0))
+        tk.Label(form, text="Datum bis:",
                  bg="#f5f7fb", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=1, column=0, sticky="w", pady=4)
         bis_var = tk.StringVar()
-        tk.Entry(form, textvariable=bis_var, width=14, font=("Arial", 11)).grid(row=1, column=1, padx=(8, 0))
+        _make_date_entry(form, bis_var, width=14, font=("Arial", 11)).grid(row=1, column=1, padx=(8, 0))
 
         vorschau_lbl = tk.Label(win, text="", bg="#f5f7fb", fg="#0b4a86",
                                 font=("Arial", 10, "bold"))

@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 echo =====================================================
-echo   NMGone Installer Build V1.1 SP9 (1.1.9)
+echo   NMGone Installer Build V1.1 SP10 (1.1.10)
 echo =====================================================
 echo.
 
@@ -9,7 +9,7 @@ echo [1/3] Python-Abhaengigkeiten sicherstellen...
 pip install -r requirements.txt pyinstaller >nul
 
 echo [2/3] PyInstaller: dist\NMGone\NMGone.exe bauen...
-python -m PyInstaller --noconfirm --windowed --name "NMGone" --icon assets\NMGone.ico --add-data "assets;assets" start.py
+python -m PyInstaller --noconfirm --windowed --name "NMGone" --icon assets\NMGone.ico --add-data "assets;assets" --collect-all babel --collect-all tkcalendar start.py
 if errorlevel 1 (
   echo PyInstaller fehlgeschlagen.
   pause
@@ -25,16 +25,16 @@ set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
 if not exist "%ISCC%" set "ISCC=%ProgramFiles%\Inno Setup 6\ISCC.exe"
 
 if exist "%ISCC%" (
-  "%ISCC%" installer\NMGone_Setup_1_1_9.iss
+  "%ISCC%" installer\NMGone_Setup_1_1_10.iss
   if errorlevel 1 (
     echo Inno Setup fehlgeschlagen.
     pause
     exit /b 1
   )
   echo.
-  echo Setup-Datei: dist_setup\NMGone_Setup_1_1_9.exe
+  echo Setup-Datei: dist_setup\NMGone_Setup_1_1_10.exe
 ) else (
   echo Inno Setup 6 nicht gefunden. Installiere via: winget install JRSoftware.InnoSetup
-  echo Skript-Vorlage liegt unter installer\NMGone_Setup_1_1_9.iss
+  echo Skript-Vorlage liegt unter installer\NMGone_Setup_1_1_10.iss
 )
 pause
