@@ -5,6 +5,12 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V1.1 SP18", "2026-06-19", [
+        "Neue Auswertung laeuft jetzt im Hintergrund (analog manueller Import in SP15). UI bleibt klickbar.",
+        "Background-Status-Box umgezogen: von rechts oben im Header in die rechte Sidebar ueber den Backup-Status.",
+        "Wenn keine Jobs laufen, ist die Box unsichtbar.",
+        "UnknownInputFormatError + Format-Assistent-Pfad jetzt in on_error des Background-Jobs (interaktiv im UI-Thread).",
+    ]),
     ("V1.1 SP17", "2026-06-19", [
         "Manueller Import: nicht-erkannte Dateien werden uebersprungen statt pro-Datei modal abgefragt.",
         "TXT-Sammeldatei 'nicht_erkannte_dateien_TIMESTAMP.txt' in importierte_analysen/<typ>/<Jahr>/Q<n>/ mit Liste der Dateinamen + Fehlertext.",

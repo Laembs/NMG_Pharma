@@ -866,11 +866,10 @@ class NMGApp(tk.Tk):
         main.rowconfigure(1, weight=1)
 
         # Oberer Programmkopf entfernt: Startseite soll direkt mit dem Arbeitsbereich beginnen.
-        # V1.1 SP15: rechts im Header zeigen wir Background-Jobs (z.B. Imports).
+        # V1.1 SP18: _bg_jobs_panel ist jetzt in der rechten Sidebar (ueber dem
+        # Backup-Status), nicht mehr im Header. Header bleibt leer.
         header = tk.Frame(main, bg="#f5f7fb")
         header.grid(row=0, column=0, columnspan=2, sticky="ew", padx=0, pady=0)
-        self._bg_jobs_panel = tk.Frame(header, bg="#f5f7fb")
-        self._bg_jobs_panel.pack(side="right", padx=(0, 22), pady=(8, 0), anchor="ne")
 
         self.page = tk.Frame(main, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
         self.page.grid(row=1, column=0, sticky="nsew", padx=(22, 12), pady=10)
@@ -1784,6 +1783,12 @@ class NMGApp(tk.Tk):
 
         filler = tk.Frame(parent, bg="#f5f7fb")
         filler.pack(fill="both", expand=True)
+
+        # V1.1 SP18: Background-Job-Status (frueher rechts oben im Header).
+        # Liegt direkt UEBER dem Backup-Status-Block. Wenn kein Job laeuft
+        # bleibt es leer (kein Border, kein Header) - somit unsichtbar.
+        self._bg_jobs_panel = tk.Frame(parent, bg="#f5f7fb")
+        self._bg_jobs_panel.pack(fill="x", side="bottom", pady=(0, 6))
 
         box_backup = tk.Frame(parent, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
         box_backup.pack(fill="x", side="bottom")
@@ -3830,41 +3835,78 @@ LIMIT 500
             except Exception:
                 pass
 
-    def _run_neue_auswertung_export(self, file, analyse_name, kundentyp=None, kundennummer="", kundenname="", zeitraum_monate=None, vorlage_slot=None):
-        """Erzeugt die Auswertung und speichert sie im Analyseordner."""
+    def _run_neue_auswertung_export(self, file, analyse_name, kundentyp=None, kundennummer="", kundenname="", zeitraum_monate=None, vorlage_slot=None, on_done=None):
+        """V1.1 SP18: Background-Variante. Auswertung laeuft im Hintergrund,
+        UI bleibt klickbar. Post-Processing (Datei verschieben, Vorlage,
+        messagebox) im UI-Thread nach Abschluss via _run_background-Callback.
+
+        on_done(copied_out) wird nach erfolgreichem Abschluss + Post-Processing
+        im UI-Thread aufgerufen. Bei UnknownInputFormatError kommt der Format-
+        Assistent-Dialog (interaktiv im UI-Thread).
+        """
         self._log_action("neue_auswertung", "Auswertungserstellung gestartet", f"Datei: {file} | Analyse: {analyse_name}")
-        out = Path(self._run_busy(
+
+        def post_export(out_raw):
+            out = Path(out_raw)
+            try:
+                if kundentyp is not None:
+                    self._mark_latest_auswertung_customer(kundentyp, kundennummer, kundenname or analyse_name)
+            except Exception:
+                pass
+            # SP7: Auswertungen werden je nach Kundentyp in einen Unterordner sortiert.
+            sub = kundentyp if kundentyp in ("PK", "ZF") else None
+            base_dir = SAVED_ANALYSES_DIR / sub if sub else SAVED_ANALYSES_DIR
+            analyse_dir = base_dir / f"{analyse_name}_{out.stem[-15:] if len(out.stem) >= 15 else ''}".strip("_")
+            analyse_dir.mkdir(parents=True, exist_ok=True)
+            copied_out = analyse_dir / out.name
+            shutil.copy2(out, copied_out)
+            try:
+                shutil.copy2(file, analyse_dir / f"Rohdaten_{Path(file).name}")
+            except Exception:
+                pass
+            self._apply_auswertungsvorlage(copied_out, vorlage_slot, zeitraum_monate)
+            self._apply_output_period_header(copied_out, zeitraum_monate)
+            self._roadmap_mark_neue_auswertung_form_erledigt()
+            self._log_action("neue_auswertung", "Auswertung gespeichert", str(copied_out))
+            self.status.set(f"Auswertung gespeichert: {copied_out}")
+            messagebox.showinfo("Auswertung fertig", f"Auswertung wurde erstellt und gespeichert:\n{copied_out}\n\nDer Ordner wird jetzt geöffnet.")
+            _open_folder(analyse_dir)
+            if on_done:
+                try:
+                    on_done(copied_out)
+                except Exception:
+                    pass
+
+        def on_export_error(exc):
+            # UnknownInputFormatError -> interaktiver Format-Assistent.
+            if isinstance(exc, UnknownInputFormatError):
+                self.status.set(str(exc))
+                if messagebox.askyesno("Format nicht erkannt",
+                                        f"{exc}\n\nSoll der Rohdaten-Formatassistent geöffnet werden?"):
+                    mapping = self._open_rohdaten_format_assistent(file, str(exc))
+                    if mapping:
+                        try:
+                            self._run_auswertung_after_mapping(
+                                file, mapping, analyse_name, kundentyp,
+                                kundennummer, kundenname or analyse_name,
+                                vorlage_slot=vorlage_slot,
+                            )
+                        except Exception as mapped_exc:
+                            self.status.set(f"Auswertung nach Mapping fehlgeschlagen: {mapped_exc}")
+                            messagebox.showerror("Auswertungsfehler nach Mapping", str(mapped_exc))
+                else:
+                    messagebox.showwarning("Format nicht erkannt", str(exc))
+                return
+            messagebox.showerror("Auswertungsfehler", str(exc))
+
+        self._run_background(
             lambda: create_linden_export(file, analyse_name),
             title="Auswertung wird erstellt",
             subtitle=f"NMGone wertet {Path(file).name} aus ...",
-        ))
-        try:
-            if kundentyp is not None:
-                self._mark_latest_auswertung_customer(kundentyp, kundennummer, kundenname or analyse_name)
-        except Exception:
-            pass
-        # SP7: Auswertungen werden je nach Kundentyp in einen Unterordner sortiert:
-        #   gespeicherte_analysen/PK/<analyse>/   (Partnerkondition)
-        #   gespeicherte_analysen/ZF/<analyse>/   (Zukunftswerk)
-        # Wenn kein Kundentyp angegeben ist, bleibt das alte Verhalten erhalten.
-        sub = kundentyp if kundentyp in ("PK", "ZF") else None
-        base_dir = SAVED_ANALYSES_DIR / sub if sub else SAVED_ANALYSES_DIR
-        analyse_dir = base_dir / f"{analyse_name}_{out.stem[-15:] if len(out.stem) >= 15 else ''}".strip("_")
-        analyse_dir.mkdir(parents=True, exist_ok=True)
-        copied_out = analyse_dir / out.name
-        shutil.copy2(out, copied_out)
-        try:
-            shutil.copy2(file, analyse_dir / f"Rohdaten_{Path(file).name}")
-        except Exception:
-            pass
-        self._apply_auswertungsvorlage(copied_out, vorlage_slot, zeitraum_monate)
-        self._apply_output_period_header(copied_out, zeitraum_monate)
-        self._roadmap_mark_neue_auswertung_form_erledigt()
-        self._log_action("neue_auswertung", "Auswertung gespeichert", str(copied_out))
-        self.status.set(f"Auswertung gespeichert: {copied_out}")
-        messagebox.showinfo("Auswertung fertig", f"Auswertung wurde erstellt und gespeichert:\n{copied_out}\n\nDer Ordner wird jetzt geöffnet.")
-        _open_folder(analyse_dir)
-        return copied_out
+            progress=False,
+            on_done=post_export,
+            on_error=on_export_error,
+        )
 
     def _create_standard_rohdaten_from_mapping(self, file_path, mapping):
         """Erstellt aus einer unbekannten Rohdatei eine Standard-Rohdatei, die der Exporter lesen kann."""
@@ -7139,23 +7181,15 @@ LIMIT 500
             vorlage_slot = self._slot_from_template_label(vorlage_var.get())
             self._set_selected_auswertungsvorlage_slot(vorlage_slot)
 
-            try:
-                self._run_neue_auswertung_export(file, analyse_name, kundentyp, kundennummer, kundenname or analyse_name, vorlage_slot=vorlage_slot)
-                self.after(100, _nach_auswertung_zuordnen)
-            except UnknownInputFormatError as exc:
-                self.status.set(str(exc))
-                if messagebox.askyesno("Format nicht erkannt", f"{exc}\n\nSoll der Rohdaten-Formatassistent geöffnet werden?"):
-                    mapping = self._open_rohdaten_format_assistent(file, str(exc))
-                    if mapping:
-                        try:
-                            self._run_auswertung_after_mapping(file, mapping, analyse_name, kundentyp, kundennummer, kundenname or analyse_name, vorlage_slot=vorlage_slot)
-                        except Exception as mapped_exc:
-                            self.status.set(f"Auswertung nach Mapping fehlgeschlagen: {mapped_exc}")
-                            messagebox.showerror("Auswertungsfehler nach Mapping", str(mapped_exc))
-                else:
-                    messagebox.showwarning("Format nicht erkannt", str(exc))
-            except Exception as exc:
-                messagebox.showerror("Auswertungsfehler", str(exc))
+            # V1.1 SP18: Auswertung laeuft im Hintergrund. UnknownInputFormatError
+            # + andere Exceptions werden in on_error innerhalb von
+            # _run_neue_auswertung_export behandelt. _nach_auswertung_zuordnen
+            # kommt jetzt als on_done-Callback (UI-Thread).
+            self._run_neue_auswertung_export(
+                file, analyse_name, kundentyp, kundennummer, kundenname or analyse_name,
+                vorlage_slot=vorlage_slot,
+                on_done=lambda _out: self.after(100, _nach_auswertung_zuordnen),
+            )
 
         def _nach_auswertung_zuordnen():
             if kundennummer_var.get().strip():
