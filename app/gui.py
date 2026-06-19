@@ -6437,15 +6437,31 @@ LIMIT 500
             q = filter_var.get().strip().lower()
             try:
                 with sqlite3.connect(DB_PATH) as con:
+                    # SP20: Artikel/DF/Pack aus den Artikel-Stammquellen ziehen.
+                    # tbl_pzn_basisdaten hat DF + Pack, aber nur duenn befuellt;
+                    # tbl_nmg_stamm (NMG-Artikelstamm) deckt fast alle Rabatt-PZNs
+                    # ab und liefert ueber menge+einheit die Packungsgroesse.
+                    # COALESCE: erst Rabatt-eigener Artikel, dann Stamm, dann Basis.
+                    # gueltig_ab nur selektieren, wenn die Spalte schon existiert
+                    # (Migration laeuft beim App-Start) - sonst leer statt Crash.
+                    has_gab = any(c[1] == "gueltig_ab" for c in con.execute("PRAGMA table_info(nmg_rabatte)"))
+                    gab_sel = "r.gueltig_ab" if has_gab else "'' AS gueltig_ab"
                     rows = con.execute(
-                        """SELECT r.nmg_pzn, r.artikel, b.df, b.pck, r.rabatt,
-                                  r.gueltig_ab, r.quelle, r.letzte_aktualisierung
+                        f"""SELECT r.nmg_pzn,
+                                  COALESCE(NULLIF(r.artikel,''), s.artikelname, b.artikelname) AS artikel,
+                                  b.df AS df,
+                                  COALESCE(NULLIF(b.pck,''),
+                                           NULLIF(TRIM(COALESCE(s.menge,'')||' '||COALESCE(s.einheit,'')),'')) AS pck,
+                                  r.rabatt, {gab_sel}, r.quelle, r.letzte_aktualisierung
                            FROM nmg_rabatte r
                            LEFT JOIN tbl_pzn_basisdaten b ON b.pzn = r.nmg_pzn
+                           LEFT JOIN tbl_nmg_stamm s ON s.pzn = r.nmg_pzn
                            ORDER BY r.rabatt DESC, r.nmg_pzn"""
                     ).fetchall()
-            except Exception:
+            except Exception as exc:
                 rows = []
+                info_var.set(f"Fehler beim Laden der Rabatte: {exc}")
+                return
             shown = 0
             for r in rows:
                 if q:
@@ -6629,10 +6645,16 @@ LIMIT 500
 
         try:
             with sqlite3.connect(DB_PATH) as con:
+                has_gab = any(c[1] == "gueltig_ab" for c in con.execute("PRAGMA table_info(nmg_rabatte)"))
+                gab_sel = "r.gueltig_ab" if has_gab else "'' AS gueltig_ab"
                 row = con.execute(
-                    """SELECT r.artikel, r.rabatt, r.gueltig_ab, b.df, b.pck
+                    f"""SELECT COALESCE(NULLIF(r.artikel,''), s.artikelname, b.artikelname) AS artikel,
+                              r.rabatt, {gab_sel}, b.df,
+                              COALESCE(NULLIF(b.pck,''),
+                                       NULLIF(TRIM(COALESCE(s.menge,'')||' '||COALESCE(s.einheit,'')),'')) AS pck
                        FROM nmg_rabatte r
                        LEFT JOIN tbl_pzn_basisdaten b ON b.pzn = r.nmg_pzn
+                       LEFT JOIN tbl_nmg_stamm s ON s.pzn = r.nmg_pzn
                        WHERE r.nmg_pzn = ?""",
                     (str(nmg_pzn),),
                 ).fetchone()
