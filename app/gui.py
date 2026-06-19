@@ -5724,15 +5724,16 @@ class NMGApp(tk.Tk):
         alt_frame.columnconfigure(0, weight=1)
         alt_frame.rowconfigure(0, weight=1)
 
-        alt_cols = ("pzn", "artikel", "df", "pck", "herst")
+        alt_cols = ("pzn", "artikel", "df", "pck", "herst", "quelle")
         alt_heads = {
             "pzn": "PZN",
             "artikel": _T("Artikelname"),
             "df": "DF",
             "pck": "PCK",
             "herst": _T("Hersteller"),
+            "quelle": _T("Quelle"),
         }
-        alt_widths = {"pzn": 80, "artikel": 280, "df": 50, "pck": 90, "herst": 100}
+        alt_widths = {"pzn": 80, "artikel": 240, "df": 50, "pck": 80, "herst": 90, "quelle": 100}
         alt_tree = ttk.Treeview(alt_frame, columns=alt_cols, show="headings", selectmode="browse", height=10)
         for c in alt_cols:
             alt_tree.heading(c, text=alt_heads[c])
@@ -5845,6 +5846,7 @@ class NMGApp(tk.Tk):
                     a["df"] or "",
                     a["pck"] or "",
                     a["herst"] or "",
+                    a.get("quelle") or "–",
                 ))
 
             if alternativen:
@@ -8358,21 +8360,26 @@ class NMGApp(tk.Tk):
             pady=7
         ).pack(side="left", padx=(8, 0))
 
-        # Admin-Knoepfe nur zeigen, wenn (a) Windows-Login Admin-Login ist
-        # und (b) Admin-Modus per Ctrl+Alt+A eingeschaltet wurde. Verhindert,
-        # dass Mitarbeiterinnen "Auswertungen loeschen" versehentlich finden.
+        # V1.1 SP3: Cleanup direkt erreichbar - ohne Ctrl+Alt+A-Toggle.
+        # Schutz liegt auf dem Admin-Passwort + LEEREN-Confirm im Dialog
+        # selbst, ein Backup wird vorher automatisch erstellt.
+        tk.Button(
+            toolbar,
+            text="🗑 Datenbankinhalte leeren",
+            command=self.open_admin_database_clear,
+            bg="#8b5a00",
+            fg="white",
+            relief="flat",
+            font=("Arial", 10, "bold"),
+            padx=14,
+            pady=7
+        ).pack(side="left", padx=(8, 0))
+
+        # 'Auswertungen loeschen' bleibt versteckt - das ist die wirklich
+        # destruktive Aktion (loescht Auswertungs-Historie inkl. Positionen)
+        # und sollte nicht versehentlich gefunden werden. Sichtbar nur im
+        # Admin-Modus (Ctrl+Alt+A) bei Admin-Windows-Login.
         if getattr(self, "_admin_visible", False) and self._is_admin_login():
-            tk.Button(
-                toolbar,
-                text="🔐 Admin",
-                command=self.open_admin_database_clear,
-                bg="#8b5a00",
-                fg="white",
-                relief="flat",
-                font=("Arial", 10, "bold"),
-                padx=14,
-                pady=7
-            ).pack(side="left", padx=(8, 0))
             tk.Button(
                 toolbar,
                 text="🔐 Auswertungen löschen",
