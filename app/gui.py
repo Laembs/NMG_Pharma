@@ -25,6 +25,10 @@ from .austausch_db import import_austausch_excel, count_austauschdatenbank, add_
 from .artikel_db import import_artikelstamm_excel, count_artikelstamm
 from .wirkstoff_db import import_wirkstoff_excel, wirkstoff_count
 from .vergleichssuche import search_unified, get_pzn_details
+from .archiv_db import (
+    archiviere_zeitraum, liste_archive, liste_analysen_im_archiv,
+    excel_aus_archiv, loesche_archiv, zaehle_zeitraum, ensure_archiv_dir,
+)
 from .file_loader import SUPPORTED_DATA_FILETYPES
 from .db_overview import get_database_overview, format_size
 from .update_manager import (
@@ -1680,13 +1684,44 @@ class NMGApp(tk.Tk):
         body.columnconfigure(1, weight=0)
         body.rowconfigure(1, weight=1)
 
-        # Suchzeile
+        # Suchzeile - V1.1 SP8: getrennte Felder fuer feingranulare Suche
         search_bar = tk.Frame(body, bg="#ffffff")
         search_bar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
-        tk.Label(search_bar, text="Suche:", bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).pack(side="left")
+
+        # Volltext (wirkt auf alle Spalten zusammen)
+        tk.Label(search_bar, text="Suche:", bg="#ffffff", fg="#0b4a86",
+                 font=("Arial", 10, "bold")).pack(side="left")
         _sa_search_var = tk.StringVar()
-        tk.Entry(search_bar, textvariable=_sa_search_var, width=32).pack(side="left", padx=(6, 0))
-        tk.Label(search_bar, text="  Doppelklick = Kunden zuordnen", bg="#ffffff", fg="#888", font=("Arial", 9)).pack(side="left", padx=16)
+        tk.Entry(search_bar, textvariable=_sa_search_var, width=22).pack(side="left", padx=(6, 12))
+
+        # Getrennte Felder (V1.1 SP8)
+        tk.Label(search_bar, text="Apotheke:", bg="#ffffff", fg="#0b4a86",
+                 font=("Arial", 9)).pack(side="left")
+        _sa_apo_var = tk.StringVar()
+        tk.Entry(search_bar, textvariable=_sa_apo_var, width=14).pack(side="left", padx=(4, 8))
+
+        tk.Label(search_bar, text="Kunden-Nr.:", bg="#ffffff", fg="#0b4a86",
+                 font=("Arial", 9)).pack(side="left")
+        _sa_knr_var = tk.StringVar()
+        tk.Entry(search_bar, textvariable=_sa_knr_var, width=10).pack(side="left", padx=(4, 8))
+
+        tk.Label(search_bar, text="Kunde:", bg="#ffffff", fg="#0b4a86",
+                 font=("Arial", 9)).pack(side="left")
+        _sa_kname_var = tk.StringVar()
+        tk.Entry(search_bar, textvariable=_sa_kname_var, width=14).pack(side="left", padx=(4, 8))
+
+        tk.Label(search_bar, text="Datum von:", bg="#ffffff", fg="#0b4a86",
+                 font=("Arial", 9)).pack(side="left")
+        _sa_von_var = tk.StringVar()
+        tk.Entry(search_bar, textvariable=_sa_von_var, width=11).pack(side="left", padx=(4, 4))
+
+        tk.Label(search_bar, text="bis:", bg="#ffffff", fg="#0b4a86",
+                 font=("Arial", 9)).pack(side="left")
+        _sa_bis_var = tk.StringVar()
+        tk.Entry(search_bar, textvariable=_sa_bis_var, width=11).pack(side="left", padx=(4, 4))
+
+        tk.Label(search_bar, text="(YYYY-MM-DD)  ·  Doppelklick = Kunden zuordnen",
+                 bg="#ffffff", fg="#888", font=("Arial", 9)).pack(side="left", padx=8)
 
         filter_bar = tk.Frame(body, bg="#ffffff")
         filter_bar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
@@ -1751,29 +1786,46 @@ class NMGApp(tk.Tk):
         except Exception:
             pass
 
-        def _sa_reload(ft=""):
+        def _sa_reload(*_args):
+            ft = _sa_search_var.get().strip().lower()
+            f_apo = _sa_apo_var.get().strip().lower()
+            f_knr = _sa_knr_var.get().strip().lower()
+            f_kname = _sa_kname_var.get().strip().lower()
+            f_von = _sa_von_var.get().strip()
+            f_bis = _sa_bis_var.get().strip()
             for item in listbox.get_children(): listbox.delete(item)
             _sa_row_map.clear()
             for row in rows:
                 dq = "PK" if row["datenquelle"] == "NMG" else row["datenquelle"]
-                vals = (row["id"], str(row["datum"] or "")[:16], dq,
-                        str(row["apotheke"] or ""),
-                        str(row["kundennummer"] if "kundennummer" in row.keys() else ""),
-                        str(row["kundenname"] if "kundenname" in row.keys() else ""),
+                apo = str(row["apotheke"] or "")
+                knr = str(row["kundennummer"] if "kundennummer" in row.keys() else "")
+                kname = str(row["kundenname"] if "kundenname" in row.keys() else "")
+                vals = (row["id"], str(row["datum"] or "")[:16], dq, apo, knr, kname,
                         row["anzahl_positionen"] or 0, row["nmg_treffer"] or 0)
                 mode = filter_mode.get()
                 if mode in ("NMG", "ZF") and str(row["datenquelle"] or "NMG") != mode:
                     continue
                 if mode == "DATEI" and not find_output_file(row):
                     continue
-                if mode == "NEU" and str(row["apotheke"] or "").lower().startswith(("manuell", "zf import", "zf daten")):
+                if mode == "NEU" and apo.lower().startswith(("manuell", "zf import", "zf daten")):
                     continue
-                combined = " ".join(str(v) for v in vals).lower()
-                if ft and ft.lower() not in combined: continue
+                # V1.1 SP8: feingranulare Felder (UND-Logik)
+                if f_apo and f_apo not in apo.lower(): continue
+                if f_knr and f_knr not in knr.lower(): continue
+                if f_kname and f_kname not in kname.lower(): continue
+                if f_von or f_bis:
+                    datum_iso = str(row["datum"] or "")[:10]
+                    if f_von and datum_iso < f_von: continue
+                    if f_bis and datum_iso > f_bis: continue
+                # Volltext zuletzt (matched gegen die formatierten Werte)
+                if ft:
+                    combined = " ".join(str(v) for v in vals).lower()
+                    if ft not in combined: continue
                 iid = listbox.insert("", "end", values=vals)
                 _sa_row_map[iid] = dict(row)
         _sa_reload()
-        _sa_search_var.trace_add("write", lambda *_: _sa_reload(_sa_search_var.get().strip()))
+        for _v in (_sa_search_var, _sa_apo_var, _sa_knr_var, _sa_kname_var, _sa_von_var, _sa_bis_var):
+            _v.trace_add("write", _sa_reload)
 
         def selected_row_silent():
             sel = listbox.selection()
@@ -1847,11 +1899,15 @@ class NMGApp(tk.Tk):
             if not row:
                 return
             f = find_output_file(row)
+            # V1.1 SP8: Datei direkt oeffnen statt nur den Ordner.
             if f:
-                _open_folder(f.parent)
-            else:
-                messagebox.showinfo("Auswertung", "Zu dieser Analyse wurde keine Ausgabedatei im Analyseordner gefunden. Der Ordner wird geöffnet.")
-                _open_folder(SAVED_ANALYSES_DIR)
+                try:
+                    _open_file(f)
+                except Exception as exc:
+                    messagebox.showerror("Auswertung oeffnen", str(exc))
+                return
+            messagebox.showinfo("Auswertung", "Zu dieser Analyse wurde keine Ausgabedatei im Analyseordner gefunden. Der Ordner wird geöffnet.")
+            _open_folder(SAVED_ANALYSES_DIR)
 
         def product_selected():
             row = selected_row()
@@ -1900,6 +1956,15 @@ class NMGApp(tk.Tk):
         add_btn("📈 Produktanalyse", product_selected, "#11823b")
         add_btn("🔍 Abweichungsanalyse", deviation_selected, "#8b5a00")
         tk.Button(side, text="Ordner gespeicherte Analysen", command=lambda: _open_folder(SAVED_ANALYSES_DIR), padx=10, pady=7).pack(fill="x", padx=16, pady=(14, 5))
+        # V1.1 SP8: Zeitraum-Archivierung + Archiv-Verwaltung
+        tk.Button(side, text="📦 Zeitraum archivieren",
+                  command=self._archivieren_zeitraum_dialog,
+                  bg="#0b6e6e", fg="white", relief="flat",
+                  font=("Arial", 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(14, 5))
+        tk.Button(side, text="🗂  Archive verwalten",
+                  command=self._archive_verwalten_dialog,
+                  bg="#3867b7", fg="white", relief="flat",
+                  font=("Arial", 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(0, 5))
         tk.Button(side, text="🔐 Admin: Auswertungen löschen", command=self.open_admin_auswertungen_loeschen, bg="#9b1c1c", fg="white", relief="flat", font=("Arial", 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(8, 5))
 
         if not rows:
@@ -8549,6 +8614,273 @@ class NMGApp(tk.Tk):
         messagebox.showinfo("Wirkstoff/Staerke-Import", msg)
         # Tabellen-Ansicht neu laden, damit die neue Zeilenzahl sichtbar ist.
         self.show_datenbankuebersicht_page()
+
+    # V1.1 SP8: Zeitraum-Archivierung + Archiv-Verwaltung ─────────────────────
+    def _archivieren_zeitraum_dialog(self):
+        """Dialog: von/bis-Datum -> Vorschau -> Confirm -> ZIP erstellen,
+        DB-Zeilen loeschen.
+        """
+        win = tk.Toplevel(self)
+        win.title("Auswertungen im Zeitraum archivieren")
+        win.geometry("520x360")
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+        win.columnconfigure(0, weight=1)
+
+        tk.Label(win, text="Auswertungen im Zeitraum archivieren",
+                 font=("Arial", 14, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(
+            anchor="w", padx=20, pady=(18, 4))
+        tk.Label(win,
+                 text=("Alle Auswertungen im Datumsbereich werden in ein ZIP-Backup "
+                       "ausgelagert und dann aus der aktiven DB entfernt. Sie tauchen "
+                       "weder in Suchen noch in Produktanalysen auf, bleiben aber im "
+                       "Archiv-Ordner verfuegbar."),
+                 bg="#f5f7fb", fg="#333", wraplength=480, justify="left").pack(
+            anchor="w", padx=20, pady=(0, 14))
+
+        form = tk.Frame(win, bg="#f5f7fb")
+        form.pack(padx=20, pady=(0, 10), anchor="w")
+        tk.Label(form, text="Datum von (YYYY-MM-DD):",
+                 bg="#f5f7fb", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky="w", pady=4)
+        von_var = tk.StringVar()
+        tk.Entry(form, textvariable=von_var, width=14, font=("Arial", 11)).grid(row=0, column=1, padx=(8, 0))
+        tk.Label(form, text="Datum bis (YYYY-MM-DD):",
+                 bg="#f5f7fb", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=1, column=0, sticky="w", pady=4)
+        bis_var = tk.StringVar()
+        tk.Entry(form, textvariable=bis_var, width=14, font=("Arial", 11)).grid(row=1, column=1, padx=(8, 0))
+
+        vorschau_lbl = tk.Label(win, text="", bg="#f5f7fb", fg="#0b4a86",
+                                font=("Arial", 10, "bold"))
+        vorschau_lbl.pack(anchor="w", padx=20, pady=(8, 0))
+
+        def vorschau():
+            try:
+                c = zaehle_zeitraum(von_var.get(), bis_var.get())
+                vorschau_lbl.configure(text=f"{c} Auswertungen im Zeitraum.",
+                                        fg="#0b4a86")
+            except Exception as exc:
+                vorschau_lbl.configure(text=f"Fehler: {exc}", fg="#9b1c1c")
+
+        def do_archive():
+            try:
+                anzahl = zaehle_zeitraum(von_var.get(), bis_var.get())
+            except Exception as exc:
+                messagebox.showerror("Archivieren", f"Datumsformat unklar:\n{exc}")
+                return
+            if anzahl == 0:
+                messagebox.showinfo("Archivieren", "Keine Auswertungen im Zeitraum.")
+                return
+            ok = messagebox.askyesno(
+                "Archivieren bestaetigen",
+                f"{anzahl} Auswertungen werden ins Archiv verschoben und "
+                "danach aus der aktiven DB geloescht.\n\nFortfahren?")
+            if not ok:
+                return
+            try:
+                stats = self._run_busy(
+                    lambda: archiviere_zeitraum(von_var.get(), bis_var.get()),
+                    title="Auswertungen archivieren",
+                    subtitle=f"Schreibe ZIP mit {anzahl} Auswertungen ...",
+                )
+            except Exception as exc:
+                messagebox.showerror("Archivieren", str(exc))
+                return
+            msg = (
+                f"Archiviert: {stats['archiviert']} Auswertungen, "
+                f"{stats['excel_anzahl']} Excel-Dateien.\n"
+                f"ZIP: {stats['zip_pfad']}\n"
+                f"Groesse: {stats['groesse_bytes']:,} Bytes".replace(",", ".")
+            )
+            self._log_action("archiv", "Zeitraum archiviert", msg.replace("\n", " | "))
+            self.status.set(f"{stats['archiviert']} Auswertungen archiviert.")
+            messagebox.showinfo("Archivieren fertig", msg)
+            win.destroy()
+            self.open_saved_analyses()
+
+        btn_bar = tk.Frame(win, bg="#f5f7fb")
+        btn_bar.pack(side="bottom", fill="x", padx=20, pady=16)
+        tk.Button(btn_bar, text="Abbrechen", command=win.destroy,
+                  padx=14, pady=6).pack(side="right")
+        tk.Button(btn_bar, text="Archivieren  →", command=do_archive,
+                  bg="#9b1c1c", fg="white", relief="flat",
+                  font=("Arial", 10, "bold"), padx=16, pady=7).pack(side="right", padx=(0, 8))
+        tk.Button(btn_bar, text="Vorschau zaehlen", command=vorschau,
+                  bg="#0b4a86", fg="white", relief="flat",
+                  font=("Arial", 10, "bold"), padx=14, pady=6).pack(side="right", padx=(0, 8))
+
+    def _archive_verwalten_dialog(self):
+        """Dialog: Liste aller ZIP-Archive. Pro ZIP eine zweite Liste mit
+        den enthaltenen Auswertungen. Doppelklick = Excel oeffnen.
+        Loeschen nur per Admin-Passwort.
+        """
+        ensure_archiv_dir()
+        win = tk.Toplevel(self)
+        win.title("Archive verwalten")
+        win.geometry("900x600")
+        win.configure(bg="#ffffff")
+        win.transient(self)
+        win.columnconfigure(0, weight=1)
+        win.columnconfigure(1, weight=2)
+        win.rowconfigure(1, weight=1)
+
+        tk.Label(win, text="Archive verwalten",
+                 font=("Arial", 14, "bold"), fg="#0b4a86", bg="#ffffff").grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(14, 6))
+
+        # Linke Liste: ZIPs
+        zip_frame = tk.LabelFrame(win, text=" Archiv-ZIPs ",
+                                  bg="#ffffff", fg="#0b4a86",
+                                  font=("Arial", 10, "bold"))
+        zip_frame.grid(row=1, column=0, sticky="nsew", padx=(14, 6), pady=(0, 6))
+        zip_frame.rowconfigure(0, weight=1)
+        zip_frame.columnconfigure(0, weight=1)
+
+        zip_cols = ("name", "zeitraum", "count", "groesse")
+        zip_heads = {"name": "Name", "zeitraum": "Zeitraum",
+                     "count": "Anz.", "groesse": "Groesse"}
+        zip_widths = {"name": 200, "zeitraum": 130, "count": 50, "groesse": 80}
+        zip_tree = ttk.Treeview(zip_frame, columns=zip_cols, show="headings",
+                                selectmode="browse")
+        for c in zip_cols:
+            zip_tree.heading(c, text=zip_heads[c])
+            zip_tree.column(c, width=zip_widths[c], anchor="w")
+        zip_tree.grid(row=0, column=0, sticky="nsew")
+
+        # Rechte Liste: Inhalt des selektierten ZIPs
+        inh_frame = tk.LabelFrame(win, text=" Inhalt (Doppelklick = Excel oeffnen) ",
+                                  bg="#ffffff", fg="#0b4a86",
+                                  font=("Arial", 10, "bold"))
+        inh_frame.grid(row=1, column=1, sticky="nsew", padx=(6, 14), pady=(0, 6))
+        inh_frame.rowconfigure(0, weight=1)
+        inh_frame.columnconfigure(0, weight=1)
+        inh_cols = ("id", "datum", "apotheke", "kunde", "pos")
+        inh_heads = {"id": "ID", "datum": "Datum", "apotheke": "Apotheke",
+                     "kunde": "Kunde", "pos": "Pos."}
+        inh_widths = {"id": 50, "datum": 110, "apotheke": 220, "kunde": 140, "pos": 50}
+        inh_tree = ttk.Treeview(inh_frame, columns=inh_cols, show="headings",
+                                selectmode="browse")
+        for c in inh_cols:
+            inh_tree.heading(c, text=inh_heads[c])
+            inh_tree.column(c, width=inh_widths[c], anchor="w")
+        inh_tree.grid(row=0, column=0, sticky="nsew")
+
+        zip_map: dict[str, dict] = {}
+        inh_map: dict[str, dict] = {}
+        current_zip = {"pfad": None}
+
+        def reload_zips():
+            for iid in zip_tree.get_children():
+                zip_tree.delete(iid)
+            zip_map.clear()
+            for a in liste_archive():
+                groesse_kb = a["groesse_bytes"] / 1024
+                groesse_txt = f"{groesse_kb:,.0f} KB".replace(",", ".") \
+                    if groesse_kb < 1024 else f"{groesse_kb/1024:,.1f} MB".replace(",", ".")
+                zeitraum = f"{a['zeitraum_von']} - {a['zeitraum_bis']}" if a["zeitraum_von"] else ""
+                iid = zip_tree.insert("", "end", values=(
+                    a["name"], zeitraum, a["auswertungen_count"], groesse_txt
+                ))
+                zip_map[iid] = a
+            for iid in inh_tree.get_children():
+                inh_tree.delete(iid)
+            inh_map.clear()
+            current_zip["pfad"] = None
+
+        def on_zip_select(_e=None):
+            sel = zip_tree.selection()
+            if not sel:
+                return
+            a = zip_map.get(sel[0])
+            if not a:
+                return
+            current_zip["pfad"] = a["pfad"]
+            for iid in inh_tree.get_children():
+                inh_tree.delete(iid)
+            inh_map.clear()
+            try:
+                analysen = liste_analysen_im_archiv(a["pfad"])
+            except Exception as exc:
+                messagebox.showerror("Archiv lesen", str(exc))
+                return
+            for r in analysen:
+                iid = inh_tree.insert("", "end", values=(
+                    r.get("id", ""), str(r.get("datum", ""))[:10],
+                    r.get("apotheke", ""), r.get("kundenname", ""),
+                    r.get("anzahl_positionen", 0)
+                ))
+                inh_map[iid] = r
+
+        def on_inh_dbl(_e=None):
+            sel = inh_tree.selection()
+            if not sel or not current_zip["pfad"]:
+                return
+            r = inh_map.get(sel[0])
+            if not r:
+                return
+            try:
+                ziel = excel_aus_archiv(current_zip["pfad"], int(r["id"]))
+            except Exception as exc:
+                messagebox.showerror("Archiv-Datei", str(exc))
+                return
+            if not ziel:
+                messagebox.showinfo("Archiv-Datei",
+                                    "Im ZIP ist fuer diese Auswertung keine Excel hinterlegt.")
+                return
+            try:
+                _open_file(ziel)
+            except Exception as exc:
+                messagebox.showerror("Datei oeffnen", str(exc))
+
+        def loeschen_zip():
+            sel = zip_tree.selection()
+            if not sel:
+                messagebox.showinfo("Loeschen", "Bitte zuerst ein Archiv auswaehlen.")
+                return
+            a = zip_map.get(sel[0])
+            if not a:
+                return
+            pwd = simpledialog.askstring("Admin-Bereich",
+                                          "Admin-Passwort eingeben (Archiv wird endgueltig geloescht):",
+                                          show="*")
+            if pwd is None:
+                return
+            if pwd != ADMIN_DB_PASSWORD:
+                messagebox.showerror("Admin-Bereich", "Passwort falsch.")
+                return
+            ok = messagebox.askyesno("Archiv loeschen",
+                                      f"Archiv endgueltig loeschen?\n\n{a['name']}\n\n"
+                                      "Die enthaltenen Auswertungen sind danach unwiderruflich weg.")
+            if not ok:
+                return
+            try:
+                loesche_archiv(a["pfad"])
+            except Exception as exc:
+                messagebox.showerror("Loeschen", str(exc))
+                return
+            self._log_action("archiv", "Archiv geloescht", a["name"])
+            reload_zips()
+            messagebox.showinfo("Loeschen", f"Archiv {a['name']} geloescht.")
+
+        zip_tree.bind("<<TreeviewSelect>>", on_zip_select)
+        inh_tree.bind("<Double-1>", on_inh_dbl)
+
+        btn_bar = tk.Frame(win, bg="#ffffff")
+        btn_bar.grid(row=2, column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 14))
+        tk.Button(btn_bar, text="Aktualisieren", command=reload_zips,
+                  bg="#0b4a86", fg="white", relief="flat",
+                  font=("Arial", 10, "bold"), padx=12, pady=6).pack(side="left")
+        tk.Button(btn_bar, text="Archiv-Ordner oeffnen",
+                  command=lambda: _open_folder(ensure_archiv_dir()),
+                  padx=12, pady=6).pack(side="left", padx=(8, 0))
+        tk.Button(btn_bar, text="🔐 Archiv endgueltig loeschen",
+                  command=loeschen_zip,
+                  bg="#9b1c1c", fg="white", relief="flat",
+                  font=("Arial", 10, "bold"), padx=12, pady=6).pack(side="right")
+        tk.Button(btn_bar, text="Schliessen", command=win.destroy,
+                  padx=12, pady=6).pack(side="right", padx=(0, 8))
+
+        reload_zips()
 
     def _table_exists(self, table_name):
         with sqlite3.connect(DB_PATH) as con:
