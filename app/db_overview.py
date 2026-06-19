@@ -58,6 +58,11 @@ TABLE_DESCRIPTIONS = {
         "zweck": "Offizieller NMG-/PK-Artikelstamm.",
         "inhalt": "PZN, Artikelname, Hersteller, APU, Taxe, Menge, Wirkstoffe",
     },
+    "tbl_wirkstoff_staerke": {
+        "name": "Wirkstoff/Stärke",
+        "zweck": "Wirkstoff und Stärke je PZN für die Vergleichs-Suche.",
+        "inhalt": "PZN, Wirkstoff, Stärke, Quelle, Importdatum",
+    },
     "nmg_rabatte": {
         "name": "NMG-Rabatte",
         "zweck": "Rabattinformationen zu NMG-Artikeln.",
@@ -186,6 +191,19 @@ def ensure_known_overview_tables() -> None:
                 status TEXT NOT NULL DEFAULT 'neu',
                 erstellt_am TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 bearbeitet_am TEXT
+            )
+            """
+        )
+        # V1.1 SP2: Wirkstoff/Staerke-Tabelle damit sie in der Uebersicht
+        # auch sichtbar ist, bevor der erste Import lief.
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tbl_wirkstoff_staerke (
+                pzn TEXT PRIMARY KEY,
+                wirkstoff TEXT,
+                staerke TEXT,
+                quelle TEXT NOT NULL DEFAULT 'Import',
+                importdatum TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
         )

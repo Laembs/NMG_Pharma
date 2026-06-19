@@ -1,13 +1,16 @@
-"""SP31: Vergleichs-Such-Tool.
+"""SP31 / V1.1 SP2: Vergleichs-Such-Tool.
 
-Sucht uebergreifend in den vier Wissens-Tabellen:
-- tbl_austauschdatenbank (pzn_alt, pzn_nmg, artikel_alt, artikel_nmg, freitext_austausch)
-- tbl_nmg_stamm          (pzn, artikelname, herstellerkuerzel, apu)
-- tbl_artikelstamm       (pzn, artikel, df, pck, herst, ek)
-- tbl_pzn_basisdaten     (pzn, artikelname, herstellerkuerzel, df, pck)
+Sucht uebergreifend in den Wissens-Tabellen:
+- tbl_austauschdatenbank   (pzn_alt, pzn_nmg, artikel_alt, artikel_nmg, freitext_austausch)
+- tbl_nmg_stamm            (pzn, artikelname, herstellerkuerzel, apu)
+- tbl_artikelstamm         (pzn, artikel, df, pck, herst, ek)
+- tbl_pzn_basisdaten       (pzn, artikelname, herstellerkuerzel, df, pck)
+- tbl_wirkstoff_staerke    (pzn, wirkstoff, staerke) - V1.1 SP2
 
 Eingabe ist entweder eine PZN (Ziffern, optional mit '/N'-Suffix) oder ein
-Artikelname. Treffer werden pro normalisierter PZN dedupliziert.
+Textbegriff. Bei Text wird parallel gesucht in:
+  Artikelname, Wirkstoff, Hersteller, Staerke (Freitext_Austausch zusaetzlich
+  in der Austauschdatenbank). Treffer pro normalisierter PZN dedupliziert.
 
 Performance: gespeicherte PZNs sind beim Import bereits auf 8 Ziffern
 normalisiert. Die Suche kann deshalb direkt mit `pzn LIKE '%digits%'` arbeiten
@@ -64,7 +67,8 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
         pzn_like = f"%{pzn_digits}%"
         name_like = f"%{q.lower()}%"
 
-        def add(pzn_raw, artikel=None, df=None, pck=None, herst=None, *, source=""):
+        def add(pzn_raw, artikel=None, df=None, pck=None, herst=None,
+                wirkstoff=None, staerke=None, *, source=""):
             pzn = _pzn_norm(pzn_raw)
             if not pzn:
                 return
@@ -74,6 +78,8 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                 "df": "",
                 "pck": "",
                 "herst": "",
+                "wirkstoff": "",
+                "staerke": "",
                 "ist_nmg": False,
                 "hat_austausch": False,
             })
@@ -85,6 +91,10 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                 row["pck"] = str(pck).strip()
             if herst and not row["herst"]:
                 row["herst"] = str(herst).strip()
+            if wirkstoff and not row["wirkstoff"]:
+                row["wirkstoff"] = str(wirkstoff).strip()
+            if staerke and not row["staerke"]:
+                row["staerke"] = str(staerke).strip()
             if source == "nmg":
                 row["ist_nmg"] = True
             if source == "austausch":
@@ -135,7 +145,7 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
         except sqlite3.OperationalError:
             pass
 
-        # --- 3. tbl_artikelstamm ---
+        # --- 3. tbl_artikelstamm (mit Hersteller-Match V1.1 SP2) ---
         try:
             if is_pzn:
                 rows = con.execute(
@@ -144,15 +154,18 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                 ).fetchall()
             else:
                 rows = con.execute(
-                    "SELECT pzn, artikel, df, pck, herst FROM tbl_artikelstamm WHERE LOWER(COALESCE(artikel,'')) LIKE ? LIMIT ?",
-                    (name_like, limit),
+                    """SELECT pzn, artikel, df, pck, herst FROM tbl_artikelstamm
+                       WHERE LOWER(COALESCE(artikel,'')) LIKE ?
+                          OR LOWER(COALESCE(herst,'')) LIKE ?
+                       LIMIT ?""",
+                    (name_like, name_like, limit),
                 ).fetchall()
             for r in rows:
                 add(r["pzn"], artikel=r["artikel"], df=r["df"], pck=r["pck"], herst=r["herst"])
         except sqlite3.OperationalError:
             pass
 
-        # --- 4. tbl_pzn_basisdaten ---
+        # --- 4. tbl_pzn_basisdaten (mit Hersteller-Match V1.1 SP2) ---
         try:
             if is_pzn:
                 rows = con.execute(
@@ -161,18 +174,39 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                 ).fetchall()
             else:
                 rows = con.execute(
-                    "SELECT pzn, artikelname, herstellerkuerzel, df, pck FROM tbl_pzn_basisdaten WHERE LOWER(COALESCE(artikelname,'')) LIKE ? LIMIT ?",
-                    (name_like, limit),
+                    """SELECT pzn, artikelname, herstellerkuerzel, df, pck FROM tbl_pzn_basisdaten
+                       WHERE LOWER(COALESCE(artikelname,'')) LIKE ?
+                          OR LOWER(COALESCE(herstellerkuerzel,'')) LIKE ?
+                       LIMIT ?""",
+                    (name_like, name_like, limit),
                 ).fetchall()
             for r in rows:
                 add(r["pzn"], artikel=r["artikelname"], df=r["df"], pck=r["pck"], herst=r["herstellerkuerzel"])
         except sqlite3.OperationalError:
             pass
 
+        # --- 5. tbl_wirkstoff_staerke (V1.1 SP2) ---
+        # Wirkstoff- und Staerke-Suche; PZN-Suche ist hier ueberfluessig, weil
+        # die Stammtabellen die PZN bereits abdecken. Nur fuer Text-Eingaben.
+        if not is_pzn:
+            try:
+                rows = con.execute(
+                    """SELECT pzn, wirkstoff, staerke FROM tbl_wirkstoff_staerke
+                       WHERE LOWER(COALESCE(wirkstoff,'')) LIKE ?
+                          OR LOWER(COALESCE(staerke,'')) LIKE ?
+                       LIMIT ?""",
+                    (name_like, name_like, limit),
+                ).fetchall()
+                for r in rows:
+                    add(r["pzn"], wirkstoff=r["wirkstoff"], staerke=r["staerke"])
+            except sqlite3.OperationalError:
+                pass
+
         # Fehlende Felder pro Treffer aus den Stammtabellen nachfuellen (PK-Lookup, billig).
         # Nur fuer Treffer die mindestens ein Feld noch leer haben.
         for pzn, row in results.items():
-            if row["artikel"] and row["df"] and row["pck"] and row["herst"]:
+            if (row["artikel"] and row["df"] and row["pck"] and row["herst"]
+                    and row["wirkstoff"] and row["staerke"]):
                 continue
             stamm = _lookup_stamm(con, pzn)
             if not row["artikel"] and stamm["artikel"]:
@@ -183,6 +217,10 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
                 row["pck"] = stamm["pck"]
             if not row["herst"] and stamm["herst"]:
                 row["herst"] = stamm["herst"]
+            if not row["wirkstoff"] and stamm.get("wirkstoff"):
+                row["wirkstoff"] = stamm["wirkstoff"]
+            if not row["staerke"] and stamm.get("staerke"):
+                row["staerke"] = stamm["staerke"]
 
         # ist_nmg-Markierung fuer Treffer, die nicht via NMG-Stamm gefunden wurden.
         # Eine einzige Sammelabfrage statt einer pro Treffer.
@@ -207,11 +245,13 @@ def search_unified(query: str, limit: int = 200) -> list[dict]:
 
 
 def _lookup_stamm(con, pzn_norm: str) -> dict:
-    """Vereinheitlichte Stammdaten zu einer PZN: artikel, df, pck, herst, apu, ek.
-    Reihenfolge: NMG-Stamm > Artikelstamm > Basisdaten (erst gefundener Wert pro Feld gewinnt).
+    """Vereinheitlichte Stammdaten zu einer PZN: artikel, df, pck, herst, apu, ek,
+    wirkstoff, staerke. Reihenfolge: NMG-Stamm > Artikelstamm > Basisdaten >
+    Wirkstoff/Staerke-Tabelle (erst gefundener Wert pro Feld gewinnt).
     PK-Lookups, keine UDF noetig.
     """
-    info = {"artikel": "", "df": "", "pck": "", "herst": "", "apu": None, "ek": None}
+    info = {"artikel": "", "df": "", "pck": "", "herst": "",
+            "apu": None, "ek": None, "wirkstoff": "", "staerke": ""}
     if not pzn_norm:
         return info
 
@@ -268,6 +308,20 @@ def _lookup_stamm(con, pzn_norm: str) -> dict:
                 info["df"] = r["df"]
             if not info["pck"] and r["pck"]:
                 info["pck"] = r["pck"]
+    except sqlite3.OperationalError:
+        pass
+
+    # V1.1 SP2: Wirkstoff + Staerke.
+    try:
+        r = con.execute(
+            "SELECT wirkstoff, staerke FROM tbl_wirkstoff_staerke WHERE pzn = ? LIMIT 1",
+            (pzn_norm,),
+        ).fetchone()
+        if r:
+            if r["wirkstoff"]:
+                info["wirkstoff"] = r["wirkstoff"]
+            if r["staerke"]:
+                info["staerke"] = r["staerke"]
     except sqlite3.OperationalError:
         pass
 
