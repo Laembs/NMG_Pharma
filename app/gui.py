@@ -6458,6 +6458,7 @@ LIMIT 500
                            LEFT JOIN tbl_nmg_stamm s ON s.pzn = r.nmg_pzn
                            ORDER BY r.rabatt DESC, r.nmg_pzn"""
                     ).fetchall()
+                    df_vocab = self._nmg_df_vocab(con)
             except Exception as exc:
                 rows = []
                 info_var.set(f"Fehler beim Laden der Rabatte: {exc}")
@@ -6469,9 +6470,12 @@ LIMIT 500
                     if q not in hay:
                         continue
                 pct = f"{float(r[4]) * 100:.1f} %" if r[4] is not None else ""
+                # SP20: DF fehlt in den Basisdaten oft -> aus dem Artikelnamen
+                # ableiten (Kuerzel wie ILO/FER/PEN, Vokabular aus den Basisdaten).
+                df_val = r[2] or self._derive_df_from_name(r[1], df_vocab)
                 # iid = PZN (Primary Key) -> Doppelklick findet die Zeile wieder.
                 tv.insert("", "end", iid=str(r[0]),
-                          values=(r[0], r[1] or "", r[2] or "", r[3] or "", pct, r[5] or "", r[6] or "", r[7] or ""))
+                          values=(r[0], r[1] or "", df_val or "", r[3] or "", pct, r[5] or "", r[6] or "", r[7] or ""))
                 shown += 1
             info_var.set(f"{shown} von {len(rows)} Eintraegen")
 
@@ -6631,6 +6635,39 @@ LIMIT 500
 
         self.status.set("NMG-Rabatte-Uebersicht geladen.")
 
+    @staticmethod
+    def _nmg_df_vocab(con):
+        """V1.1 SP20: Vokabular bekannter DF-Kuerzel aus den Basisdaten.
+
+        Die Darreichungsform (DF) ist nur in tbl_pzn_basisdaten als eigene Spalte
+        gepflegt und dort duenn. Die Kuerzel (ILO, FER, PEN, IFK, ...) tauchen aber
+        auch im Artikelnamen auf. Wir sammeln die real existierenden DF-Codes als
+        Vokabular, um sie spaeter aus dem Namen ableiten zu koennen.
+        """
+        try:
+            rows = con.execute(
+                "SELECT DISTINCT df FROM tbl_pzn_basisdaten WHERE df IS NOT NULL AND TRIM(df)<>''"
+            ).fetchall()
+        except Exception:
+            return set()
+        vocab = set()
+        for (d,) in rows:
+            t = (d or "").strip().upper()
+            if 2 <= len(t) <= 5 and t.isalpha():
+                vocab.add(t)
+        return vocab
+
+    @staticmethod
+    def _derive_df_from_name(name, vocab):
+        """V1.1 SP20: DF-Kuerzel aus dem Artikelnamen ziehen (erstes Vokab-Token)."""
+        if not name or not vocab:
+            return None
+        import re
+        for tok in re.findall(r"[A-Za-zÄÖÜäöü]+", str(name).upper()):
+            if tok in vocab:
+                return tok
+        return None
+
     def _edit_nmg_rabatt(self, nmg_pzn, on_saved=None):
         """V1.1 SP20: Dialog zum Bearbeiten eines einzelnen NMG-Rabatts.
 
@@ -6658,6 +6695,7 @@ LIMIT 500
                        WHERE r.nmg_pzn = ?""",
                     (str(nmg_pzn),),
                 ).fetchone()
+                df_vocab = self._nmg_df_vocab(con)
         except Exception as exc:
             messagebox.showerror("Fehler", f"Rabatt konnte nicht geladen werden:\n{exc}")
             return
@@ -6666,6 +6704,9 @@ LIMIT 500
             return
 
         artikel, rabatt_alt, gueltig_ab_alt, df, pck = row[0], row[1], row[2], row[3], row[4]
+        # SP20: DF aus dem Artikelnamen ableiten, wenn die Basisdaten keine fuehren.
+        if not df:
+            df = self._derive_df_from_name(artikel, df_vocab)
 
         dlg = tk.Toplevel(self)
         dlg.title(f"Rabatt bearbeiten – PZN {nmg_pzn}")
