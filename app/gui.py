@@ -5623,6 +5623,9 @@ class NMGApp(tk.Tk):
         tk.Label(header,
                  text=_T("PZN, Artikelname, Wirkstoff, Hersteller oder Staerke eingeben (ab 3 Zeichen)."),
                  font=("Arial", 9), fg="#666", bg="#ffffff").pack(anchor="w", pady=(2, 0))
+        tk.Label(header,
+                 text=_T("Filter mit # ergaenzen: #nmg  #austausch  #schulbank  #wirkstoff  #herst   (UND-Logik)"),
+                 font=("Arial", 9), fg="#0b6e6e", bg="#ffffff").pack(anchor="w", pady=(1, 0))
 
         body = tk.Frame(win, bg="#ffffff")
         body.pack(fill="both", expand=True, padx=18, pady=(4, 14))
