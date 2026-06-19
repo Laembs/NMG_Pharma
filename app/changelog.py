@@ -5,6 +5,19 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V1.1 SP12", "2026-06-19", [
+        "Gespeicherte Analysen: Refresh nach Admin-Loeschen funktioniert wieder.",
+        "Gespeicherte Analysen: 'Item end not found'-Fehler bei Seitenwechsel weg (defensive Guards).",
+        "Manuelle Analysen Import: Fortschritts-Dialog (Busy-Modal) statt eingefrorenes UI.",
+        "Manuelle Imports: Original-Datei wird in importierte_analysen/<PK|ZF>/<Jahr>/Q<n>/ kopiert.",
+        "Kalender-Popup schliesst beim Klick ausserhalb.",
+        "Dashboard-Editor: Fenster groesser, Speicher-Button immer sichtbar.",
+        "Dashboard: 'Alles abwaehlen' funktioniert jetzt wirklich (Sentinel _NONE_ vs _EMPTY_).",
+        "Globale Suche auf Startseite: Tabelle nur sichtbar wenn Treffer da; Hoehe nur 3 Zeilen.",
+        "Produktanalyse: nur Artikel mit Namen im Artikelstamm.",
+        "Re-Import: 'schon importiert' greift nur, wenn die Auswertung noch lebt.",
+        "Neue Ordner-Struktur: ausgaben/<Kategorie>/<Jahr>/Q<n>/ und importierte_analysen/<PK|ZF>/<Jahr>/Q<n>/.",
+    ]),
     ("V1.1 SP11", "2026-06-19", [
         "Produktanalyse: Basis-Info-Zeile und Beschreibungs-Zeile in den Excel-Sheets entfernt (Zeile 2 + 3).",
         "Versionsinfo: neue Seite mit Liste aller Versionen und Changelog pro Version.",

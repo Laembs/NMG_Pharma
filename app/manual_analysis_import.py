@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import shutil
 import sqlite3
 from pathlib import Path
 from datetime import datetime
@@ -10,9 +11,36 @@ from typing import Iterable
 
 from openpyxl import Workbook, load_workbook
 
-from .config import DB_PATH
+from .config import DB_PATH, IMPORT_DIR, jahr_quartal_pfad
 from .db import connect, init_db, _pzn
 from .historical_import import import_historical_market_file
+
+
+def _kopiere_in_archivordner(path: Path, analyse_typ: str) -> Path:
+    """V1.1 SP12: Kopiert die Original-Datei nach
+    IMPORT_DIR/<analyse_typ>/<Jahr>/Q<n>/ und liefert den Ziel-Pfad zurueck.
+    analyse_typ: 'PK' oder 'ZF'. Dateiname bleibt erhalten; bei Konflikt
+    wird ein _2, _3, ... angehaengt.
+    """
+    target_dir = jahr_quartal_pfad(IMPORT_DIR / analyse_typ)
+    target = target_dir / path.name
+    if target.exists():
+        # Schon eine Datei mit dem Namen da -> Suffix anhaengen.
+        stem, suffix = target.stem, target.suffix
+        counter = 2
+        while True:
+            candidate = target_dir / f"{stem}_{counter}{suffix}"
+            if not candidate.exists():
+                target = candidate
+                break
+            counter += 1
+    try:
+        shutil.copy2(path, target)
+    except Exception:
+        # Kopie ist Best-Effort - wenn sie scheitert (Permissions o.ae.),
+        # bleibt der Original-Pfad in tbl_importierte_analysen erhalten.
+        return path
+    return target
 
 
 class ManualAnalysisFormatError(Exception):
@@ -348,6 +376,12 @@ def import_manual_analysis_files(paths: Iterable[str | Path], analyse_typ: str, 
                 result = import_historical_market_file(readable, datenquelle=datenquelle, analyse_name=path.stem)
                 rows_imported = int(result.get("rows", 0) or result.get("imported", 0) or 0)
 
+                # V1.1 SP12: Originaldatei in den passenden PK-/ZF-Ordner unter
+                # gespeicherte_analysen kopieren. Auch in tbl_auswertungen den
+                # ausgabedatei-Wert auf den Archiv-Pfad setzen, damit
+                # "Auswertung oeffnen" in der GUI funktioniert.
+                archiv_pfad = _kopiere_in_archivordner(path, analyse_typ)
+
                 with connect(DB_PATH) as con:
                     con.row_factory = sqlite3.Row
                     _ensure_tables(con)
@@ -355,6 +389,17 @@ def import_manual_analysis_files(paths: Iterable[str | Path], analyse_typ: str, 
                     suggestions = _insert_learning_suggestions(con, readable, path.name, bearbeiter)
                     if suggestions == 0 and auswertung_id:
                         suggestions = _insert_learning_suggestions_from_auswertung(con, auswertung_id, path.name, bearbeiter)
+                    # ausgabedatei in tbl_auswertungen auf Archiv-Pfad setzen,
+                    # damit der "Auswertung oeffnen"-Button in der GUI direkt
+                    # die kopierte Datei oeffnet.
+                    if auswertung_id is not None:
+                        try:
+                            con.execute(
+                                "UPDATE tbl_auswertungen SET ausgabedatei=? WHERE id=?",
+                                (str(archiv_pfad), auswertung_id),
+                            )
+                        except Exception:
+                            pass
                     if existing_stale_id is not None:
                         # Verwaister Hash-Eintrag -> mit neuer auswertung_id ueberschreiben.
                         con.execute(
@@ -363,7 +408,7 @@ def import_manual_analysis_files(paths: Iterable[str | Path], analyse_typ: str, 
                                    status='importiert', importiert_am=CURRENT_TIMESTAMP,
                                    bearbeiter=?, bemerkung=?
                                WHERE id=?""",
-                            (str(path), size, analyse_typ, auswertung_id, bearbeiter,
+                            (str(archiv_pfad), size, analyse_typ, auswertung_id, bearbeiter,
                              f"Positionen: {rows_imported}; Schulbank-Vorschläge: {suggestions} (Re-Import)",
                              existing_stale_id),
                         )
@@ -375,7 +420,7 @@ def import_manual_analysis_files(paths: Iterable[str | Path], analyse_typ: str, 
                                 auswertung_id, status, importiert_am, bearbeiter, bemerkung
                             ) VALUES (?, ?, ?, ?, ?, ?, 'importiert', CURRENT_TIMESTAMP, ?, ?)
                             """,
-                            (path.name, str(path), size, digest, analyse_typ, auswertung_id, bearbeiter, f"Positionen: {rows_imported}; Schulbank-Vorschläge: {suggestions}"),
+                            (path.name, str(archiv_pfad), size, digest, analyse_typ, auswertung_id, bearbeiter, f"Positionen: {rows_imported}; Schulbank-Vorschläge: {suggestions}"),
                         )
                     con.commit()
 

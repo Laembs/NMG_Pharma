@@ -62,6 +62,7 @@ if USERDATA_ROOT:
     DATA_DIR = USERDATA_ROOT / "data"
     OUTPUT_DIR = USERDATA_ROOT / "ausgaben"
     SAVED_ANALYSES_DIR = USERDATA_ROOT / "gespeicherte_analysen"
+    IMPORT_DIR = USERDATA_ROOT / "importierte_analysen"
     BACKUP_DIR = USERDATA_ROOT / "backups"
     UPDATE_DIR = USERDATA_ROOT / "updates"
     LOG_DIR = USERDATA_ROOT / "logs"
@@ -69,9 +70,31 @@ else:
     DATA_DIR = BASE_DIR / "data"
     OUTPUT_DIR = BASE_DIR / "ausgaben"
     SAVED_ANALYSES_DIR = BASE_DIR / "gespeicherte_analysen"
+    IMPORT_DIR = BASE_DIR / "importierte_analysen"
     BACKUP_DIR = BASE_DIR / "backups"
     UPDATE_DIR = BASE_DIR / "updates"
     LOG_DIR = BASE_DIR / "logs"
+
+
+def jahr_quartal_pfad(base, kategorie: str = "", dt=None):
+    """V1.1 SP12: Liefert einen Ausgabe-Pfad nach Schema
+        base/[kategorie]/<Jahr>/Q<n>/
+    Erstellt das Verzeichnis falls noetig.
+
+    Wenn kategorie leer ist, wird der Kategorie-Schritt uebersprungen
+    (z.B. fuer base = importierte_analysen/PK ist die Kategorie bereits
+    im base-Pfad enthalten).
+    """
+    from datetime import datetime as _dt
+    if dt is None:
+        dt = _dt.now()
+    quartal = (dt.month - 1) // 3 + 1
+    p = Path(base)
+    if kategorie:
+        p = p / kategorie
+    p = p / str(dt.year) / f"Q{quartal}"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
 ASSETS_DIR = BASE_DIR / "assets"
 VERSION_FILE = BASE_DIR / "version.json"
@@ -100,7 +123,7 @@ def _copy_seed_data_if_needed() -> None:
     Bestehende Datenbanken und Nutzerdaten werden nicht ueberschrieben.
     Diese Recovery-Version liefert den Lernstand aus Prototyp 2.6 als Startbestand mit.
     """
-    for folder in [DATA_DIR, OUTPUT_DIR, SAVED_ANALYSES_DIR, BACKUP_DIR, UPDATE_DIR, LOG_DIR]:
+    for folder in [DATA_DIR, OUTPUT_DIR, SAVED_ANALYSES_DIR, IMPORT_DIR, BACKUP_DIR, UPDATE_DIR, LOG_DIR]:
         folder.mkdir(parents=True, exist_ok=True)
 
     if DB_PATH.exists() and DB_PATH.stat().st_size > 1024:
