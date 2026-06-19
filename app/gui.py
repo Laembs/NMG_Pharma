@@ -4053,160 +4053,260 @@ class NMGApp(tk.Tk):
             row=1, column=0, columnspan=4, sticky="w", padx=8, pady=(0,3))
         entry.bind("<Return>", lambda e: speichern_notiz())
 
-    # SP16: Austausch-Suche-Widget auf der Startseite ─────────────────────────
-    def _austausch_pzn_clean(self, raw: str) -> str:
-        s = (raw or "").strip()
-        digits = "".join(ch for ch in s if ch.isdigit())
-        if not digits:
-            return ""
-        # Auf 8 Stellen mit fuehrenden Nullen normalisieren (PZN-Standard).
-        return digits.zfill(8) if len(digits) <= 8 else digits
-
-    def _austausch_lookup(self, pzn: str) -> list[dict]:
-        """SP16: Sucht die Austausch-Eintraege fuer eine alte PZN. Reichert
-        die Treffer mit Stammdaten aus tbl_artikelstamm und tbl_nmg_stamm an.
+    # V1.1 SP7: Globale Suche auf der Startseite ──────────────────────────────
+    def _global_search(self, q: str, limit_per_typ: int = 25) -> list[dict]:
+        """V1.1 SP7: Sucht parallel in Kunden, gespeicherten Analysen und
+        Artikeln. Liefert Liste von dicts mit:
+            typ:     'kunde' | 'analyse' | 'artikel'
+            label:   Hauptbezeichnung fuer die Treeview
+            detail:  Kontextinfo (PZN, Datum, etc.)
+            payload: dict mit Aktion-Info (kundennummer, datei, pzn, ...)
         """
-        if not pzn:
+        q = (q or "").strip()
+        if len(q) < 2:
             return []
-        # Sicherstellen dass die Tabelle existiert (frische DB / Migration).
+        like = f"%{q.lower()}%"
+        out: list[dict] = []
+
         try:
-            from .austausch_db import ensure_austauschdatenbank_table
-            ensure_austauschdatenbank_table()
+            with sqlite3.connect(DB_PATH) as con:
+                con.row_factory = sqlite3.Row
+
+                # --- Kunden (PK + ZF zusammen) ---
+                for tbl, typlabel in (("tbl_pk_kunden", "PK"), ("tbl_zf_kunden", "ZF")):
+                    try:
+                        rows = con.execute(f"""
+                            SELECT kundennummer, kundenname, apotheke, status
+                            FROM {tbl}
+                            WHERE LOWER(COALESCE(kundennummer,'')) LIKE ?
+                               OR LOWER(COALESCE(kundenname,'')) LIKE ?
+                               OR LOWER(COALESCE(apotheke,'')) LIKE ?
+                            LIMIT ?
+                        """, (like, like, like, limit_per_typ)).fetchall()
+                        for r in rows:
+                            label = r["kundenname"] or r["apotheke"] or r["kundennummer"] or "(ohne Name)"
+                            details = []
+                            if r["kundennummer"]:
+                                details.append(f"#{r['kundennummer']}")
+                            if r["apotheke"] and r["apotheke"] != label:
+                                details.append(r["apotheke"])
+                            if r["status"]:
+                                details.append(r["status"])
+                            out.append({
+                                "typ": "kunde",
+                                "typlabel": f"Kunde {typlabel}",
+                                "label": label,
+                                "detail": " · ".join(details),
+                                "payload": {
+                                    "kundennummer": r["kundennummer"] or "",
+                                    "kundenname": r["kundenname"] or "",
+                                    "apotheke": r["apotheke"] or "",
+                                    "search_value": r["kundennummer"] or r["kundenname"] or r["apotheke"] or "",
+                                },
+                            })
+                    except sqlite3.OperationalError:
+                        pass
+
+                # --- Analysen ---
+                try:
+                    rows = con.execute("""
+                        SELECT id, apotheke, kundennummer, kundenname, datum,
+                               ausgabedatei, anzahl_positionen, COALESCE(datenquelle,'NMG') AS datenquelle
+                        FROM tbl_auswertungen
+                        WHERE LOWER(COALESCE(apotheke,'')) LIKE ?
+                           OR LOWER(COALESCE(kundennummer,'')) LIKE ?
+                           OR LOWER(COALESCE(kundenname,'')) LIKE ?
+                        ORDER BY datetime(datum) DESC
+                        LIMIT ?
+                    """, (like, like, like, limit_per_typ)).fetchall()
+                    for r in rows:
+                        label = r["apotheke"] or r["kundenname"] or f"Analyse #{r['id']}"
+                        details = []
+                        if r["datum"]:
+                            details.append(str(r["datum"])[:10])
+                        if r["datenquelle"]:
+                            details.append("PK" if r["datenquelle"] == "NMG" else r["datenquelle"])
+                        if r["anzahl_positionen"]:
+                            details.append(f"{r['anzahl_positionen']} Pos.")
+                        out.append({
+                            "typ": "analyse",
+                            "typlabel": "Analyse",
+                            "label": label,
+                            "detail": " · ".join(details),
+                            "payload": {
+                                "id": r["id"],
+                                "ausgabedatei": r["ausgabedatei"] or "",
+                            },
+                        })
+                except sqlite3.OperationalError:
+                    pass
         except Exception:
             pass
-        sql = """
-            SELECT
-                ad.pzn_alt,
-                ad.pzn_nmg,
-                COALESCE(NULLIF(ad.freitext_austausch, ''), '') AS freitext,
-                COALESCE(ad.status, '') AS status,
-                COALESCE(ad.quelle, '') AS quelle,
-                COALESCE(ast_alt.artikel, '') AS artikel_alt,
-                COALESCE(ast_alt.df, '')      AS df_alt,
-                COALESCE(ast_alt.pck, '')     AS pck_alt,
-                COALESCE(ast_alt.herst, '')   AS herst_alt,
-                COALESCE(ast_nmg.artikel, '') AS artikel_nmg_stamm,
-                COALESCE(ast_nmg.df, '')      AS df_nmg,
-                COALESCE(ast_nmg.pck, '')     AS pck_nmg,
-                COALESCE(ast_nmg.herst, '')   AS herst_nmg_stamm,
-                COALESCE(nmg.artikelname, '') AS artikel_nmg_offiziell,
-                COALESCE(nmg.herstellerkuerzel, '') AS herst_nmg_offiziell,
-                nmg.taxe_ek AS taxe_ek_nmg
-            FROM tbl_austauschdatenbank ad
-            LEFT JOIN tbl_artikelstamm ast_alt ON ast_alt.pzn = ad.pzn_alt
-            LEFT JOIN tbl_artikelstamm ast_nmg ON ast_nmg.pzn = ad.pzn_nmg
-            LEFT JOIN tbl_nmg_stamm    nmg     ON nmg.pzn     = ad.pzn_nmg
-            WHERE ad.pzn_alt = ?
-              AND COALESCE(ad.status, 'aktiv') = 'aktiv'
-            ORDER BY COALESCE(ad.aktualisiert_am, ad.erstellt_am) DESC
-        """
-        with sqlite3.connect(DB_PATH) as con:
-            con.row_factory = sqlite3.Row
-            return [dict(r) for r in con.execute(sql, (pzn,)).fetchall()]
 
-    def _austausch_suche_widget(self, parent):
-        """SP16: Suchwidget oben auf der Startseite. PZN eingeben ->
-        zeigt den NMG-Austausch mit Artikelnamen, DF, PCK und Hersteller
-        aus dem Artikelstamm bzw. NMG-Stamm.
+        # --- Artikel (via Vergleichs-Suche, nur wenn Begriff >= 3 Zeichen) ---
+        if len(q) >= 3:
+            try:
+                hits = search_unified(q, limit=limit_per_typ)
+                for r in hits:
+                    label = r.get("artikel") or r.get("pzn") or "(ohne Name)"
+                    details = []
+                    if r.get("pzn"):
+                        details.append(f"PZN {r['pzn']}")
+                    if r.get("herst"):
+                        details.append(r["herst"])
+                    if r.get("ist_nmg"):
+                        details.append("NMG")
+                    out.append({
+                        "typ": "artikel",
+                        "typlabel": "Artikel",
+                        "label": label,
+                        "detail": " · ".join(details),
+                        "payload": {"pzn": r.get("pzn", ""), "query": q},
+                    })
+            except Exception:
+                pass
+
+        return out
+
+    def _global_search_dispatch(self, entry: dict) -> None:
+        """V1.1 SP7: Verzweigt die Aktion abhaengig vom Typ des Treffers."""
+        typ = entry.get("typ")
+        payload = entry.get("payload") or {}
+        if typ == "kunde":
+            # Such-Wert fuer das Kunden-Center vormerken, dann Seite oeffnen.
+            self._kunden_center_pre_search = payload.get("search_value", "")
+            self.show_kunden_center()
+        elif typ == "analyse":
+            datei = payload.get("ausgabedatei", "")
+            if datei and Path(datei).exists():
+                try:
+                    _open_file(Path(datei))
+                except Exception as exc:
+                    messagebox.showerror("Analyse oeffnen", str(exc))
+            else:
+                self.open_saved_analyses()
+        elif typ == "artikel":
+            # Vergleichs-Suche oeffnen, dann das Such-Wort eintragen.
+            self._vergleichssuche_pre_query = payload.get("query", "")
+            self.open_vergleichssuche_window()
+
+    def _global_suche_widget(self, parent):
+        """V1.1 SP7: Globales Such-Widget oben auf der Startseite.
+        Sucht parallel in Kunden, gespeicherten Analysen und Artikeln.
+        Doppelklick oder Button 'Anzeigen' springt zum passenden Bereich.
         """
         box = tk.Frame(parent, bg="#e8f1fb", highlightbackground="#a8c5e8", highlightthickness=1)
         box.pack(fill="x", padx=18, pady=(10, 0))
 
         head = tk.Frame(box, bg="#e8f1fb")
         head.pack(fill="x", padx=10, pady=(8, 4))
-        tk.Label(head, text="🔄  Austausch-Suche",
+        tk.Label(head, text="🔍  Globale Suche",
                  font=("Arial", 12, "bold"), fg="#0b4a86", bg="#e8f1fb").pack(side="left")
-        tk.Label(head, text="alte PZN eingeben -> NMG-Ersatz finden",
+        tk.Label(head, text="Kunde, Analyse oder Artikel suchen (ab 2 Zeichen) - Doppelklick oeffnet",
                  font=("Arial", 9), fg="#555", bg="#e8f1fb").pack(side="left", padx=(10, 0))
 
         entry_row = tk.Frame(box, bg="#e8f1fb")
         entry_row.pack(fill="x", padx=10, pady=(0, 6))
 
-        pzn_var = tk.StringVar()
-        entry = tk.Entry(entry_row, textvariable=pzn_var, font=("Consolas", 12), width=18)
-        entry.pack(side="left", padx=(0, 6))
+        query_var = tk.StringVar()
+        entry = tk.Entry(entry_row, textvariable=query_var, font=("Arial", 11), width=50)
+        entry.pack(side="left", padx=(0, 8))
 
-        result_text = tk.Text(box, height=6, font=("Consolas", 9), bg="#ffffff",
-                              fg="#222", relief="flat", padx=8, pady=4, wrap="word")
-        result_text.pack(fill="x", padx=10, pady=(0, 8))
-        result_text.configure(state="disabled")
+        status_lbl = tk.Label(entry_row, text="", bg="#e8f1fb", fg="#555", font=("Arial", 9))
+        status_lbl.pack(side="left")
 
-        def _show_result(lines: list[str], color: str = "#222"):
-            result_text.configure(state="normal", fg=color)
-            result_text.delete("1.0", "end")
-            result_text.insert("end", "\n".join(lines))
-            result_text.configure(state="disabled")
+        # Treeview fuer Treffer.
+        tree_frame = tk.Frame(box, bg="#e8f1fb")
+        tree_frame.pack(fill="x", padx=10, pady=(0, 8))
+        cols = ("typ", "label", "detail")
+        heads = {"typ": "Typ", "label": "Bezeichnung", "detail": "Details"}
+        widths = {"typ": 90, "label": 360, "detail": 260}
+        tree = ttk.Treeview(tree_frame, columns=cols, show="headings", selectmode="browse", height=6)
+        for c in cols:
+            tree.heading(c, text=heads[c])
+            tree.column(c, width=widths[c], anchor="w", stretch=(c == "label"))
+        tree.pack(side="left", fill="x", expand=True)
+        sb = tk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        sb.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=sb.set)
 
-        def _format_row(r: dict) -> list[str]:
-            lines = []
-            alt_info = f"Alt: PZN {r['pzn_alt']}"
-            if r['artikel_alt']:
-                alt_info += f" - {r['artikel_alt']}"
-            extras = " | ".join(filter(None, [r.get('df_alt'), r.get('pck_alt'), r.get('herst_alt')]))
-            if extras:
-                alt_info += f"  ({extras})"
-            lines.append(alt_info)
+        row_map: dict[str, dict] = {}
+        pending = {"id": None}
+        seq = {"current": 0}
 
-            nmg_pzn = r['pzn_nmg'] or "(keine PZN hinterlegt)"
-            nmg_art = r['artikel_nmg_offiziell'] or r['artikel_nmg_stamm']
-            nmg_herst = r['herst_nmg_offiziell'] or r['herst_nmg_stamm']
-            nmg_info = f"-> NMG: PZN {nmg_pzn}"
-            if nmg_art:
-                nmg_info += f" - {nmg_art}"
-            nmg_extras = " | ".join(filter(None, [r.get('df_nmg'), r.get('pck_nmg'), nmg_herst]))
-            if nmg_extras:
-                nmg_info += f"  ({nmg_extras})"
-            lines.append(nmg_info)
+        def render(rows: list[dict]):
+            for iid in tree.get_children():
+                tree.delete(iid)
+            row_map.clear()
+            for entry in rows:
+                iid = tree.insert("", "end", values=(
+                    entry["typlabel"], entry["label"], entry["detail"],
+                ))
+                row_map[iid] = entry
+            status_lbl.configure(text=f"{len(rows)} Treffer" if rows else "")
 
-            if r['freitext']:
-                lines.append(f"Austausch-Text: {r['freitext']}")
-            if r['taxe_ek_nmg']:
-                lines.append(f"NMG Taxe-EK: {r['taxe_ek_nmg']:.2f} EUR")
-            if r['quelle']:
-                lines.append(f"Quelle: {r['quelle']}")
-            return lines
-
-        def do_search(event=None):
-            raw = pzn_var.get()
-            pzn = self._austausch_pzn_clean(raw)
-            if not pzn:
-                _show_result(["Bitte eine PZN eingeben (mindestens eine Ziffer)."], "#a55")
+        def do_search():
+            pending["id"] = None
+            q = query_var.get().strip()
+            if len(q) < 2:
+                render([])
+                status_lbl.configure(text="Mindestens 2 Zeichen.")
                 return
-            try:
-                results = self._austausch_lookup(pzn)
-            except Exception as exc:
-                _show_result([f"Suche fehlgeschlagen: {exc}"], "#a55")
-                return
-            if not results:
-                _show_result([
-                    f"Keine Austausch-Eintraege fuer PZN {pzn} gefunden.",
-                    "",
-                    "Mögliche Gründe:",
-                    "- PZN stimmt nicht (auf 8 Stellen normalisiert)",
-                    "- Austauschdatenbank ist noch nicht importiert (Daten aktualisieren -> Austauschdatenbank)",
-                ], "#888")
-                return
-            lines = []
-            for idx, r in enumerate(results, start=1):
-                if idx > 1:
-                    lines.append("")
-                if len(results) > 1:
-                    lines.append(f"Treffer {idx}/{len(results)}:")
-                lines.extend(_format_row(r))
-            _show_result(lines)
+            status_lbl.configure(text="Suche ...")
+            seq["current"] += 1
+            my_id = seq["current"]
 
-        tk.Button(entry_row, text="🔍  Suchen", command=do_search,
+            def worker():
+                try:
+                    result = self._global_search(q, limit_per_typ=25)
+                except Exception as exc:
+                    result = exc
+
+                def apply():
+                    if my_id != seq["current"]:
+                        return
+                    if isinstance(result, Exception):
+                        status_lbl.configure(text=f"Fehler: {result}")
+                        return
+                    render(result)
+
+                try:
+                    parent.after(0, apply)
+                except Exception:
+                    pass
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def on_key(_e=None):
+            if pending["id"]:
+                try:
+                    parent.after_cancel(pending["id"])
+                except Exception:
+                    pass
+            pending["id"] = parent.after(250, do_search)
+
+        def open_selected(_e=None):
+            sel = tree.selection()
+            if not sel:
+                return
+            entry = row_map.get(sel[0])
+            if entry:
+                self._global_search_dispatch(entry)
+
+        entry.bind("<KeyRelease>", on_key)
+        entry.bind("<Return>", lambda _e: do_search())
+        tree.bind("<Double-1>", open_selected)
+        tree.bind("<Return>", open_selected)
+
+        tk.Button(entry_row, text="🔍  Anzeigen", command=open_selected,
                   bg="#0b4a86", fg="white", relief="flat",
                   font=("Arial", 10, "bold"), padx=14, pady=4).pack(side="left", padx=(0, 6))
 
         def _clear():
-            pzn_var.set("")
-            _show_result([])
+            query_var.set("")
+            render([])
             entry.focus_set()
         tk.Button(entry_row, text="Leeren", command=_clear, padx=10, pady=4).pack(side="left")
-
-        entry.bind("<Return>", do_search)
-        _show_result(["Bereit. PZN eingeben und Enter druecken."], "#888")
 
     def show_startseite(self):
         self.clear_page()
@@ -4290,8 +4390,10 @@ class NMGApp(tk.Tk):
             pady=6,
         ).pack(side="right", padx=14, pady=8)
 
-        # --- SP16: Austausch-Suche (PZN -> NMG-Ersatz) ---
-        self._austausch_suche_widget(inner)
+        # --- V1.1 SP7: Globale Suche (Kunde / Analyse / Artikel) ---
+        # ersetzt das alte Austausch-Suche-Widget (SP16); die Vergleichs-Suche
+        # ist jetzt ein eigenes Tool und uebernimmt die Artikel-Recherche.
+        self._global_suche_widget(inner)
 
         # --- Schnellnotiz + Suche ---
         self._schnellnotiz_widget(inner)
@@ -5637,6 +5739,12 @@ class NMGApp(tk.Tk):
         tk.Label(toolbar, text=_T("Suche") + ":", bg="#ffffff",
                  fg="#0b4a86", font=("Arial", 10, "bold")).pack(side="left")
         search_var = tk.StringVar()
+        # V1.1 SP7: Pre-Search uebernehmen, falls aus der globalen Suche
+        # heraus geoeffnet (do_search wird nach Aufbau noch unten getriggert).
+        _vergleich_pre = getattr(self, "_vergleichssuche_pre_query", "") or ""
+        if _vergleich_pre:
+            search_var.set(_vergleich_pre)
+            self._vergleichssuche_pre_query = ""
         search_entry = tk.Entry(toolbar, textvariable=search_var, width=42, font=("Arial", 11))
         search_entry.pack(side="left", padx=(6, 12))
         status_label = tk.Label(toolbar, text="", bg="#ffffff", fg="#666", font=("Arial", 9))
@@ -5924,6 +6032,10 @@ class NMGApp(tk.Tk):
         win.lift()
         win.focus_force()
 
+        # V1.1 SP7: wenn ein Pre-Search aus der globalen Suche reinkam, direkt suchen.
+        if _vergleich_pre:
+            win.after(50, do_search)
+
     def show_kunden_center(self):
         """Neues Kunden-Center: Tabelle + Detail-Dialog mit Analysen und E-Mail."""
         self._ensure_center_tables()
@@ -5940,6 +6052,11 @@ class NMGApp(tk.Tk):
         toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
 
         search_var = tk.StringVar()
+        # V1.1 SP7: Pre-Search aus der globalen Startseiten-Suche uebernehmen.
+        pre = getattr(self, "_kunden_center_pre_search", "") or ""
+        if pre:
+            search_var.set(pre)
+            self._kunden_center_pre_search = ""
         tk.Label(toolbar, text="Suche:", bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).pack(side="left")
         search_entry = tk.Entry(toolbar, textvariable=search_var, width=28)
         search_entry.pack(side="left", padx=(6, 12))
