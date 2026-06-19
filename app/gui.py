@@ -6446,14 +6446,25 @@ LIMIT 500
                     # (Migration laeuft beim App-Start) - sonst leer statt Crash.
                     has_gab = any(c[1] == "gueltig_ab" for c in con.execute("PRAGMA table_info(nmg_rabatte)"))
                     gab_sel = "r.gueltig_ab" if has_gab else "'' AS gueltig_ab"
+                    # tbl_artikelstamm ist die gepflegte Artikel-Stammquelle mit
+                    # echten DF- und PCK-Spalten (hoechste Prioritaet). Existiert
+                    # erst nach dem ersten Artikelstamm-Import -> bedingt joinen.
+                    has_astamm = con.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tbl_artikelstamm'"
+                    ).fetchone() is not None
+                    a_art, a_df, a_pck, a_join = "NULL", "NULL", "NULL", ""
+                    if has_astamm:
+                        a_art, a_df, a_pck = "a.artikel", "a.df", "a.pck"
+                        a_join = "LEFT JOIN tbl_artikelstamm a ON a.pzn = r.nmg_pzn"
                     rows = con.execute(
                         f"""SELECT r.nmg_pzn,
-                                  COALESCE(NULLIF(r.artikel,''), s.artikelname, b.artikelname) AS artikel,
-                                  b.df AS df,
-                                  COALESCE(NULLIF(b.pck,''),
+                                  COALESCE(NULLIF(r.artikel,''), NULLIF({a_art},''), s.artikelname, b.artikelname) AS artikel,
+                                  COALESCE(NULLIF({a_df},''), NULLIF(b.df,'')) AS df,
+                                  COALESCE(NULLIF({a_pck},''), NULLIF(b.pck,''),
                                            NULLIF(TRIM(COALESCE(s.menge,'')||' '||COALESCE(s.einheit,'')),'')) AS pck,
                                   r.rabatt, {gab_sel}, r.quelle, r.letzte_aktualisierung
                            FROM nmg_rabatte r
+                           {a_join}
                            LEFT JOIN tbl_pzn_basisdaten b ON b.pzn = r.nmg_pzn
                            LEFT JOIN tbl_nmg_stamm s ON s.pzn = r.nmg_pzn
                            ORDER BY r.rabatt DESC, r.nmg_pzn"""
@@ -6657,15 +6668,43 @@ LIMIT 500
                 vocab.add(t)
         return vocab
 
-    @staticmethod
-    def _derive_df_from_name(name, vocab):
-        """V1.1 SP20: DF-Kuerzel aus dem Artikelnamen ziehen (erstes Vokab-Token)."""
-        if not name or not vocab:
+    # SP20: Langform-Darreichungsformen -> Kurzcode. Reihenfolge = Prioritaet
+    # (Tabletten/Kapseln zuerst, dann Geraet Spritze/Pen, dann Pulver/Konzentrat/
+    # Infusion, zuletzt generische Injektion). Substrings ohne Umlaute, damit der
+    # Vergleich auf dem klein geschriebenen Namen sicher greift.
+    _DF_NAME_RULES = [
+        ("filmtablet", "FTA"), ("retardtablet", "RET"), ("hartkapsel", "HKP"),
+        ("weichkapsel", "WKA"), ("kapsel", "KAP"), ("tablet", "TAB"),
+        ("fertigpen", "PEN"), ("fertigspr", "FER"), ("fert.s", "FER"),
+        ("fert.-s", "FER"), ("fertigsp", "FER"),
+        ("plv", "PLV"), ("pulver", "PLV"),
+        ("konz", "IFK"),
+        ("infusionsl", "INF"), ("infusion", "INF"),
+        ("depot-injektionssusp", "ISU"), ("injektionssusp", "ISU"),
+        ("injektionsl", "ILO"), ("injekt.-l", "ILO"), ("inj.-l", "ILO"), ("inj-l", "ILO"),
+        ("durchstechfl", "DFL"),
+    ]
+
+    @classmethod
+    def _derive_df_from_name(cls, name, vocab):
+        """V1.1 SP20: DF-Kurzcode aus dem Artikelnamen ableiten.
+
+        1. Kurzform-Namen (z.B. 'ENBREL 50MG FER'): erstes Token, das ein
+           bekanntes DF-Kuerzel ist (vocab aus den Basisdaten).
+        2. Langform-Namen (z.B. 'ENBREL 50 mg Inj.-Lsg.i.e.Fertigspritze'):
+           Schluesselwort -> Code ueber _DF_NAME_RULES.
+        """
+        if not name:
             return None
         import re
-        for tok in re.findall(r"[A-Za-zÄÖÜäöü]+", str(name).upper()):
-            if tok in vocab:
-                return tok
+        if vocab:
+            for tok in re.findall(r"[A-Za-zÄÖÜäöü]+", str(name).upper()):
+                if tok in vocab:
+                    return tok
+        low = str(name).lower()
+        for needle, code in cls._DF_NAME_RULES:
+            if needle in low:
+                return code
         return None
 
     def _edit_nmg_rabatt(self, nmg_pzn, on_saved=None):
@@ -6684,12 +6723,21 @@ LIMIT 500
             with sqlite3.connect(DB_PATH) as con:
                 has_gab = any(c[1] == "gueltig_ab" for c in con.execute("PRAGMA table_info(nmg_rabatte)"))
                 gab_sel = "r.gueltig_ab" if has_gab else "'' AS gueltig_ab"
+                has_astamm = con.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tbl_artikelstamm'"
+                ).fetchone() is not None
+                a_art, a_df, a_pck, a_join = "NULL", "NULL", "NULL", ""
+                if has_astamm:
+                    a_art, a_df, a_pck = "a.artikel", "a.df", "a.pck"
+                    a_join = "LEFT JOIN tbl_artikelstamm a ON a.pzn = r.nmg_pzn"
                 row = con.execute(
-                    f"""SELECT COALESCE(NULLIF(r.artikel,''), s.artikelname, b.artikelname) AS artikel,
-                              r.rabatt, {gab_sel}, b.df,
-                              COALESCE(NULLIF(b.pck,''),
+                    f"""SELECT COALESCE(NULLIF(r.artikel,''), NULLIF({a_art},''), s.artikelname, b.artikelname) AS artikel,
+                              r.rabatt, {gab_sel},
+                              COALESCE(NULLIF({a_df},''), NULLIF(b.df,'')) AS df,
+                              COALESCE(NULLIF({a_pck},''), NULLIF(b.pck,''),
                                        NULLIF(TRIM(COALESCE(s.menge,'')||' '||COALESCE(s.einheit,'')),'')) AS pck
                        FROM nmg_rabatte r
+                       {a_join}
                        LEFT JOIN tbl_pzn_basisdaten b ON b.pzn = r.nmg_pzn
                        LEFT JOIN tbl_nmg_stamm s ON s.pzn = r.nmg_pzn
                        WHERE r.nmg_pzn = ?""",
