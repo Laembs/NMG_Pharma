@@ -312,11 +312,35 @@ def import_manual_analysis_files(paths: Iterable[str | Path], analyse_typ: str, 
                 size = path.stat().st_size
                 with connect(DB_PATH) as con:
                     _ensure_tables(con)
-                    existing = con.execute("SELECT id FROM tbl_importierte_analysen WHERE hashwert = ? LIMIT 1", (digest,)).fetchone()
+                    # V1.1 SP10 Bug-Fix: Duplikat nur dann, wenn der bisherige
+                    # Hash-Eintrag noch eine LEBENDE auswertung_id hat. Wenn die
+                    # zugehoerige Auswertung in tbl_auswertungen geloescht wurde
+                    # (Admin-Cleanup, Zeitraum-Loeschung, Archiv-Auslagerung),
+                    # zaehlt das nicht mehr als Duplikat - die Datei darf neu
+                    # eingespielt werden. Sonst landen Re-Imports nie wieder
+                    # in der Produktanalyse.
+                    existing = con.execute(
+                        """SELECT ia.id, ia.auswertung_id
+                           FROM tbl_importierte_analysen ia
+                           WHERE ia.hashwert = ? LIMIT 1""",
+                        (digest,),
+                    ).fetchone()
+                    existing_stale_id = None
                     if existing:
-                        stats["duplicates"] += 1
-                        stats["duplicate_files"].append(path.name)
-                        continue
+                        old_aw_id = existing["auswertung_id"] if isinstance(existing, sqlite3.Row) else existing[1]
+                        ist_lebend = False
+                        if old_aw_id is not None:
+                            r = con.execute(
+                                "SELECT 1 FROM tbl_auswertungen WHERE id = ? LIMIT 1",
+                                (old_aw_id,),
+                            ).fetchone()
+                            ist_lebend = r is not None
+                        if ist_lebend:
+                            stats["duplicates"] += 1
+                            stats["duplicate_files"].append(path.name)
+                            continue
+                        # Hash-Eintrag ist verwaist -> beim Neu-Import ueberschreiben.
+                        existing_stale_id = existing["id"] if isinstance(existing, sqlite3.Row) else existing[0]
 
                 readable = _prepare_readable_file(path, tmp_path)
 
@@ -331,15 +355,28 @@ def import_manual_analysis_files(paths: Iterable[str | Path], analyse_typ: str, 
                     suggestions = _insert_learning_suggestions(con, readable, path.name, bearbeiter)
                     if suggestions == 0 and auswertung_id:
                         suggestions = _insert_learning_suggestions_from_auswertung(con, auswertung_id, path.name, bearbeiter)
-                    con.execute(
-                        """
-                        INSERT INTO tbl_importierte_analysen (
-                            dateiname, dateipfad, dateigroesse, hashwert, analyse_typ,
-                            auswertung_id, status, importiert_am, bearbeiter, bemerkung
-                        ) VALUES (?, ?, ?, ?, ?, ?, 'importiert', CURRENT_TIMESTAMP, ?, ?)
-                        """,
-                        (path.name, str(path), size, digest, analyse_typ, auswertung_id, bearbeiter, f"Positionen: {rows_imported}; Schulbank-Vorschläge: {suggestions}"),
-                    )
+                    if existing_stale_id is not None:
+                        # Verwaister Hash-Eintrag -> mit neuer auswertung_id ueberschreiben.
+                        con.execute(
+                            """UPDATE tbl_importierte_analysen
+                               SET dateipfad=?, dateigroesse=?, analyse_typ=?, auswertung_id=?,
+                                   status='importiert', importiert_am=CURRENT_TIMESTAMP,
+                                   bearbeiter=?, bemerkung=?
+                               WHERE id=?""",
+                            (str(path), size, analyse_typ, auswertung_id, bearbeiter,
+                             f"Positionen: {rows_imported}; Schulbank-Vorschläge: {suggestions} (Re-Import)",
+                             existing_stale_id),
+                        )
+                    else:
+                        con.execute(
+                            """
+                            INSERT INTO tbl_importierte_analysen (
+                                dateiname, dateipfad, dateigroesse, hashwert, analyse_typ,
+                                auswertung_id, status, importiert_am, bearbeiter, bemerkung
+                            ) VALUES (?, ?, ?, ?, ?, ?, 'importiert', CURRENT_TIMESTAMP, ?, ?)
+                            """,
+                            (path.name, str(path), size, digest, analyse_typ, auswertung_id, bearbeiter, f"Positionen: {rows_imported}; Schulbank-Vorschläge: {suggestions}"),
+                        )
                     con.commit()
 
                 stats["imported"] += 1
