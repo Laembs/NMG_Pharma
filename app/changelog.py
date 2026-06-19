@@ -5,6 +5,15 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V1.1 SP19", "2026-06-19", [
+        "Neue Auswertung ist 11x schneller: trace_lookup_source nutzt Index-Cache statt pro Zeile die komplette Austauschdatenbank zu scannen. 414 Zeilen jetzt in ~16 s statt ~3 Min.",
+        "Bugfix Neue Auswertung (SP18-Regression): Doppelklick-Schutz auf 'Auswertung starten' verhindert stille Mehrfachstarts (Log zeigte 90 Aufrufe in einer Sekunde).",
+        "Bugfix Status-Box: erscheint jetzt zuverlaessig auch wenn die rechte Sidebar eingeklappt ist (Fallback am Hauptfenster oben rechts).",
+        "Bugfix Background-Jobs: Exceptions in on_done/on_error werden ins Fehler-Log geschrieben + messagebox angezeigt statt geraeuschlos zu verschwinden.",
+        "NMG-Rabatte-Uebersicht (neue Kachel in Apps + Dashboard): 4 Reiter - alle Rabatte mit Filter, Statistik, Diff zum letzten Stand, Verlauf pro PZN.",
+        "Vor jedem PK-Rabatte-Import wird automatisch ein Snapshot des aktuellen Stands angelegt - damit Diff/Verlauf nachvollziehbar sind.",
+        "Auto-Restart nach Setup: NMGone startet nach jedem Update automatisch wieder (kein Haekchen mehr am Wizard-Ende noetig).",
+    ]),
     ("V1.1 SP18", "2026-06-19", [
         "Neue Auswertung laeuft jetzt im Hintergrund (analog manueller Import in SP15). UI bleibt klickbar.",
         "Background-Status-Box umgezogen: von rechts oben im Header in die rechte Sidebar ueber den Backup-Status.",
