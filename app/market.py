@@ -710,20 +710,15 @@ def _produktanalyse_fill_sheet(ws, label: str, rows, basis_auswertungen: int,
     last_col = len(headers)
     end_col_letter = get_column_letter(last_col)
 
+    # V1.1 SP11: Basis-Info + Beschreibung entfernt (User-Wunsch).
+    # Layout neu: Zeile 1 Titel, Zeile 2 Header, ab Zeile 3 Daten.
     ws.cell(1, 1).value = meta["title"].format(label=label)
     ws.cell(1, 1).font = Font(bold=True, size=14, color=meta["color"])
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
 
-    ws.cell(2, 1).value = f"Basis: {basis_auswertungen:,} gespeicherte Auswertungen, {basis_positionen:,} Positionen (letzte 6 Monate)".replace(",", ".")
-    ws.cell(2, 1).font = Font(italic=True, color="555555")
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=last_col)
-
-    ws.cell(3, 1).value = meta["desc"]
-    ws.cell(3, 1).font = Font(italic=True, color="555555")
-    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=last_col)
-
+    header_row = 2
     for i, h in enumerate(headers, start=1):
-        c = ws.cell(5, i)
+        c = ws.cell(header_row, i)
         c.value = h
         c.font = Font(bold=True, color="FFFFFF")
         c.fill = PatternFill("solid", fgColor=meta["color"])
@@ -733,7 +728,7 @@ def _produktanalyse_fill_sheet(ws, label: str, rows, basis_auswertungen: int,
         ws.column_dimensions[get_column_letter(i)].width = w
 
     for rank, r in enumerate(rows, start=1):
-        rw = 5 + rank
+        rw = header_row + rank
         ws.cell(rw, 1).value = rank
         ws.cell(rw, 2).value = r["pzn"]
         ws.cell(rw, 3).value = r["artikelname"]
@@ -752,9 +747,9 @@ def _produktanalyse_fill_sheet(ws, label: str, rows, basis_auswertungen: int,
             ws.cell(rw, 15).value = r["ersatz_artikel"]
             ws.cell(rw, 16).value = r["quelle"]
 
-    ws.freeze_panes = "A6"
+    ws.freeze_panes = f"A{header_row + 1}"
     if rows:
-        ws.auto_filter.ref = f"A5:{end_col_letter}{5 + len(rows)}"
+        ws.auto_filter.ref = f"A{header_row}:{end_col_letter}{header_row + len(rows)}"
 
 
 def export_produktanalyse_neu(kundentyp: str = "PK", monate: int = 6) -> Path:
