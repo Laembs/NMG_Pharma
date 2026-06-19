@@ -110,6 +110,192 @@ def _is_nmg_hit(im_sortiment, pzn_nmg, apu_nmg) -> int:
     return 0
 
 
+def _build_rohdaten_cache(con: sqlite3.Connection, pzns_norm: set[str]) -> dict:
+    """V1.1 SP16: Pre-Cache fuer den rohdaten-Modus. Statt pro Zeile
+    lookup_basisdaten + _lookup (= mehrere UDF-Queries ueber grosse
+    Tabellen) wird hier EINMAL alles geladen, was die Schleife danach
+    pro PZN braucht.
+
+    Annahme: PZNs in tbl_pzn_basisdaten, tbl_austauschdatenbank,
+    tbl_nmg_stamm, nmg_rabatte, tbl_lieferfaehigkeit sind beim Insert
+    bereits normalisiert (8 Stellen, nur Ziffern). Damit funktioniert
+    direkter =-Vergleich + IN ueber den jeweiligen Index.
+    """
+    caches = {
+        "basisdaten": {},      # pzn -> {artikelname, herstellerkuerzel, df, pck}
+        "austausch":  {},      # pzn_alt -> [list of austausch-records]
+        "nmg_stamm":  {},      # pzn -> {apu, artikelname}
+        "nmg_rabatte": {},     # pzn -> {rabatt, ...}
+        "lieferfaehigkeit": {},  # pzn -> {lieferbar, ...}
+    }
+    if not pzns_norm:
+        return caches
+    pzn_list = list(pzns_norm)
+    # SQLite: max 999 Parameter pro Query (Standard). Chunked.
+    chunk = 900
+
+    def _in_chunks(items):
+        for i in range(0, len(items), chunk):
+            yield items[i:i + chunk]
+
+    # Basisdaten
+    for ch in _in_chunks(pzn_list):
+        placeholders = ",".join("?" * len(ch))
+        for r in con.execute(
+            f"SELECT pzn, artikelname, herstellerkuerzel, df, pck "
+            f"FROM tbl_pzn_basisdaten WHERE pzn IN ({placeholders})", ch
+        ).fetchall():
+            caches["basisdaten"][r[0]] = {
+                "artikelname": r[1], "herstellerkuerzel": r[2],
+                "df": r[3], "pck": r[4],
+            }
+
+    # Austauschdatenbank: alle aktiven Eintraege fuer diese PZNs.
+    # Sortier-Reihenfolge analog der bisherigen _lookup()-Logik:
+    # 1. Treffer mit Rabatt vor solchen ohne, dann hoechster Rabatt
+    # 2. Im NMG-Stamm vor sonstigen
+    # 3. aktualisiert_am DESC / id DESC
+    for ch in _in_chunks(pzn_list):
+        placeholders = ",".join("?" * len(ch))
+        try:
+            rows = con.execute(f"""
+                SELECT a.id, a.pzn_alt, a.pzn_nmg, a.artikel_nmg,
+                       a.freitext_austausch, a.aktualisiert_am, a.erstellt_am,
+                       r.rabatt AS _rabatt,
+                       ns.pzn   AS _nmg_stamm
+                FROM tbl_austauschdatenbank a
+                LEFT JOIN nmg_rabatte r ON r.nmg_pzn = a.pzn_nmg
+                LEFT JOIN tbl_nmg_stamm ns ON ns.pzn = a.pzn_nmg
+                WHERE COALESCE(a.status, 'aktiv') = 'aktiv'
+                  AND a.pzn_alt IN ({placeholders})
+                ORDER BY
+                    CASE WHEN r.rabatt IS NOT NULL THEN 0 ELSE 1 END,
+                    COALESCE(r.rabatt, 0) DESC,
+                    CASE WHEN ns.pzn IS NOT NULL THEN 0 ELSE 1 END,
+                    datetime(COALESCE(a.aktualisiert_am, a.erstellt_am, '1970-01-01')) DESC,
+                    a.id DESC
+            """, ch).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+        for r in rows:
+            caches["austausch"].setdefault(r[1], []).append({
+                "id": r[0], "pzn_alt": r[1], "pzn_nmg": r[2],
+                "artikel_nmg": r[3], "freitext_austausch": r[4],
+                "aktualisiert_am": r[5], "erstellt_am": r[6],
+                "rabatt": r[7], "nmg_stamm": r[8],
+            })
+
+    # Welche NMG-PZNs werden ueber die Austausch-Cache referenziert?
+    referenced_nmg_pzns = set()
+    for lst in caches["austausch"].values():
+        for entry in lst:
+            if entry["pzn_nmg"]:
+                referenced_nmg_pzns.add(_pzn(entry["pzn_nmg"]))
+    nmg_pzn_list = list(referenced_nmg_pzns)
+
+    # NMG-Stamm: apu pro nmg_pzn
+    for ch in _in_chunks(nmg_pzn_list):
+        placeholders = ",".join("?" * len(ch))
+        try:
+            for r in con.execute(
+                f"SELECT pzn, apu, artikelname FROM tbl_nmg_stamm WHERE pzn IN ({placeholders})",
+                ch,
+            ).fetchall():
+                caches["nmg_stamm"][r[0]] = {"apu": r[1], "artikelname": r[2]}
+        except sqlite3.OperationalError:
+            pass
+
+    # NMG-Rabatte
+    for ch in _in_chunks(nmg_pzn_list):
+        placeholders = ",".join("?" * len(ch))
+        try:
+            for r in con.execute(
+                f"SELECT nmg_pzn, rabatt FROM nmg_rabatte WHERE nmg_pzn IN ({placeholders})",
+                ch,
+            ).fetchall():
+                caches["nmg_rabatte"][r[0]] = {"rabatt": r[1]}
+        except sqlite3.OperationalError:
+            pass
+
+    # Lieferfaehigkeit
+    for ch in _in_chunks(nmg_pzn_list):
+        placeholders = ",".join("?" * len(ch))
+        try:
+            for r in con.execute(
+                f"SELECT nmg_pzn, lieferbar, bevorratung_angeraten, liefervorschlag "
+                f"FROM tbl_lieferfaehigkeit WHERE nmg_pzn IN ({placeholders})",
+                ch,
+            ).fetchall():
+                caches["lieferfaehigkeit"][r[0]] = {
+                    "lieferbar": r[1],
+                    "bevorratung_angeraten": r[2],
+                    "liefervorschlag": r[3],
+                }
+        except sqlite3.OperationalError:
+            pass
+
+    return caches
+
+
+def _lookup_from_cache(caches: dict, pzn_norm: str) -> dict:
+    """V1.1 SP16: Dict-Lookup-Variante von _lookup() fuer den rohdaten-Modus.
+    Liefert die gleichen Felder wie _lookup, aber ohne DB-Queries.
+    """
+    austausch_list = caches["austausch"].get(pzn_norm) or []
+    if not austausch_list:
+        return {}
+    main = austausch_list[0]
+    nmg_pzn = _pzn(main.get("pzn_nmg")) or None
+    freitext = (main.get("freitext_austausch") or "").strip()
+    artikel_nmg = (main.get("artikel_nmg") or "").strip()
+    if nmg_pzn and (not freitext or freitext.lower().startswith("pzn nmg:")):
+        # Artikel-Name bevorzugt aus austausch-Eintrag, sonst aus NMG-Stamm.
+        nmg_stamm = caches["nmg_stamm"].get(nmg_pzn, {})
+        freitext = artikel_nmg or nmg_stamm.get("artikelname", "") or freitext
+
+    # Weitere Austauschoptionen anhaengen (nur die mit Eintrag im NMG-Stamm).
+    weitere_texte = []
+    seen = {nmg_pzn} if nmg_pzn else set()
+    for extra in austausch_list[1:]:
+        ext_pzn = _pzn(extra.get("pzn_nmg"))
+        if not ext_pzn or ext_pzn in seen:
+            continue
+        if ext_pzn not in caches["nmg_stamm"]:
+            continue
+        seen.add(ext_pzn)
+        ext_name = (extra.get("artikel_nmg") or "").strip() or caches["nmg_stamm"].get(ext_pzn, {}).get("artikelname", "")
+        weitere_texte.append(f"PZN {ext_pzn}" + (f" – {ext_name}" if ext_name else ""))
+    if weitere_texte:
+        zusatz = "weitere: " + " | ".join(weitere_texte)
+        freitext = f"{freitext} | {zusatz}" if freitext else zusatz
+
+    apu = None
+    rabatt = None
+    lieferbar = None
+    bevorratung = None
+    liefervorschlag = None
+    if nmg_pzn:
+        nmg_stamm = caches["nmg_stamm"].get(nmg_pzn, {})
+        apu = nmg_stamm.get("apu")
+        rab = caches["nmg_rabatte"].get(nmg_pzn, {})
+        rabatt = rab.get("rabatt")
+        lief = caches["lieferfaehigkeit"].get(nmg_pzn, {})
+        lieferbar = lief.get("lieferbar")
+        bevorratung = lief.get("bevorratung_angeraten")
+        liefervorschlag = lief.get("liefervorschlag")
+
+    return {
+        "im_sortiment": "X" if nmg_pzn else "X Austausch mögl",
+        "nmg_pzn": nmg_pzn,
+        "apu_nmg": apu,
+        "rabatt": rabatt,
+        "lieferbar": lieferbar,
+        "bevorratung": bevorratung,
+        "liefervorschlag": liefervorschlag,
+        "austauschbar_gegen": freitext or None,
+    }
+
+
 def import_historical_market_file(file_path: str | Path, con: sqlite3.Connection | None = None, datenquelle: str = "NMG", analyse_name: str | None = None) -> dict:
     """Importiert eine vorhandene händische Auswertung oder schwierige Rohdaten nur in die Marktanalyse.
 
@@ -162,19 +348,31 @@ def import_historical_market_file(file_path: str | Path, con: sqlite3.Connection
             if not mapping or not (mapping.get("pzn") and mapping.get("absatz")):
                 raise ValueError("Format nicht erkannt: historische Datei wurde nicht importiert.")
             header_row = mapping.get("header_row", 1)
+
+            # V1.1 SP16: Statt pro Zeile lookup_basisdaten + _lookup
+            # (das macht UDF-WHERE-Klauseln ueber grosse Tabellen = Full-Scan)
+            # erst ALLE PZNs sammeln, dann Pre-Cache in einem Rutsch.
+            rohdaten_rows = []
+            pzns_norm: set[str] = set()
             for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
                 pzn = _pzn(_get(row, mapping.get("pzn")))
                 if not pzn:
                     continue
-                basis = lookup_basisdaten(con, pzn)
+                rohdaten_rows.append((row, pzn))
+                pzns_norm.add(pzn)
+
+            caches = _build_rohdaten_cache(con, pzns_norm)
+
+            for row, pzn in rohdaten_rows:
+                basis = caches["basisdaten"].get(pzn, {})
                 artikel = _get(row, mapping.get("artikel")) or basis.get("artikelname")
                 df = _get(row, mapping.get("df")) or basis.get("df")
                 pck = _get(row, mapping.get("packung")) or basis.get("pck")
                 herst = clean_hersteller(_get(row, mapping.get("hersteller"))) or basis.get("herstellerkuerzel")
                 ek = _to_float(_get(row, mapping.get("ek")))
                 absatz = _to_float(_get(row, mapping.get("absatz"))) or 0.0
-                # NMG-Status über aktuelle Datenbank bestimmen, manuelle Auswertungsspalten werden nicht als Lernstand genutzt.
-                hit = _lookup(con, pzn)
+                # NMG-Status aus dem Cache (keine UDF-Joins mehr).
+                hit = _lookup_from_cache(caches, pzn)
                 pzn_nmg = hit.get("nmg_pzn")
                 apu_nmg = hit.get("apu_nmg")
                 rabatt = hit.get("rabatt")

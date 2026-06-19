@@ -5,6 +5,12 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V1.1 SP16", "2026-06-19", [
+        "Import-Performance fuer rohdaten-Modus (Excel ohne Standard-Header).",
+        "Vorher: pro Zeile mehrere SQL-Queries mit pzn_norm()-UDF in WHERE - Full-Table-Scan ueber zigtausend Eintraege.",
+        "Jetzt: Pre-Cache vor der Schleife. Alle PZNs einmal sammeln, dann Basisdaten/Austausch/NMG-Stamm/Rabatte/Lieferfaehigkeit in einem Rutsch laden (IN-Lookup mit Index).",
+        "Erwartet: 50-200x schneller im rohdaten-Modus. Bei erkanntem Header weiterhin der bereits schnelle Pfad aus SP13.",
+    ]),
     ("V1.1 SP15", "2026-06-19", [
         "Manuelle Imports laufen jetzt im HINTERGRUND - kein blockierender Modal-Dialog mehr.",
         "Status-Box oben rechts mit Titel + aktueller Datei + Fortschritts-Balken; verschwindet nach Abschluss.",
