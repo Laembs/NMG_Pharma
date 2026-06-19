@@ -5,6 +5,13 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V1.1 SP20", "2026-06-19", [
+        "NMG-Rabatte-Tabelle zeigt jetzt zusaetzlich Artikelname, DF und Pack (aus den Basisdaten) sowie das 'Gueltig ab'-Datum.",
+        "Doppelklick auf eine Rabatt-Zeile oeffnet einen Bearbeiten-Dialog: Rabatt % und 'Gueltig ab' aendern.",
+        "Jede Rabatt-Aenderung wird mit Datum und Benutzer protokolliert (Audit-Log) - ausser der Rabatt bleibt gleich, dann kein Eintrag.",
+        "Beim PK-Rabatte-Import wird abgefragt, ab wann die importierten Rabatte gelten sollen; eine 'Gueltig ab'-Spalte in der Datei hat pro Zeile Vorrang.",
+        "Verlauf-Reiter pro PZN zeigt jetzt zusaetzlich die manuellen Aenderungen mit 'Geaendert von'.",
+    ]),
     ("V1.1 SP19", "2026-06-19", [
         "Neue Auswertung ist 11x schneller: trace_lookup_source nutzt Index-Cache statt pro Zeile die komplette Austauschdatenbank zu scannen. 414 Zeilen jetzt in ~16 s statt ~3 Min.",
         "Bugfix Neue Auswertung (SP18-Regression): Doppelklick-Schutz auf 'Auswertung starten' verhindert stille Mehrfachstarts (Log zeigte 90 Aufrufe in einer Sekunde).",

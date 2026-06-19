@@ -45,6 +45,53 @@ def take_snapshot(con: sqlite3.Connection, quelle: str = "", bemerkung: str = ""
     return snapshot_id
 
 
+def log_rabatt_change(
+    con: sqlite3.Connection,
+    nmg_pzn: str,
+    artikel: str,
+    rabatt_alt: Any,
+    rabatt_neu: Any,
+    gueltig_ab: str,
+    geaendert_von: str,
+    typ: str = "manuell",
+) -> None:
+    """Protokolliert eine Rabatt-Aenderung (wer/wann/alt->neu) im Audit-Log.
+
+    V1.1 SP20. Wird nur aufgerufen, wenn sich der Rabattwert tatsaechlich
+    geaendert hat (gleicher Rabatt -> kein Eintrag, siehe Aufrufer).
+    """
+    con.execute(
+        """INSERT INTO tbl_nmg_rabatt_aenderungen
+           (nmg_pzn, artikel, rabatt_alt, rabatt_neu, gueltig_ab, typ, geaendert_von)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (str(nmg_pzn), artikel or "", rabatt_alt, rabatt_neu, gueltig_ab or "", typ or "manuell", geaendert_von or ""),
+    )
+
+
+def changes_for_pzn(con: sqlite3.Connection, nmg_pzn: str) -> list[dict]:
+    """Audit-Log-Eintraege (manuelle Aenderungen) fuer eine PZN, neueste zuerst."""
+    try:
+        rows = con.execute(
+            """SELECT geaendert_am, rabatt_alt, rabatt_neu, gueltig_ab, typ, geaendert_von
+               FROM tbl_nmg_rabatt_aenderungen WHERE nmg_pzn=?
+               ORDER BY id DESC""",
+            (str(nmg_pzn),),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    return [
+        {
+            "geaendert_am": r[0],
+            "rabatt_alt": r[1],
+            "rabatt_neu": r[2],
+            "gueltig_ab": r[3],
+            "typ": r[4],
+            "geaendert_von": r[5],
+        }
+        for r in rows
+    ]
+
+
 def list_snapshots(con: sqlite3.Connection, limit: int = 50) -> list[dict]:
     rows = con.execute(
         """SELECT id, erstellt_am, quelle, anzahl_eintraege, bemerkung
