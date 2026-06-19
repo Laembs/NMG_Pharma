@@ -89,7 +89,96 @@ def _variant_key(item: dict) -> tuple[str, str]:
     return (_pzn(item.get("pzn_nmg")), _norm_text(item.get("freitext_austausch")))
 
 
-def trace_lookup_source(con: sqlite3.Connection, original_pzn: str, hit: dict | None = None) -> dict:
+def build_trace_index(con: sqlite3.Connection) -> dict:
+    """Lädt einmalig alle Quell-Tabellen in In-Memory-Dicts, damit
+    trace_lookup_source pro Zeile nur noch Dict-Lookups macht statt
+    18k Austausch-Zeilen erneut zu scannen. Ohne diesen Index dauert
+    eine Auswertung über 400 Zeilen ca. 3 Minuten (>90 % in trace_lookup_source).
+    """
+    index = {
+        "austausch_by_pzn": {},
+        "lernvorschlaege_by_pzn": {},
+        "referenz_h_o_by_pzn": {},
+        "nmg_pzns": set(),
+        "has_austausch": False,
+        "has_lernvorschlaege": False,
+        "has_referenz_h_o": False,
+    }
+
+    if _table_exists(con, "tbl_austauschdatenbank"):
+        index["has_austausch"] = True
+        try:
+            rows = con.execute(
+                """
+                SELECT *
+                FROM tbl_austauschdatenbank
+                WHERE COALESCE(status, 'aktiv') = 'aktiv'
+                  AND COALESCE(pzn_alt, '') <> ''
+                ORDER BY datetime(COALESCE(aktualisiert_am, erstellt_am, gueltig_ab, '1970-01-01')) DESC, id DESC
+                """
+            ).fetchall()
+        except Exception:
+            rows = []
+        bucket = index["austausch_by_pzn"]
+        for row in rows:
+            item = _rowdict(row)
+            key = _pzn(item.get("pzn_alt"))
+            if not key:
+                continue
+            bucket.setdefault(key, []).append(item)
+
+    if _table_exists(con, "tbl_lernvorschlaege"):
+        index["has_lernvorschlaege"] = True
+        try:
+            rows = con.execute(
+                """
+                SELECT *
+                FROM tbl_lernvorschlaege
+                WHERE status = 'uebernommen'
+                  AND COALESCE(pzn_alt, '') <> ''
+                ORDER BY datetime(COALESCE(bearbeitet_am, erstellt_am, '1970-01-01')) DESC, id DESC
+                """
+            ).fetchall()
+        except Exception:
+            rows = []
+        bucket = index["lernvorschlaege_by_pzn"]
+        for row in rows:
+            item = _rowdict(row)
+            key = _pzn(item.get("pzn_alt"))
+            if not key:
+                continue
+            bucket.setdefault(key, []).append(item)
+
+    if _table_exists(con, "tbl_referenz_h_o"):
+        index["has_referenz_h_o"] = True
+        try:
+            rows = con.execute("SELECT * FROM tbl_referenz_h_o WHERE COALESCE(original_pzn,'') <> ''").fetchall()
+        except Exception:
+            rows = []
+        bucket = index["referenz_h_o_by_pzn"]
+        for row in rows:
+            item = _rowdict(row)
+            key = _pzn(item.get("original_pzn"))
+            if not key:
+                continue
+            bucket.setdefault(key, item)
+
+    nmg_set = index["nmg_pzns"]
+    for table, col in (("tbl_nmg_stamm", "pzn"), ("nmg_rabatte", "nmg_pzn"), ("tbl_lieferfaehigkeit", "nmg_pzn")):
+        if not _table_exists(con, table):
+            continue
+        try:
+            for (val,) in con.execute(f"SELECT DISTINCT {col} FROM {table} WHERE COALESCE({col},'') <> ''"):
+                key = _pzn(val)
+                if key:
+                    nmg_set.add(key)
+        except Exception:
+            continue
+
+    return index
+
+
+def trace_lookup_source(con: sqlite3.Connection, original_pzn: str, hit: dict | None = None, index: dict | None = None) -> dict:
     """Ermittelt fuer das Protokoll, aus welcher Datenbank die Neue Auswertung liest.
 
     Die Funktion veraendert keine Daten. Sie bildet die Prioritaet aus exporter._lookup()
@@ -114,19 +203,23 @@ def trace_lookup_source(con: sqlite3.Connection, original_pzn: str, hit: dict | 
 
     # 1) Hauptquelle: aktive Austauschdatenbank.
     try:
-        if _table_exists(con, "tbl_austauschdatenbank"):
-            rows = con.execute("""
-                SELECT *
-                FROM tbl_austauschdatenbank
-                WHERE COALESCE(status, 'aktiv') = 'aktiv'
-                  AND COALESCE(pzn_alt, '') <> ''
-                ORDER BY datetime(COALESCE(aktualisiert_am, erstellt_am, gueltig_ab, '1970-01-01')) DESC, id DESC
-            """).fetchall()
-            matches = []
-            for candidate in rows:
-                item = _rowdict(candidate)
-                if _pzn(item.get("pzn_alt")) == original_pzn:
-                    matches.append(item)
+        has_austausch = index["has_austausch"] if index is not None else _table_exists(con, "tbl_austauschdatenbank")
+        if has_austausch:
+            if index is not None:
+                matches = list(index["austausch_by_pzn"].get(original_pzn, ()))
+            else:
+                rows = con.execute("""
+                    SELECT *
+                    FROM tbl_austauschdatenbank
+                    WHERE COALESCE(status, 'aktiv') = 'aktiv'
+                      AND COALESCE(pzn_alt, '') <> ''
+                    ORDER BY datetime(COALESCE(aktualisiert_am, erstellt_am, gueltig_ab, '1970-01-01')) DESC, id DESC
+                """).fetchall()
+                matches = []
+                for candidate in rows:
+                    item = _rowdict(candidate)
+                    if _pzn(item.get("pzn_alt")) == original_pzn:
+                        matches.append(item)
             variants = {_variant_key(item) for item in matches if _variant_key(item) != ("", "")}
             if len(variants) > 1:
                 pzns = []
@@ -173,16 +266,22 @@ def trace_lookup_source(con: sqlite3.Connection, original_pzn: str, hit: dict | 
 
     # 2) Sicherheitsnetz: übernommene Lernvorschläge.
     try:
-        if _table_exists(con, "tbl_lernvorschlaege"):
-            rows = con.execute("""
-                SELECT *
-                FROM tbl_lernvorschlaege
-                WHERE status = 'uebernommen'
-                  AND COALESCE(pzn_alt, '') <> ''
-                ORDER BY datetime(COALESCE(bearbeitet_am, erstellt_am, '1970-01-01')) DESC, id DESC
-            """).fetchall()
-            for candidate in rows:
-                item = _rowdict(candidate)
+        has_lern = index["has_lernvorschlaege"] if index is not None else _table_exists(con, "tbl_lernvorschlaege")
+        if has_lern:
+            if index is not None:
+                candidates = list(index["lernvorschlaege_by_pzn"].get(original_pzn, ()))
+            else:
+                rows = con.execute("""
+                    SELECT *
+                    FROM tbl_lernvorschlaege
+                    WHERE status = 'uebernommen'
+                      AND COALESCE(pzn_alt, '') <> ''
+                    ORDER BY datetime(COALESCE(bearbeitet_am, erstellt_am, '1970-01-01')) DESC, id DESC
+                """).fetchall()
+                candidates = [_rowdict(r) for r in rows]
+            for item in candidates:
+                if not isinstance(item, dict):
+                    item = _rowdict(item)
                 if _pzn(item.get("pzn_alt")) != original_pzn:
                     continue
                 pzn_nmg = _pzn(item.get("pzn_nmg"))
@@ -204,9 +303,13 @@ def trace_lookup_source(con: sqlite3.Connection, original_pzn: str, hit: dict | 
 
     # 3) Alte geprüfte Referenz.
     try:
-        if _table_exists(con, "tbl_referenz_h_o"):
-            row = con.execute("SELECT * FROM tbl_referenz_h_o WHERE original_pzn=? LIMIT 1", (original_pzn,)).fetchone()
-            ref = _rowdict(row)
+        has_ref = index["has_referenz_h_o"] if index is not None else _table_exists(con, "tbl_referenz_h_o")
+        if has_ref:
+            if index is not None:
+                ref = index["referenz_h_o_by_pzn"].get(original_pzn, {})
+            else:
+                row = con.execute("SELECT * FROM tbl_referenz_h_o WHERE original_pzn=? LIMIT 1", (original_pzn,)).fetchone()
+                ref = _rowdict(row)
             if ref:
                 base.update({
                     "quelle": "tbl_referenz_h_o",
@@ -223,14 +326,17 @@ def trace_lookup_source(con: sqlite3.Connection, original_pzn: str, hit: dict | 
 
     # 4) PZN ist selbst NMG / Rabatt- oder Lieferdaten vorhanden.
     try:
-        has_nmg = False
-        for table, col in (("tbl_nmg_stamm", "pzn"), ("nmg_rabatte", "nmg_pzn"), ("tbl_lieferfaehigkeit", "nmg_pzn")):
-            if not _table_exists(con, table):
-                continue
-            row = con.execute(f"SELECT 1 FROM {table} WHERE {col}=? LIMIT 1", (original_pzn,)).fetchone()
-            if row:
-                has_nmg = True
-                break
+        if index is not None:
+            has_nmg = original_pzn in index["nmg_pzns"]
+        else:
+            has_nmg = False
+            for table, col in (("tbl_nmg_stamm", "pzn"), ("nmg_rabatte", "nmg_pzn"), ("tbl_lieferfaehigkeit", "nmg_pzn")):
+                if not _table_exists(con, table):
+                    continue
+                row = con.execute(f"SELECT 1 FROM {table} WHERE {col}=? LIMIT 1", (original_pzn,)).fetchone()
+                if row:
+                    has_nmg = True
+                    break
         if has_nmg:
             base.update({
                 "quelle": "tbl_nmg_stamm / nmg_rabatte / tbl_lieferfaehigkeit",

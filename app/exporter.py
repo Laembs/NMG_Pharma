@@ -10,7 +10,7 @@ from .config import OUTPUT_DIR, DB_PATH
 from .db import init_db
 from .file_loader import load_worksheet
 from .learning_db import clean_hersteller, find_columns, register_hersteller, lookup_hersteller, parse_number, register_basisdaten, lookup_basisdaten, register_ek, lookup_latest_ek
-from .abgleich_protocol import trace_lookup_source, write_abgleichartikel_protocol
+from .abgleich_protocol import build_trace_index, trace_lookup_source, write_abgleichartikel_protocol
 
 LINDEN_HEADERS = [
     "PZN", "Artikelname", "DF", "Pck", "Herst", "EK",
@@ -940,6 +940,11 @@ def create_linden_export(input_file: str | Path, apotheke: str) -> Path:
         # SP27: Stammtabellen einmal in den RAM laden. Danach laeuft jeder
         # pro-Zeile-Lookup als Dict-Zugriff statt als SQL-Query.
         caches = _load_lookup_caches(con)
+        # V1.1 SP19: Abgleich-Trace-Index einmal aufbauen. Vorher hat
+        # trace_lookup_source pro Zeile die komplette Austauschdatenbank
+        # (~18k Zeilen) gefetcht und in Python iteriert - bei 400+ Zeilen
+        # >90 % der Auswertungszeit (~170 s von 180 s). Mit Index nur Dict-Lookup.
+        trace_index = build_trace_index(con)
 
         auswertung_id = None
         statistik = {"positionen": 0, "nmg_treffer": 0, "nicht_nmg": 0, "gesamt_absatz": 0.0}
@@ -1018,7 +1023,7 @@ def create_linden_export(input_file: str | Path, apotheke: str) -> Path:
                 ws.cell(r_idx, c_idx, value)
 
             hit = _lookup_fast(caches, original_pzn)
-            abgleich_trace = trace_lookup_source(con, original_pzn, hit)
+            abgleich_trace = trace_lookup_source(con, original_pzn, hit, index=trace_index)
             abgleich_trace.update({
                 "zeile": r_idx,
                 "artikel_alt": artikel_final or "",
