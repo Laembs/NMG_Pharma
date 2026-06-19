@@ -191,8 +191,29 @@ def _text(value) -> str:
 
 
 def _insert_learning_suggestions(con: sqlite3.Connection, readable_file: Path, source_name: str, bearbeiter: str = "") -> int:
+    """V1.1 SP13: Batch-Variante. Vorher pro Excel-Zeile 2 Queries
+    (SELECT-Duplikat-Check + INSERT) = 5000 Zeilen -> 10.000 Queries +
+    je eine implizite Transaction. Jetzt: alle vorhandenen Schluessel
+    EINMAL laden, alle neuen Zeilen sammeln, dann ein executemany +
+    eine Transaction.
+    """
     wb = load_workbook(readable_file, data_only=True, read_only=True)
-    inserted = 0
+
+    # Bestehende Schluessel einmal als Set in den Speicher laden.
+    existing = set()
+    try:
+        for r in con.execute(
+            """SELECT COALESCE(pzn_alt,''), COALESCE(pzn_nmg,''),
+                      COALESCE(freitext_austausch,'')
+               FROM tbl_lernvorschlaege"""
+        ).fetchall():
+            existing.add((r[0], r[1], r[2]))
+    except sqlite3.OperationalError:
+        pass
+
+    to_insert: list[tuple] = []
+    seen_in_batch: set = set()
+
     for ws in wb.worksheets:
         header_row, mp = _find_header_row_and_map(ws)
         if not header_row or not mp:
@@ -206,30 +227,26 @@ def _insert_learning_suggestions(con: sqlite3.Connection, readable_file: Path, s
             artikel_alt = _text(_cell(row, mp.get("artikel")))
             if not pzn_nmg and not freitext:
                 continue
-            existing = con.execute(
-                """
-                SELECT id FROM tbl_lernvorschlaege
-                WHERE COALESCE(pzn_alt,'') = ?
-                  AND COALESCE(pzn_nmg,'') = ?
-                  AND COALESCE(freitext_austausch,'') = ?
-                LIMIT 1
-                """,
-                (pzn_alt, pzn_nmg, freitext),
-            ).fetchone()
-            if existing:
+            key = (pzn_alt, pzn_nmg, freitext)
+            if key in existing or key in seen_in_batch:
                 continue
-            con.execute(
-                """
-                INSERT INTO tbl_lernvorschlaege (
-                    produkt_alt, produkt_neu, pzn_alt, artikel_alt, pzn_nmg,
-                    freitext_austausch, quelle_datei, status, erstellt_am, bearbeiter
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'neu', CURRENT_TIMESTAMP, ?)
-                """,
-                (artikel_alt, freitext, pzn_alt, artikel_alt, pzn_nmg, freitext, source_name, bearbeiter),
+            seen_in_batch.add(key)
+            to_insert.append(
+                (artikel_alt, freitext, pzn_alt, artikel_alt, pzn_nmg,
+                 freitext, source_name, bearbeiter)
             )
-            inserted += 1
-    con.commit()
-    return inserted
+
+    if to_insert:
+        con.execute("BEGIN")
+        con.executemany(
+            """INSERT INTO tbl_lernvorschlaege (
+                produkt_alt, produkt_neu, pzn_alt, artikel_alt, pzn_nmg,
+                freitext_austausch, quelle_datei, status, erstellt_am, bearbeiter
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'neu', CURRENT_TIMESTAMP, ?)""",
+            to_insert,
+        )
+        con.commit()
+    return len(to_insert)
 
 
 
@@ -242,7 +259,8 @@ def _insert_learning_suggestions_from_auswertung(con: sqlite3.Connection, auswer
     """
     if not auswertung_id:
         return 0
-    inserted = 0
+
+    # V1.1 SP13: Batch + Single Transaction. Vorher pro Position 2 Queries.
     rows = con.execute(
         """
         SELECT pzn, artikelname, pzn_nmg, austauschbar_gegen
@@ -253,6 +271,22 @@ def _insert_learning_suggestions_from_auswertung(con: sqlite3.Connection, auswer
         """,
         (int(auswertung_id),),
     ).fetchall()
+    if not rows:
+        return 0
+
+    existing = set()
+    try:
+        for r in con.execute(
+            """SELECT COALESCE(pzn_alt,''), COALESCE(pzn_nmg,''),
+                      COALESCE(freitext_austausch,'')
+               FROM tbl_lernvorschlaege"""
+        ).fetchall():
+            existing.add((r[0], r[1], r[2]))
+    except sqlite3.OperationalError:
+        pass
+
+    to_insert: list[tuple] = []
+    seen_in_batch: set = set()
     for row in rows:
         pzn_alt = _pzn(row[0])
         artikel_alt = _text(row[1])
@@ -260,30 +294,26 @@ def _insert_learning_suggestions_from_auswertung(con: sqlite3.Connection, auswer
         freitext = _text(row[3])
         if not pzn_alt or (not pzn_nmg and not freitext):
             continue
-        existing = con.execute(
-            """
-            SELECT id FROM tbl_lernvorschlaege
-            WHERE COALESCE(pzn_alt,'') = ?
-              AND COALESCE(pzn_nmg,'') = ?
-              AND COALESCE(freitext_austausch,'') = ?
-            LIMIT 1
-            """,
-            (pzn_alt, pzn_nmg, freitext),
-        ).fetchone()
-        if existing:
+        key = (pzn_alt, pzn_nmg, freitext)
+        if key in existing or key in seen_in_batch:
             continue
-        con.execute(
-            """
-            INSERT INTO tbl_lernvorschlaege (
+        seen_in_batch.add(key)
+        to_insert.append(
+            (artikel_alt, freitext, pzn_alt, artikel_alt, pzn_nmg,
+             freitext, source_name, bearbeiter)
+        )
+
+    if to_insert:
+        con.execute("BEGIN")
+        con.executemany(
+            """INSERT INTO tbl_lernvorschlaege (
                 produkt_alt, produkt_neu, pzn_alt, artikel_alt, pzn_nmg,
                 freitext_austausch, quelle_datei, status, erstellt_am, bearbeiter
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'neu', CURRENT_TIMESTAMP, ?)
-            """,
-            (artikel_alt, freitext, pzn_alt, artikel_alt, pzn_nmg, freitext, source_name, bearbeiter),
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'neu', CURRENT_TIMESTAMP, ?)""",
+            to_insert,
         )
-        inserted += 1
-    con.commit()
-    return inserted
+        con.commit()
+    return len(to_insert)
 
 def _latest_auswertung_id(con: sqlite3.Connection) -> int | None:
     try:
