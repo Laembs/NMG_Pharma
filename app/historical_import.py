@@ -196,18 +196,26 @@ def import_historical_market_file(file_path: str | Path, con: sqlite3.Connection
             (apotheke, path.name, f"historischer Analyseimport ({mode}, {datenquelle})", datenquelle)
         )
         aid = cur.lastrowid
+        # V1.1 SP13: Statistik + Batch-Tuples vorbereiten, dann ein einziges
+        # executemany() statt N einzelne execute()-Calls. Bei 5000+ Zeilen
+        # macht das den Unterschied zwischen 10s und 5+ Minuten.
         nmg = 0; nicht = 0; gesamt_absatz = 0.0
+        batch_tuples = []
         for rec in rows_to_insert:
             ist = rec[-1]
-            nmg += int(bool(ist)); nicht += int(not bool(ist)); gesamt_absatz += float(rec[6] or 0)
-            con.execute(
+            nmg += int(bool(ist))
+            nicht += int(not bool(ist))
+            gesamt_absatz += float(rec[6] or 0)
+            batch_tuples.append((aid, *rec[:-1], ist, path.name, datenquelle))
+        if batch_tuples:
+            con.executemany(
                 """INSERT INTO tbl_auswertungspositionen(
                     auswertung_id, pzn, artikelname, df, pck, herstellerkuerzel, ek, absatz_6m,
                     im_sortiment, pzn_nmg, apu_nmg, nmg_rabatt, lieferbar, bevorratung_angeraten,
                     liefervorschlag, austauschbar_gegen, nmg_rabatt_euro, nmg_rabatt_gesamt, umsatz,
                     ist_nmg_treffer, quelle, datenquelle
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (aid, *rec[:-1], ist, path.name, datenquelle)
+                batch_tuples,
             )
         con.execute("UPDATE tbl_auswertungen SET anzahl_positionen=?, nmg_treffer=?, nicht_nmg=?, gesamt_absatz=? WHERE id=?", (len(rows_to_insert), nmg, nicht, gesamt_absatz, aid))
         con.execute("INSERT INTO tbl_import_log(datei, typ, datensaetze, meldung) VALUES (?, 'historische_marktanalyse', ?, ?)", (path.name, len(rows_to_insert), f"{apotheke} [{datenquelle}]: {nicht} Nicht-NMG / {nmg} NMG importiert"))

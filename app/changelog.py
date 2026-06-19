@@ -5,6 +5,12 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V1.1 SP13", "2026-06-19", [
+        "Manueller Analysen Import deutlich schneller: pro Excel-Zeile war vorher 2-3 Einzel-Queries als implizite Transaktion. Bei 5000 Zeilen = 10.000-15.000 Transaktionen, dauerte minutenlang.",
+        "Fix: Inserts werden gesammelt und als executemany in einer Transaktion geschrieben; Duplikat-Check liest bestehende Schluessel einmal als Set.",
+        "Erwartet: 5000 Zeilen jetzt in unter 30 s (vorher mehrere Minuten).",
+        "Stellen: _insert_learning_suggestions, _insert_learning_suggestions_from_auswertung, import_historical_market_file (Positionen-INSERT).",
+    ]),
     ("V1.1 SP12", "2026-06-19", [
         "Gespeicherte Analysen: Refresh nach Admin-Loeschen funktioniert wieder.",
         "Gespeicherte Analysen: 'Item end not found'-Fehler bei Seitenwechsel weg (defensive Guards).",
