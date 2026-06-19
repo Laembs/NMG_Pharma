@@ -66,6 +66,34 @@ def run_migrations(db_path: Path = DB_PATH) -> list[str]:
                 meldung TEXT
             )"""
         )
+        # V1.1 SP19: NMG-Rabatte-Historie. Bei jedem Rabatte-Import wird vorher
+        # ein Snapshot des aktuellen Stands abgelegt, damit Diff zum letzten
+        # Stand und Verlauf pro PZN moeglich sind.
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_nmg_rabatte_snapshots(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,
+                quelle TEXT,
+                anzahl_eintraege INTEGER DEFAULT 0,
+                bemerkung TEXT
+            )"""
+        )
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_nmg_rabatte_historie(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_id INTEGER NOT NULL,
+                nmg_pzn TEXT NOT NULL,
+                artikel TEXT,
+                rabatt REAL,
+                quelle TEXT,
+                letzte_aktualisierung TEXT,
+                FOREIGN KEY(snapshot_id) REFERENCES tbl_nmg_rabatte_snapshots(id)
+            )"""
+        )
+        con.execute("CREATE INDEX IF NOT EXISTS idx_nmg_rabatte_historie_pzn ON tbl_nmg_rabatte_historie(nmg_pzn)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_nmg_rabatte_historie_snapshot ON tbl_nmg_rabatte_historie(snapshot_id)")
+        actions.append("tbl_nmg_rabatte_snapshots + tbl_nmg_rabatte_historie sichergestellt")
+
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('db_schema_version', ?)", (DB_SCHEMA_VERSION,))
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('last_migration_at', ?)", (datetime.now().isoformat(timespec='seconds'),))
         con.commit()

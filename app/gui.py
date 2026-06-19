@@ -1458,6 +1458,7 @@ class NMGApp(tk.Tk):
             "daten_apu_hap": lambda: self.show_import_page("APU/HAP Daten", self.import_apu_data),
             "daten_nmg_artikel": lambda: self.show_import_page("NMG Artikel", self.import_nmg_articles),
             "daten_pk_rabatte": lambda: self.show_import_page("Partnerkonditionen Rabatte", self.import_pk_rabatte),
+            "nmg_rabatte": self.show_nmg_rabatte_uebersicht,
             "daten_austauschdatenbank": self.show_austauschdatenbank_page,
             "daten_manuelle_analysen": self.import_manuelle_analysen,
             "daten_artikelstamm": self.show_artikelstamm_page,
@@ -4200,6 +4201,7 @@ LIMIT 500
             ("roadmap",          "📌", "Roadmap",              "Offene und erledigte Punkte.",              self.show_roadmap_page,                      "#6b4fb3"),
             ("vergleichssuche",  "🔍", "Vergleichs-Suche",     "PZN/Artikelname schnell finden.",           self.open_vergleichssuche_window,            "#0b6e6e"),
             ("globale_suche",    "🔍", "Globale Suche",        "Kunde, Analyse oder Artikel finden.",       self.open_globale_suche_window,              "#0b4a86"),
+            ("nmg_rabatte",      "💰", "NMG-Rabatte",          "Aktuelle Rabatte, Statistik, Diff, Verlauf.", self.show_nmg_rabatte_uebersicht,         "#6b4fb3"),
         ]
 
     def _dashboard_all_info_widgets(self):
@@ -6371,6 +6373,221 @@ LIMIT 500
                   relief="flat", font=("Arial", 12, "bold"), padx=18, pady=7).pack(side="right", pady=4)
 
 
+    def show_nmg_rabatte_uebersicht(self):
+        """V1.1 SP19: Uebersicht ueber nmg_rabatte mit 4 Reitern.
+
+        - Tabelle: alle aktuellen Rabatte sortier-/filterbar
+        - Statistik: Anzahl, Min/Max/Avg, letztes Aktualisierungsdatum
+        - Diff: gegen den letzten Snapshot (vor dem letzten Import)
+        - Verlauf: PZN eingeben -> Historie ueber alle Snapshots
+        """
+        from .nmg_rabatte_history import (
+            current_stats, diff_against_snapshot, history_for_pzn,
+            list_snapshots,
+        )
+        self.clear_page()
+        self._page_header("NMG-Rabatte", "Aktuelle Rabatte, Statistik, Diff zum letzten Stand und Verlauf pro PZN.")
+
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(0, weight=1)
+
+        nb = ttk.Notebook(body)
+        nb.grid(row=0, column=0, sticky="nsew")
+
+        # --- Tab 1: Tabelle ---
+        tab_tab = tk.Frame(nb, bg="#ffffff")
+        nb.add(tab_tab, text="Alle Rabatte")
+        tab_tab.columnconfigure(0, weight=1)
+        tab_tab.rowconfigure(1, weight=1)
+
+        filter_row = tk.Frame(tab_tab, bg="#ffffff")
+        filter_row.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
+        tk.Label(filter_row, text="Filter (PZN, Artikel, Hersteller):", bg="#ffffff", fg="#0b4a86").pack(side="left", padx=(0, 6))
+        filter_var = tk.StringVar()
+        filter_entry = tk.Entry(filter_row, textvariable=filter_var, width=42)
+        filter_entry.pack(side="left", padx=4)
+
+        cols = ("nmg_pzn", "artikel", "rabatt", "quelle", "letzte_aktualisierung")
+        col_headers = {"nmg_pzn": "PZN", "artikel": "Artikel", "rabatt": "Rabatt %", "quelle": "Quelle", "letzte_aktualisierung": "Aktualisiert"}
+        tv = ttk.Treeview(tab_tab, columns=cols, show="headings", height=20)
+        for c in cols:
+            tv.heading(c, text=col_headers[c])
+            tv.column(c, width=180 if c == "artikel" else 110, anchor="w")
+        tv.column("rabatt", width=80, anchor="e")
+        tv.grid(row=1, column=0, sticky="nsew", padx=10, pady=4)
+        sb = ttk.Scrollbar(tab_tab, orient="vertical", command=tv.yview)
+        sb.grid(row=1, column=1, sticky="ns")
+        tv.configure(yscrollcommand=sb.set)
+
+        info_var = tk.StringVar(value="")
+        tk.Label(tab_tab, textvariable=info_var, bg="#ffffff", fg="#555", font=("Arial", 9)).grid(row=2, column=0, sticky="w", padx=10, pady=(0, 8))
+
+        def reload_table():
+            for iid in tv.get_children():
+                tv.delete(iid)
+            q = filter_var.get().strip().lower()
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    rows = con.execute(
+                        """SELECT nmg_pzn, artikel, rabatt, quelle, letzte_aktualisierung
+                           FROM nmg_rabatte ORDER BY rabatt DESC, nmg_pzn"""
+                    ).fetchall()
+            except Exception:
+                rows = []
+            shown = 0
+            for r in rows:
+                if q:
+                    hay = " ".join(str(v or "").lower() for v in r)
+                    if q not in hay:
+                        continue
+                pct = f"{float(r[2]) * 100:.1f} %" if r[2] is not None else ""
+                tv.insert("", "end", values=(r[0], r[1] or "", pct, r[3] or "", r[4] or ""))
+                shown += 1
+            info_var.set(f"{shown} von {len(rows)} Eintraegen")
+
+        filter_var.trace_add("write", lambda *a: reload_table())
+        reload_table()
+
+        # --- Tab 2: Statistik ---
+        tab_stats = tk.Frame(nb, bg="#ffffff")
+        nb.add(tab_stats, text="Statistik")
+        stats_inner = tk.Frame(tab_stats, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1)
+        stats_inner.pack(fill="both", expand=True, padx=14, pady=14)
+
+        def render_stats():
+            for w in stats_inner.winfo_children():
+                w.destroy()
+            with sqlite3.connect(DB_PATH) as con:
+                stats = current_stats(con)
+                snaps = list_snapshots(con, limit=10)
+            tk.Label(stats_inner, text="Aktueller Stand", font=("Arial", 13, "bold"), bg="#f8fbff", fg="#0b4a86").pack(anchor="w", padx=18, pady=(16, 6))
+            grid = tk.Frame(stats_inner, bg="#f8fbff")
+            grid.pack(anchor="w", padx=18, pady=4)
+            def row(lbl, val):
+                r = len(grid.grid_slaves(column=0))
+                tk.Label(grid, text=lbl, bg="#f8fbff", fg="#444", font=("Arial", 11)).grid(row=r, column=0, sticky="w", padx=(0, 18), pady=2)
+                tk.Label(grid, text=val, bg="#f8fbff", fg="#123", font=("Arial", 11, "bold")).grid(row=r, column=1, sticky="w", pady=2)
+            row("Anzahl Eintraege:", str(stats["anzahl"]))
+            row("Hoechster Rabatt:", f"{(stats['max'] or 0) * 100:.1f} %" if stats["max"] is not None else "-")
+            row("Niedrigster Rabatt:", f"{(stats['min'] or 0) * 100:.1f} %" if stats["min"] is not None else "-")
+            row("Durchschnitt:", f"{(stats['avg'] or 0) * 100:.1f} %" if stats["avg"] is not None else "-")
+            row("Letzte Aktualisierung:", str(stats["letzte_aktualisierung"] or "-"))
+
+            tk.Label(stats_inner, text=f"Snapshots ({len(snaps)})", font=("Arial", 13, "bold"), bg="#f8fbff", fg="#0b4a86").pack(anchor="w", padx=18, pady=(24, 6))
+            if not snaps:
+                tk.Label(stats_inner, text="Noch keine Snapshots vorhanden. Der erste entsteht beim naechsten PK-Rabatte-Import.", bg="#f8fbff", fg="#666", justify="left", wraplength=600).pack(anchor="w", padx=18, pady=4)
+            else:
+                snap_tv = ttk.Treeview(stats_inner, columns=("id", "erstellt_am", "anzahl", "quelle"), show="headings", height=8)
+                for c, h, w in [("id", "ID", 50), ("erstellt_am", "Erstellt am", 160), ("anzahl", "Eintraege", 80), ("quelle", "Quelle", 360)]:
+                    snap_tv.heading(c, text=h)
+                    snap_tv.column(c, width=w, anchor="w")
+                snap_tv.pack(fill="x", padx=18, pady=8)
+                for s in snaps:
+                    snap_tv.insert("", "end", values=(s["id"], s["erstellt_am"], s["anzahl_eintraege"], s["quelle"] or ""))
+        render_stats()
+
+        # --- Tab 3: Diff ---
+        tab_diff = tk.Frame(nb, bg="#ffffff")
+        nb.add(tab_diff, text="Diff zum letzten Stand")
+        diff_top = tk.Frame(tab_diff, bg="#ffffff")
+        diff_top.pack(fill="x", padx=10, pady=(10, 4))
+        diff_info = tk.StringVar(value="")
+        tk.Label(diff_top, textvariable=diff_info, bg="#ffffff", fg="#0b4a86", font=("Arial", 11, "bold")).pack(anchor="w")
+        tk.Button(diff_top, text="Neu laden", command=lambda: render_diff()).pack(anchor="w", pady=(4, 0))
+
+        diff_lists = tk.Frame(tab_diff, bg="#ffffff")
+        diff_lists.pack(fill="both", expand=True, padx=10, pady=4)
+        diff_lists.columnconfigure((0, 1, 2), weight=1)
+        diff_lists.rowconfigure(1, weight=1)
+
+        def make_list(parent, col, title, headers):
+            tk.Label(parent, text=title, font=("Arial", 11, "bold"), bg="#ffffff", fg="#0b4a86").grid(row=0, column=col, sticky="w", padx=4, pady=(0, 4))
+            t = ttk.Treeview(parent, columns=headers, show="headings", height=15)
+            for h in headers:
+                t.heading(h, text=h)
+                t.column(h, width=110, anchor="w")
+            t.grid(row=1, column=col, sticky="nsew", padx=4)
+            return t
+
+        diff_neu_tv = make_list(diff_lists, 0, "Neu hinzugekommen", ("PZN", "Artikel", "Rabatt %"))
+        diff_chg_tv = make_list(diff_lists, 1, "Geaendert", ("PZN", "Artikel", "Vorher", "Nachher"))
+        diff_ent_tv = make_list(diff_lists, 2, "Entfernt", ("PZN", "Artikel", "Rabatt %"))
+
+        def render_diff():
+            for tvw in (diff_neu_tv, diff_chg_tv, diff_ent_tv):
+                for iid in tvw.get_children():
+                    tvw.delete(iid)
+            with sqlite3.connect(DB_PATH) as con:
+                diff = diff_against_snapshot(con)
+            if diff["snapshot_id"] is None:
+                diff_info.set("Noch kein Snapshot vorhanden - der erste entsteht beim naechsten PK-Rabatte-Import.")
+                return
+            for d in diff["geaendert"]:
+                # Cosmetic-Diff in Treeview-Spalten
+                a = f"{(d['rabatt_alt'] or 0) * 100:.1f} %" if d['rabatt_alt'] is not None else "-"
+                b = f"{(d['rabatt_neu'] or 0) * 100:.1f} %" if d['rabatt_neu'] is not None else "-"
+                diff_chg_tv.column("Vorher", width=80)
+                diff_chg_tv.column("Nachher", width=80)
+                diff_chg_tv.insert("", "end", values=(d["nmg_pzn"], d.get("artikel") or "", a, b))
+            for d in diff["neu"]:
+                pct = f"{(d['rabatt'] or 0) * 100:.1f} %" if d.get("rabatt") is not None else "-"
+                diff_neu_tv.insert("", "end", values=(d["nmg_pzn"], d.get("artikel") or "", pct))
+            for d in diff["entfernt"]:
+                pct = f"{(d['rabatt'] or 0) * 100:.1f} %" if d.get("rabatt") is not None else "-"
+                diff_ent_tv.insert("", "end", values=(d["nmg_pzn"], d.get("artikel") or "", pct))
+            diff_info.set(
+                f"Snapshot #{diff['snapshot_id']}: "
+                f"{len(diff['neu'])} neu, {len(diff['geaendert'])} geaendert, "
+                f"{len(diff['entfernt'])} entfernt, {diff['unveraendert_count']} unveraendert."
+            )
+        render_diff()
+
+        # --- Tab 4: Verlauf pro PZN ---
+        tab_hist = tk.Frame(nb, bg="#ffffff")
+        nb.add(tab_hist, text="Verlauf pro PZN")
+        hist_top = tk.Frame(tab_hist, bg="#ffffff")
+        hist_top.pack(fill="x", padx=10, pady=(10, 4))
+        tk.Label(hist_top, text="PZN:", bg="#ffffff", fg="#0b4a86").pack(side="left", padx=(0, 6))
+        hist_pzn_var = tk.StringVar()
+        hist_entry = tk.Entry(hist_top, textvariable=hist_pzn_var, width=18)
+        hist_entry.pack(side="left", padx=4)
+        hist_info = tk.StringVar(value="PZN eingeben und Enter druecken.")
+        tk.Label(hist_top, textvariable=hist_info, bg="#ffffff", fg="#555").pack(side="left", padx=12)
+
+        hist_cols = ("snapshot", "erstellt_am", "artikel", "rabatt", "quelle")
+        hist_tv = ttk.Treeview(tab_hist, columns=hist_cols, show="headings", height=18)
+        for c, h, w in [("snapshot", "Snapshot", 90), ("erstellt_am", "Erstellt am", 160), ("artikel", "Artikel", 240), ("rabatt", "Rabatt %", 90), ("quelle", "Quelle", 240)]:
+            hist_tv.heading(c, text=h)
+            hist_tv.column(c, width=w, anchor="w")
+        hist_tv.pack(fill="both", expand=True, padx=10, pady=4)
+
+        def render_history(*_a):
+            for iid in hist_tv.get_children():
+                hist_tv.delete(iid)
+            pzn = hist_pzn_var.get().strip()
+            if not pzn:
+                hist_info.set("PZN eingeben und Enter druecken.")
+                return
+            # PZN normalisieren: zfill 8 falls reine Ziffern
+            digits = "".join(ch for ch in pzn if ch.isdigit())
+            pzn_norm = digits.zfill(8) if digits else pzn
+            with sqlite3.connect(DB_PATH) as con:
+                verlauf = history_for_pzn(con, pzn_norm)
+            if not verlauf:
+                hist_info.set(f"Kein Verlauf fuer PZN {pzn_norm} gefunden.")
+                return
+            for h in verlauf:
+                snap_label = f"#{h['snapshot_id']}" if h["snapshot_id"] else "aktuell"
+                pct = f"{(h['rabatt'] or 0) * 100:.1f} %" if h.get("rabatt") is not None else "-"
+                hist_tv.insert("", "end", values=(snap_label, h["erstellt_am"], h.get("artikel") or "", pct, h.get("snapshot_quelle") or ""))
+            hist_info.set(f"{len(verlauf)} Eintraege fuer PZN {pzn_norm}.")
+        hist_entry.bind("<Return>", render_history)
+        tk.Button(hist_top, text="Anzeigen", command=render_history).pack(side="left", padx=(8, 0))
+
+        self.status.set("NMG-Rabatte-Uebersicht geladen.")
+
     def show_apps_page(self):
         """Apps-Übersicht: alle Center als Schnellstart-Kacheln."""
         self.clear_page()
@@ -6387,6 +6604,8 @@ LIMIT 500
             ("\U0001f50d", _T("Vergleichs-Suche"), _T("PZN oder Artikelname schnell in allen Wissens-Tabellen finden."), self.open_vergleichssuche_window, "#0b6e6e"),
             # V1.1 SP9: Globale Suche als App-Kachel.
             ("\U0001f50d", "Globale Suche", "Kunden, Analysen und Artikel uebergreifend finden.", self.open_globale_suche_window, "#0b4a86"),
+            # V1.1 SP19: NMG-Rabatte-Uebersicht.
+            ("\U0001f4b0", "NMG-Rabatte", "Aktuelle Rabatte sehen, Diff zum letzten Import, Verlauf pro PZN.", self.show_nmg_rabatte_uebersicht, "#6b4fb3"),
         ]
         # V1.1 SP11: gleichgrosse Kacheln. rowconfigure(weight=1) + minsize,
         # grid statt pack innerhalb der Kachel, Beschreibung mit wraplength.
@@ -10455,6 +10674,19 @@ LIMIT 500
                 count_vorher = int(cur.fetchone()[0])
         except Exception:
             count_vorher = None
+
+        # V1.1 SP19: Vor jedem nmg_rabatte-Import einen Snapshot anlegen,
+        # damit Diff/Verlauf in der NMG-Rabatte-Uebersicht moeglich sind.
+        if ziel_tabelle == "nmg_rabatte":
+            try:
+                from .nmg_rabatte_history import take_snapshot
+                with sqlite3.connect(DB_PATH) as con_snap:
+                    quellen = ", ".join(Path(f).name for f in files[:3])
+                    if len(files) > 3:
+                        quellen += f" (+{len(files)-3} weitere)"
+                    take_snapshot(con_snap, quelle=quellen, bemerkung=f"vor Import von {len(files)} Datei(en)")
+            except Exception:
+                pass
 
         busy = self._show_busy_modal(title, f"Lese {len(files)} Datei(en)...")
         try:
