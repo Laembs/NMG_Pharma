@@ -23,6 +23,7 @@ from .compare import export_abweichungsanalyse
 from .historical_import import import_historical_market_folder, import_historical_market_file
 from .austausch_db import import_austausch_excel, count_austauschdatenbank, add_austausch_entry
 from .artikel_db import import_artikelstamm_excel, count_artikelstamm
+from .wirkstoff_db import import_wirkstoff_excel, wirkstoff_count
 from .vergleichssuche import search_unified, get_pzn_details
 from .file_loader import SUPPORTED_DATA_FILETYPES
 from .db_overview import get_database_overview, format_size
@@ -5620,7 +5621,7 @@ class NMGApp(tk.Tk):
         tk.Label(header, text=_T("Vergleichs-Suche"),
                  font=("Arial", 15, "bold"), fg="#0b4a86", bg="#ffffff").pack(anchor="w")
         tk.Label(header,
-                 text=_T("PZN oder Artikelname eingeben (ab 3 Zeichen). Treffer aus allen Wissens-Tabellen."),
+                 text=_T("PZN, Artikelname, Wirkstoff, Hersteller oder Staerke eingeben (ab 3 Zeichen)."),
                  font=("Arial", 9), fg="#666", bg="#ffffff").pack(anchor="w", pady=(2, 0))
 
         body = tk.Frame(win, bg="#ffffff")
@@ -5695,10 +5696,12 @@ class NMGApp(tk.Tk):
             ("herst", _T("Hersteller"), 0, 2),
             ("df", "DF", 1, 0),
             ("pck", "PCK", 1, 2),
-            ("apu", "APU", 2, 0),
-            ("ek", "EK", 2, 2),
-            ("nmg", "NMG-Stamm", 3, 0),
-            ("rabatt", _T("PK-Rabatt"), 3, 2),
+            ("wirkstoff", _T("Wirkstoff"), 2, 0),
+            ("staerke", _T("Staerke"), 2, 2),
+            ("apu", "APU", 3, 0),
+            ("ek", "EK", 3, 2),
+            ("nmg", "NMG-Stamm", 4, 0),
+            ("rabatt", _T("PK-Rabatt"), 4, 2),
         ]
         for key, label, row_i, col_i in info_fields:
             tk.Label(info_card, text=label + ":", bg="#fcfdff", fg="#666",
@@ -5809,6 +5812,8 @@ class NMGApp(tk.Tk):
             info_labels["herst"].configure(text=_fmt(info.get("herst")))
             info_labels["df"].configure(text=_fmt(info.get("df")))
             info_labels["pck"].configure(text=_fmt(info.get("pck")))
+            info_labels["wirkstoff"].configure(text=_fmt(info.get("wirkstoff")))
+            info_labels["staerke"].configure(text=_fmt(info.get("staerke")))
             apu = info.get("apu")
             info_labels["apu"].configure(
                 text=f"{apu:.2f} €" if isinstance(apu, (int, float)) else "–"
@@ -8341,6 +8346,18 @@ class NMGApp(tk.Tk):
             pady=7
         ).pack(side="left")
 
+        tk.Button(
+            toolbar,
+            text="Wirkstoff/Stärke importieren",
+            command=self._import_wirkstoff_staerke_dialog,
+            bg="#0b6e6e",
+            fg="white",
+            relief="flat",
+            font=("Arial", 10, "bold"),
+            padx=14,
+            pady=7
+        ).pack(side="left", padx=(8, 0))
+
         # Admin-Knoepfe nur zeigen, wenn (a) Windows-Login Admin-Login ist
         # und (b) Admin-Modus per Ctrl+Alt+A eingeschaltet wurde. Verhindert,
         # dass Mitarbeiterinnen "Auswertungen loeschen" versehentlich finden.
@@ -8367,6 +8384,44 @@ class NMGApp(tk.Tk):
                 padx=14,
                 pady=7
             ).pack(side="left", padx=(8, 0))
+
+    def _import_wirkstoff_staerke_dialog(self):
+        """V1.1 SP2: Import der Wirkstoff/Staerke-Excel ueber Datenbankuebersicht.
+        Excel-Datei waehlen → Worker-Thread-Import → Status + Logging + Refresh.
+        """
+        self._log_action("datenaktualisierung", "Wirkstoff/Staerke-Import geoeffnet")
+        file = filedialog.askopenfilename(
+            title="Wirkstoff/Staerke-Excel auswaehlen",
+            filetypes=SUPPORTED_DATA_FILETYPES,
+        )
+        if not file:
+            return
+        try:
+            stats = self._run_busy(
+                lambda: import_wirkstoff_excel(file),
+                title="Wirkstoff/Staerke-Import",
+                subtitle="Importiere Wirkstoffe und Staerken ...",
+            )
+        except Exception as exc:
+            self._log_error("datenaktualisierung", "Wirkstoff/Staerke-Import", exc)
+            messagebox.showerror("Wirkstoff/Staerke-Import", f"Fehler:\n{exc}")
+            return
+
+        total = wirkstoff_count()
+        msg = (
+            f"Datei: {Path(file).name}\n"
+            f"Gelesen: {stats['gelesen']:,}\n"
+            f"Neu importiert: {stats['importiert']:,}\n"
+            f"Aktualisiert: {stats['aktualisiert']:,}\n"
+            f"Uebersprungen: {stats['uebersprungen']:,}\n"
+            f"Fehler: {stats['fehler']:,}\n\n"
+            f"Tabelle tbl_wirkstoff_staerke enthaelt jetzt {total:,} Eintraege."
+        ).replace(",", ".")
+        self._log_action("datenaktualisierung", "Wirkstoff/Staerke importiert", msg.replace("\n", " | "))
+        self.status.set(f"Wirkstoff/Staerke-Import: {stats['importiert']} neu, {stats['aktualisiert']} aktualisiert.")
+        messagebox.showinfo("Wirkstoff/Staerke-Import", msg)
+        # Tabellen-Ansicht neu laden, damit die neue Zeilenzahl sichtbar ist.
+        self.show_datenbankuebersicht_page()
 
     def _table_exists(self, table_name):
         with sqlite3.connect(DB_PATH) as con:
