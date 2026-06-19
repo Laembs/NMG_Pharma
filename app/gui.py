@@ -144,7 +144,7 @@ from .roadmap_db import (
     update_roadmap_status,
 )
 from .migrations import run_migrations
-from .config import DB_PATH, DATA_DIR, ASSETS_DIR, SAVED_ANALYSES_DIR, UPDATE_DIR, OUTPUT_DIR, BACKUP_DIR, LOG_DIR
+from .config import DB_PATH, DATA_DIR, ASSETS_DIR, SAVED_ANALYSES_DIR, IMPORT_DIR, UPDATE_DIR, OUTPUT_DIR, BACKUP_DIR, LOG_DIR, jahr_quartal_pfad
 from .i18n import T as _T  # SP11: dict-basierte Uebersetzung
 from .backup import backup_erstellen, backup_wiederherstellen, backup_pruefen, versionsinfo, APP_VERSION, APP_VERSION_DISPLAY, backup_auto_taeglich, DB_SCHEMA_VERSION
 from .protocol_manager import (
@@ -8790,63 +8790,106 @@ LIMIT 500
     def _handle_manual_import_done(self, files, analyse_typ, stats):
         """V1.1 SP15: Post-Import-Logik (lief frueher synchron nach _run_busy).
         Wird im UI-Thread als on_done-Callback aus _run_background aufgerufen.
-        """
-        # Wenn einzelne Dateien fehlschlagen, kann optional das bekannte Mapping geöffnet werden.
-        if stats.get("failed"):
-            retry_errors = list(stats.get("errors", []))
-            if messagebox.askyesno(
-                "Dateiformat nicht erkannt",
-                "Einige Dateien konnten nicht automatisch erkannt werden.\n\n"
-                "Soll für diese Dateien der Rohdaten-Formatassistent geöffnet werden?"
-            ):
-                failed_names = {e.split(":", 1)[0] for e in retry_errors}
-                mapped_temp_files = []
-                for file in files:
-                    if Path(file).name not in failed_names:
-                        continue
-                    mapping = self._open_rohdaten_format_assistent(file, "Manuelle Analyse konnte nicht automatisch erkannt werden.")
-                    if not mapping:
-                        continue
-                    try:
-                        mapped = self._create_standard_rohdaten_from_mapping(file, mapping)
-                        mapped_temp_files.append(str(mapped))
-                    except Exception as mapped_exc:
-                        stats.setdefault("errors", []).append(f"{Path(file).name} Mapping: {mapped_exc}")
-                if mapped_temp_files:
-                    # Retry auch im Hintergrund laufen lassen.
-                    def on_retry_done(retry_stats):
-                        for key in ("selected", "imported", "duplicates", "failed", "positions", "learning_suggestions"):
-                            stats[key] = int(stats.get(key, 0) or 0) + int(retry_stats.get(key, 0) or 0)
-                        stats.setdefault("duplicate_files", []).extend(retry_stats.get("duplicate_files", []))
-                        stats.setdefault("errors", []).extend(retry_stats.get("errors", []))
-                        self._show_manual_import_stats(analyse_typ, stats)
-                    self._run_background(
-                        lambda update: import_manual_analysis_files(
-                            mapped_temp_files, analyse_typ=analyse_typ,
-                            bearbeiter=self.bearbeiter, progress_callback=update),
-                        title=f"Manuelle {analyse_typ}-Analysen (Retry, {len(mapped_temp_files)} Dateien)",
-                        subtitle=f"Datei 1 von {len(mapped_temp_files)} ...",
-                        progress=True,
-                        on_done=on_retry_done,
-                    )
-                    return
-        self._show_manual_import_stats(analyse_typ, stats)
 
-    def _show_manual_import_stats(self, analyse_typ, stats):
-        """V1.1 SP15: Statistik-Messagebox + Status-Toast nach Abschluss."""
+        V1.1 SP17: nicht-erkannte Dateien werden zusammengesammelt in
+        einer TXT-Liste; pro-Datei-Mapping-Dialog ist raus. Stattdessen
+        EINE Sammel-Frage am Ende, ob alle nicht-erkannten Dateien
+        nacheinander manuell gemapped werden sollen.
+        """
+        nicht_erkannt_pfad = None
+        if stats.get("failed"):
+            nicht_erkannt_pfad = self._write_nicht_erkannte_dateien(analyse_typ, stats)
+        self._show_manual_import_stats(analyse_typ, stats, nicht_erkannt_pfad)
+
+        # Einmalige Sammel-Frage am Ende.
+        if not stats.get("failed"):
+            return
+        retry_errors = list(stats.get("errors", []))
+        failed_names = {e.split(":", 1)[0] for e in retry_errors}
+        if not failed_names:
+            return
+        if not messagebox.askyesno(
+            "Nicht erkannte Dateien",
+            f"{stats.get('failed', 0)} Datei(en) wurden nicht automatisch erkannt.\n\n"
+            f"Eine Liste wurde gespeichert unter:\n{nicht_erkannt_pfad or '(konnte nicht geschrieben werden)'}\n\n"
+            "Sollen die nicht-erkannten Dateien jetzt nacheinander\n"
+            "mit dem Format-Assistenten manuell zugeordnet werden?"
+        ):
+            return
+
+        mapped_temp_files = []
+        for file in files:
+            if Path(file).name not in failed_names:
+                continue
+            mapping = self._open_rohdaten_format_assistent(file, "Manuelle Analyse konnte nicht automatisch erkannt werden.")
+            if not mapping:
+                continue
+            try:
+                mapped = self._create_standard_rohdaten_from_mapping(file, mapping)
+                mapped_temp_files.append(str(mapped))
+            except Exception as mapped_exc:
+                stats.setdefault("errors", []).append(f"{Path(file).name} Mapping: {mapped_exc}")
+        if mapped_temp_files:
+            def on_retry_done(retry_stats):
+                for key in ("selected", "imported", "duplicates", "failed", "positions", "learning_suggestions"):
+                    stats[key] = int(stats.get(key, 0) or 0) + int(retry_stats.get(key, 0) or 0)
+                stats.setdefault("duplicate_files", []).extend(retry_stats.get("duplicate_files", []))
+                stats.setdefault("errors", []).extend(retry_stats.get("errors", []))
+                self._show_manual_import_stats(analyse_typ, stats, None)
+            self._run_background(
+                lambda update: import_manual_analysis_files(
+                    mapped_temp_files, analyse_typ=analyse_typ,
+                    bearbeiter=self.bearbeiter, progress_callback=update),
+                title=f"Manuelle {analyse_typ}-Analysen (Retry, {len(mapped_temp_files)} Dateien)",
+                subtitle=f"Datei 1 von {len(mapped_temp_files)} ...",
+                progress=True,
+                on_done=on_retry_done,
+            )
+
+    def _write_nicht_erkannte_dateien(self, analyse_typ, stats):
+        """V1.1 SP17: Schreibt eine TXT-Sammeldatei mit den nicht-erkannten
+        Imports unter IMPORT_DIR/<typ>/<Jahr>/Q<n>/. Liefert den Pfad oder
+        None, falls das Schreiben fehlschlug.
+        """
+        try:
+            target_dir = jahr_quartal_pfad(IMPORT_DIR / analyse_typ)
+        except Exception:
+            return None
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        pfad = target_dir / f"nicht_erkannte_dateien_{stamp}.txt"
+        lines = [
+            f"Nicht erkannte Dateien aus dem Manuellen Import vom {datetime.now():%Y-%m-%d %H:%M:%S}",
+            f"Analyseart: {analyse_typ}",
+            f"Anzahl: {stats.get('failed', 0)}",
+            "=" * 70,
+            "",
+        ]
+        for err in stats.get("errors", []):
+            lines.append(err)
+        try:
+            pfad.write_text("\n".join(lines), encoding="utf-8")
+        except Exception:
+            return None
+        return pfad
+
+    def _show_manual_import_stats(self, analyse_typ, stats, nicht_erkannt_pfad=None):
+        """V1.1 SP15 / SP17: Statistik-Messagebox + Status-Toast nach Abschluss.
+        Wenn nicht-erkannte Dateien aufgelistet sind, wird der TXT-Pfad mit
+        angezeigt.
+        """
         msg = (
             f"Manuelle {analyse_typ}-Analysen importiert.\n\n"
             f"Ausgewählt: {stats.get('selected', 0)}\n"
             f"Neu übernommen: {stats.get('imported', 0)}\n"
             f"Bereits verarbeitet: {stats.get('duplicates', 0)}\n"
-            f"Fehler: {stats.get('failed', 0)}\n\n"
+            f"Fehler / nicht erkannt: {stats.get('failed', 0)}\n\n"
             f"Positionen für Produkt-/Marktanalyse: {stats.get('positions', 0)}\n"
             f"Neue Schulbank-Lernvorschläge: {stats.get('learning_suggestions', 0)}"
         )
         if stats.get("duplicates"):
             msg += "\n\nHinweis: " + str(stats.get("duplicates")) + " Analyse(n) wurden schon einmal verarbeitet."
-        if stats.get("errors"):
-            msg += "\n\nFehlerdetails:\n" + "\n".join(stats.get("errors", [])[:8])
+        if nicht_erkannt_pfad:
+            msg += f"\n\nNicht-erkannte Dateien:\n{nicht_erkannt_pfad}"
         try:
             add_roadmap_item(
                 bereich="Import / Analyse",
@@ -8861,12 +8904,12 @@ LIMIT 500
             )
         except Exception:
             pass
-        # Toast in der Status-Leiste, plus Statistik-Messagebox.
+        # Toast in der Status-Leiste + EINE Statistik-Messagebox (vorher doppelt).
         self._bg_status_toast(
-            f"Manuelle {analyse_typ}-Analysen importiert: {stats.get('imported',0)} neu, {stats.get('duplicates',0)} schon vorhanden."
+            f"Manuelle {analyse_typ}-Analysen: {stats.get('imported',0)} neu, "
+            f"{stats.get('duplicates',0)} doppelt, {stats.get('failed',0)} nicht erkannt."
         )
         messagebox.showinfo(f"Manuelle {analyse_typ}-Analysen", msg)
-        messagebox.showinfo("Manuelle Analysen", msg)
 
 
     def open_admin_auswertungen_loeschen(self):
