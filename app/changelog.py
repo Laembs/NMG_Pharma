@@ -5,6 +5,13 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V1.1 SP15", "2026-06-19", [
+        "Manuelle Imports laufen jetzt im HINTERGRUND - kein blockierender Modal-Dialog mehr.",
+        "Status-Box oben rechts mit Titel + aktueller Datei + Fortschritts-Balken; verschwindet nach Abschluss.",
+        "UI bleibt waehrend des Imports klickbar; mehrere Imports koennen parallel laufen.",
+        "Statistik-Toast unten in der Statusleiste nach Abschluss (8 s).",
+        "Neue Methode _run_background analog _run_busy, aber non-modal.",
+    ]),
     ("V1.1 SP14", "2026-06-19", [
         "Manuelle Imports: Fortschritts-Anzeige im Busy-Dialog. Zeigt 'Datei 5 von 96: foo.xlsx' statt 'Bitte warten'.",
         "Neuer _run_busy(..., progress=True)-Modus: Worker bekommt ein progress(text)-Callable und kann den Subtitle waehrend der Verarbeitung aktualisieren.",
