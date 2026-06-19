@@ -94,6 +94,29 @@ def run_migrations(db_path: Path = DB_PATH) -> list[str]:
         con.execute("CREATE INDEX IF NOT EXISTS idx_nmg_rabatte_historie_snapshot ON tbl_nmg_rabatte_historie(snapshot_id)")
         actions.append("tbl_nmg_rabatte_snapshots + tbl_nmg_rabatte_historie sichergestellt")
 
+        # V1.1 SP20: Manuelles Bearbeiten einzelner NMG-Rabatte. Neue Spalte
+        # gueltig_ab (ab wann der Rabatt gilt) + Aenderungs-Audit-Log (wer, wann,
+        # alt -> neu). Nur echte Rabatt-Aenderungen werden geloggt.
+        if _table_exists(con, "nmg_rabatte"):
+            if "gueltig_ab" not in _columns(con, "nmg_rabatte"):
+                con.execute("ALTER TABLE nmg_rabatte ADD COLUMN gueltig_ab TEXT")
+                actions.append("nmg_rabatte.gueltig_ab ergänzt")
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_nmg_rabatt_aenderungen(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nmg_pzn TEXT NOT NULL,
+                artikel TEXT,
+                rabatt_alt REAL,
+                rabatt_neu REAL,
+                gueltig_ab TEXT,
+                typ TEXT,
+                geaendert_von TEXT,
+                geaendert_am TEXT DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+        con.execute("CREATE INDEX IF NOT EXISTS idx_nmg_rabatt_aenderungen_pzn ON tbl_nmg_rabatt_aenderungen(nmg_pzn)")
+        actions.append("nmg_rabatte.gueltig_ab + tbl_nmg_rabatt_aenderungen sichergestellt")
+
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('db_schema_version', ?)", (DB_SCHEMA_VERSION,))
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('last_migration_at', ?)", (datetime.now().isoformat(timespec='seconds'),))
         con.commit()

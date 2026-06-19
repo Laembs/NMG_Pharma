@@ -95,7 +95,8 @@ CREATE TABLE nmg_rabatte(
     artikel TEXT,
     rabatt REAL,
     quelle TEXT,
-    letzte_aktualisierung TEXT
+    letzte_aktualisierung TEXT,
+    gueltig_ab TEXT
 );
 CREATE TABLE tbl_austauschartikel(
     original_pzn TEXT PRIMARY KEY,
@@ -534,7 +535,7 @@ def init_db(db_path: Path = DB_PATH) -> None:
         if REFERENCE_XLSX.exists():
             wb = load_workbook(REFERENCE_XLSX, data_only=True, read_only=True)
             for r in _read_rows(wb, 'DB_NMG_Rabatte'):
-                con.execute("INSERT OR REPLACE INTO nmg_rabatte VALUES (?,?,?,?,?)", (_pzn(r[0]), r[1], _num(r[2]), r[3], str(r[4] or '')))
+                con.execute("INSERT OR REPLACE INTO nmg_rabatte(nmg_pzn,artikel,rabatt,quelle,letzte_aktualisierung) VALUES (?,?,?,?,?)", (_pzn(r[0]), r[1], _num(r[2]), r[3], str(r[4] or '')))
             for r in _read_rows(wb, 'DB_Austausch_Artikel'):
                 con.execute("INSERT OR REPLACE INTO tbl_austauschartikel VALUES (?,?,?,?,?,?,?,?)", (_pzn(r[0]), r[1], _pzn(r[2]), r[3], r[4], str(r[5] or ''), r[6], r[7]))
             for r in _read_rows(wb, 'DB_Lieferfaehigkeit'):

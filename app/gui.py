@@ -6383,7 +6383,7 @@ LIMIT 500
         """
         from .nmg_rabatte_history import (
             current_stats, diff_against_snapshot, history_for_pzn,
-            list_snapshots,
+            list_snapshots, changes_for_pzn,
         )
         self.clear_page()
         self._page_header("NMG-Rabatte", "Aktuelle Rabatte, Statistik, Diff zum letzten Stand und Verlauf pro PZN.")
@@ -6408,14 +6408,21 @@ LIMIT 500
         filter_var = tk.StringVar()
         filter_entry = tk.Entry(filter_row, textvariable=filter_var, width=42)
         filter_entry.pack(side="left", padx=4)
+        # V1.1 SP20: Hinweis auf Doppelklick-Bearbeiten.
+        tk.Label(filter_row, text="Doppelklick auf eine Zeile = Rabatt bearbeiten", bg="#ffffff", fg="#6b4fb3", font=("Arial", 9, "italic")).pack(side="left", padx=12)
 
-        cols = ("nmg_pzn", "artikel", "rabatt", "quelle", "letzte_aktualisierung")
-        col_headers = {"nmg_pzn": "PZN", "artikel": "Artikel", "rabatt": "Rabatt %", "quelle": "Quelle", "letzte_aktualisierung": "Aktualisiert"}
+        # V1.1 SP20: DF + Pack (aus tbl_pzn_basisdaten) und Gueltig-ab ergaenzt.
+        cols = ("nmg_pzn", "artikel", "df", "pck", "rabatt", "gueltig_ab", "quelle", "letzte_aktualisierung")
+        col_headers = {"nmg_pzn": "PZN", "artikel": "Artikel", "df": "DF", "pck": "Pack",
+                       "rabatt": "Rabatt %", "gueltig_ab": "Gültig ab", "quelle": "Quelle",
+                       "letzte_aktualisierung": "Aktualisiert"}
+        col_widths = {"nmg_pzn": 90, "artikel": 220, "df": 70, "pck": 70, "rabatt": 80,
+                      "gueltig_ab": 100, "quelle": 150, "letzte_aktualisierung": 130}
         tv = ttk.Treeview(tab_tab, columns=cols, show="headings", height=20)
         for c in cols:
             tv.heading(c, text=col_headers[c])
-            tv.column(c, width=180 if c == "artikel" else 110, anchor="w")
-        tv.column("rabatt", width=80, anchor="e")
+            tv.column(c, width=col_widths[c], anchor="w")
+        tv.column("rabatt", anchor="e")
         tv.grid(row=1, column=0, sticky="nsew", padx=10, pady=4)
         sb = ttk.Scrollbar(tab_tab, orient="vertical", command=tv.yview)
         sb.grid(row=1, column=1, sticky="ns")
@@ -6430,25 +6437,69 @@ LIMIT 500
             q = filter_var.get().strip().lower()
             try:
                 with sqlite3.connect(DB_PATH) as con:
+                    # SP20: Artikel/DF/Pack aus den Artikel-Stammquellen ziehen.
+                    # tbl_pzn_basisdaten hat DF + Pack, aber nur duenn befuellt;
+                    # tbl_nmg_stamm (NMG-Artikelstamm) deckt fast alle Rabatt-PZNs
+                    # ab und liefert ueber menge+einheit die Packungsgroesse.
+                    # COALESCE: erst Rabatt-eigener Artikel, dann Stamm, dann Basis.
+                    # gueltig_ab nur selektieren, wenn die Spalte schon existiert
+                    # (Migration laeuft beim App-Start) - sonst leer statt Crash.
+                    has_gab = any(c[1] == "gueltig_ab" for c in con.execute("PRAGMA table_info(nmg_rabatte)"))
+                    gab_sel = "r.gueltig_ab" if has_gab else "'' AS gueltig_ab"
+                    # tbl_artikelstamm ist die gepflegte Artikel-Stammquelle mit
+                    # echten DF- und PCK-Spalten (hoechste Prioritaet). Existiert
+                    # erst nach dem ersten Artikelstamm-Import -> bedingt joinen.
+                    has_astamm = con.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tbl_artikelstamm'"
+                    ).fetchone() is not None
+                    a_art, a_df, a_pck, a_join = "NULL", "NULL", "NULL", ""
+                    if has_astamm:
+                        a_art, a_df, a_pck = "a.artikel", "a.df", "a.pck"
+                        a_join = "LEFT JOIN tbl_artikelstamm a ON a.pzn = r.nmg_pzn"
                     rows = con.execute(
-                        """SELECT nmg_pzn, artikel, rabatt, quelle, letzte_aktualisierung
-                           FROM nmg_rabatte ORDER BY rabatt DESC, nmg_pzn"""
+                        f"""SELECT r.nmg_pzn,
+                                  COALESCE(NULLIF(r.artikel,''), NULLIF({a_art},''), s.artikelname, b.artikelname) AS artikel,
+                                  COALESCE(NULLIF({a_df},''), NULLIF(b.df,'')) AS df,
+                                  COALESCE(NULLIF({a_pck},''), NULLIF(b.pck,''),
+                                           NULLIF(TRIM(COALESCE(s.menge,'')||' '||COALESCE(s.einheit,'')),'')) AS pck,
+                                  r.rabatt, {gab_sel}, r.quelle, r.letzte_aktualisierung
+                           FROM nmg_rabatte r
+                           {a_join}
+                           LEFT JOIN tbl_pzn_basisdaten b ON b.pzn = r.nmg_pzn
+                           LEFT JOIN tbl_nmg_stamm s ON s.pzn = r.nmg_pzn
+                           ORDER BY r.rabatt DESC, r.nmg_pzn"""
                     ).fetchall()
-            except Exception:
+                    df_vocab = self._nmg_df_vocab(con)
+            except Exception as exc:
                 rows = []
+                info_var.set(f"Fehler beim Laden der Rabatte: {exc}")
+                return
             shown = 0
             for r in rows:
                 if q:
                     hay = " ".join(str(v or "").lower() for v in r)
                     if q not in hay:
                         continue
-                pct = f"{float(r[2]) * 100:.1f} %" if r[2] is not None else ""
-                tv.insert("", "end", values=(r[0], r[1] or "", pct, r[3] or "", r[4] or ""))
+                pct = f"{float(r[4]) * 100:.1f} %" if r[4] is not None else ""
+                # SP20: DF fehlt in den Basisdaten oft -> aus dem Artikelnamen
+                # ableiten (Kuerzel wie ILO/FER/PEN, Vokabular aus den Basisdaten).
+                df_val = r[2] or self._derive_df_from_name(r[1], df_vocab)
+                # iid = PZN (Primary Key) -> Doppelklick findet die Zeile wieder.
+                tv.insert("", "end", iid=str(r[0]),
+                          values=(r[0], r[1] or "", df_val or "", r[3] or "", pct, r[5] or "", r[6] or "", r[7] or ""))
                 shown += 1
             info_var.set(f"{shown} von {len(rows)} Eintraegen")
 
         filter_var.trace_add("write", lambda *a: reload_table())
         reload_table()
+
+        # V1.1 SP20: Doppelklick auf eine Zeile -> Rabatt + Gueltig-ab bearbeiten.
+        def _on_row_dblclick(event):
+            iid = tv.identify_row(event.y)
+            if not iid:
+                return
+            self._edit_nmg_rabatt(iid, on_saved=lambda: (reload_table(), render_stats()))
+        tv.bind("<Double-1>", _on_row_dblclick)
 
         # --- Tab 2: Statistik ---
         tab_stats = tk.Frame(nb, bg="#ffffff")
@@ -6556,9 +6607,9 @@ LIMIT 500
         hist_info = tk.StringVar(value="PZN eingeben und Enter druecken.")
         tk.Label(hist_top, textvariable=hist_info, bg="#ffffff", fg="#555").pack(side="left", padx=12)
 
-        hist_cols = ("snapshot", "erstellt_am", "artikel", "rabatt", "quelle")
+        hist_cols = ("snapshot", "erstellt_am", "artikel", "rabatt", "wer", "quelle")
         hist_tv = ttk.Treeview(tab_hist, columns=hist_cols, show="headings", height=18)
-        for c, h, w in [("snapshot", "Snapshot", 90), ("erstellt_am", "Erstellt am", 160), ("artikel", "Artikel", 240), ("rabatt", "Rabatt %", 90), ("quelle", "Quelle", 240)]:
+        for c, h, w in [("snapshot", "Snapshot", 90), ("erstellt_am", "Erstellt am", 160), ("artikel", "Artikel", 220), ("rabatt", "Rabatt %", 90), ("wer", "Geändert von", 120), ("quelle", "Quelle / Änderung", 240)]:
             hist_tv.heading(c, text=h)
             hist_tv.column(c, width=w, anchor="w")
         hist_tv.pack(fill="both", expand=True, padx=10, pady=4)
@@ -6575,18 +6626,229 @@ LIMIT 500
             pzn_norm = digits.zfill(8) if digits else pzn
             with sqlite3.connect(DB_PATH) as con:
                 verlauf = history_for_pzn(con, pzn_norm)
-            if not verlauf:
+                aenderungen = changes_for_pzn(con, pzn_norm)
+            if not verlauf and not aenderungen:
                 hist_info.set(f"Kein Verlauf fuer PZN {pzn_norm} gefunden.")
                 return
             for h in verlauf:
                 snap_label = f"#{h['snapshot_id']}" if h["snapshot_id"] else "aktuell"
                 pct = f"{(h['rabatt'] or 0) * 100:.1f} %" if h.get("rabatt") is not None else "-"
-                hist_tv.insert("", "end", values=(snap_label, h["erstellt_am"], h.get("artikel") or "", pct, h.get("snapshot_quelle") or ""))
-            hist_info.set(f"{len(verlauf)} Eintraege fuer PZN {pzn_norm}.")
+                hist_tv.insert("", "end", values=(snap_label, h["erstellt_am"], h.get("artikel") or "", pct, "", h.get("snapshot_quelle") or ""))
+            # SP20: manuelle Aenderungen (Audit-Log) unten anhaengen.
+            for c in aenderungen:
+                alt = f"{(c['rabatt_alt'] or 0) * 100:.1f}%" if c.get("rabatt_alt") is not None else "-"
+                neu = f"{(c['rabatt_neu'] or 0) * 100:.1f}%" if c.get("rabatt_neu") is not None else "-"
+                pct = f"{(c['rabatt_neu'] or 0) * 100:.1f} %" if c.get("rabatt_neu") is not None else "-"
+                hist_tv.insert("", "end", values=("manuell", c.get("geaendert_am") or "", "", pct, c.get("geaendert_von") or "", f"{alt} → {neu}"))
+            hist_info.set(f"{len(verlauf)} Verlauf- + {len(aenderungen)} manuelle Eintraege fuer PZN {pzn_norm}.")
         hist_entry.bind("<Return>", render_history)
         tk.Button(hist_top, text="Anzeigen", command=render_history).pack(side="left", padx=(8, 0))
 
         self.status.set("NMG-Rabatte-Uebersicht geladen.")
+
+    @staticmethod
+    def _nmg_df_vocab(con):
+        """V1.1 SP20: Vokabular bekannter DF-Kuerzel aus den Basisdaten.
+
+        Die Darreichungsform (DF) ist nur in tbl_pzn_basisdaten als eigene Spalte
+        gepflegt und dort duenn. Die Kuerzel (ILO, FER, PEN, IFK, ...) tauchen aber
+        auch im Artikelnamen auf. Wir sammeln die real existierenden DF-Codes als
+        Vokabular, um sie spaeter aus dem Namen ableiten zu koennen.
+        """
+        try:
+            rows = con.execute(
+                "SELECT DISTINCT df FROM tbl_pzn_basisdaten WHERE df IS NOT NULL AND TRIM(df)<>''"
+            ).fetchall()
+        except Exception:
+            return set()
+        vocab = set()
+        for (d,) in rows:
+            t = (d or "").strip().upper()
+            if 2 <= len(t) <= 5 and t.isalpha():
+                vocab.add(t)
+        return vocab
+
+    # SP20: Langform-Darreichungsformen -> Kurzcode. Reihenfolge = Prioritaet
+    # (Tabletten/Kapseln zuerst, dann Geraet Spritze/Pen, dann Pulver/Konzentrat/
+    # Infusion, zuletzt generische Injektion). Substrings ohne Umlaute, damit der
+    # Vergleich auf dem klein geschriebenen Namen sicher greift.
+    _DF_NAME_RULES = [
+        ("filmtablet", "FTA"), ("retardtablet", "RET"), ("hartkapsel", "HKP"),
+        ("weichkapsel", "WKA"), ("kapsel", "KAP"), ("tablet", "TAB"),
+        ("fertigpen", "PEN"), ("fertigspr", "FER"), ("fert.s", "FER"),
+        ("fert.-s", "FER"), ("fertigsp", "FER"),
+        ("plv", "PLV"), ("pulver", "PLV"),
+        ("konz", "IFK"),
+        ("infusionsl", "INF"), ("infusion", "INF"),
+        ("depot-injektionssusp", "ISU"), ("injektionssusp", "ISU"),
+        ("injektionsl", "ILO"), ("injekt.-l", "ILO"), ("inj.-l", "ILO"), ("inj-l", "ILO"),
+        ("durchstechfl", "DFL"),
+    ]
+
+    @classmethod
+    def _derive_df_from_name(cls, name, vocab):
+        """V1.1 SP20: DF-Kurzcode aus dem Artikelnamen ableiten.
+
+        1. Kurzform-Namen (z.B. 'ENBREL 50MG FER'): erstes Token, das ein
+           bekanntes DF-Kuerzel ist (vocab aus den Basisdaten).
+        2. Langform-Namen (z.B. 'ENBREL 50 mg Inj.-Lsg.i.e.Fertigspritze'):
+           Schluesselwort -> Code ueber _DF_NAME_RULES.
+        """
+        if not name:
+            return None
+        import re
+        if vocab:
+            for tok in re.findall(r"[A-Za-zÄÖÜäöü]+", str(name).upper()):
+                if tok in vocab:
+                    return tok
+        low = str(name).lower()
+        for needle, code in cls._DF_NAME_RULES:
+            if needle in low:
+                return code
+        return None
+
+    def _edit_nmg_rabatt(self, nmg_pzn, on_saved=None):
+        """V1.1 SP20: Dialog zum Bearbeiten eines einzelnen NMG-Rabatts.
+
+        Zeigt PZN/Artikel/DF/Pack (read-only), Rabatt % und 'Gueltig ab' editierbar.
+        Beim Speichern wird der Rabatt nur dann ins Audit-Log geschrieben, wenn er
+        sich tatsaechlich geaendert hat (gleicher Rabatt -> kein Log-Eintrag). Die
+        'Gueltig ab'-Aenderung wird immer gespeichert.
+        """
+        import getpass
+        from tkinter import messagebox
+        from .nmg_rabatte_history import log_rabatt_change
+
+        try:
+            with sqlite3.connect(DB_PATH) as con:
+                has_gab = any(c[1] == "gueltig_ab" for c in con.execute("PRAGMA table_info(nmg_rabatte)"))
+                gab_sel = "r.gueltig_ab" if has_gab else "'' AS gueltig_ab"
+                has_astamm = con.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tbl_artikelstamm'"
+                ).fetchone() is not None
+                a_art, a_df, a_pck, a_join = "NULL", "NULL", "NULL", ""
+                if has_astamm:
+                    a_art, a_df, a_pck = "a.artikel", "a.df", "a.pck"
+                    a_join = "LEFT JOIN tbl_artikelstamm a ON a.pzn = r.nmg_pzn"
+                row = con.execute(
+                    f"""SELECT COALESCE(NULLIF(r.artikel,''), NULLIF({a_art},''), s.artikelname, b.artikelname) AS artikel,
+                              r.rabatt, {gab_sel},
+                              COALESCE(NULLIF({a_df},''), NULLIF(b.df,'')) AS df,
+                              COALESCE(NULLIF({a_pck},''), NULLIF(b.pck,''),
+                                       NULLIF(TRIM(COALESCE(s.menge,'')||' '||COALESCE(s.einheit,'')),'')) AS pck
+                       FROM nmg_rabatte r
+                       {a_join}
+                       LEFT JOIN tbl_pzn_basisdaten b ON b.pzn = r.nmg_pzn
+                       LEFT JOIN tbl_nmg_stamm s ON s.pzn = r.nmg_pzn
+                       WHERE r.nmg_pzn = ?""",
+                    (str(nmg_pzn),),
+                ).fetchone()
+                df_vocab = self._nmg_df_vocab(con)
+        except Exception as exc:
+            messagebox.showerror("Fehler", f"Rabatt konnte nicht geladen werden:\n{exc}")
+            return
+        if not row:
+            messagebox.showerror("Nicht gefunden", f"Kein Rabatt-Eintrag fuer PZN {nmg_pzn}.")
+            return
+
+        artikel, rabatt_alt, gueltig_ab_alt, df, pck = row[0], row[1], row[2], row[3], row[4]
+        # SP20: DF aus dem Artikelnamen ableiten, wenn die Basisdaten keine fuehren.
+        if not df:
+            df = self._derive_df_from_name(artikel, df_vocab)
+
+        dlg = tk.Toplevel(self)
+        dlg.title(f"Rabatt bearbeiten – PZN {nmg_pzn}")
+        dlg.configure(bg="#ffffff")
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+
+        frm = tk.Frame(dlg, bg="#ffffff")
+        frm.pack(fill="both", expand=True, padx=20, pady=16)
+
+        def info_row(r, label, value):
+            tk.Label(frm, text=label, bg="#ffffff", fg="#666", font=("Arial", 10)).grid(row=r, column=0, sticky="w", padx=(0, 14), pady=3)
+            tk.Label(frm, text=value or "–", bg="#ffffff", fg="#123", font=("Arial", 10, "bold")).grid(row=r, column=1, sticky="w", pady=3)
+
+        info_row(0, "PZN:", str(nmg_pzn))
+        info_row(1, "Artikel:", artikel or "")
+        info_row(2, "DF:", df or "")
+        info_row(3, "Pack:", pck or "")
+
+        tk.Frame(frm, bg="#e3e8ef", height=1).grid(row=4, column=0, columnspan=2, sticky="ew", pady=10)
+
+        tk.Label(frm, text="Rabatt %:", bg="#ffffff", fg="#0b4a86", font=("Arial", 10)).grid(row=5, column=0, sticky="w", padx=(0, 14), pady=4)
+        rabatt_var = tk.StringVar(value=(f"{rabatt_alt * 100:.2f}".rstrip("0").rstrip(".") if rabatt_alt is not None else ""))
+        rabatt_entry = tk.Entry(frm, textvariable=rabatt_var, width=16)
+        rabatt_entry.grid(row=5, column=1, sticky="w", pady=4)
+
+        tk.Label(frm, text="Gültig ab:", bg="#ffffff", fg="#0b4a86", font=("Arial", 10)).grid(row=6, column=0, sticky="w", padx=(0, 14), pady=4)
+        gueltig_var = tk.StringVar(value=str(gueltig_ab_alt or ""))
+        gueltig_entry = tk.Entry(frm, textvariable=gueltig_var, width=16)
+        gueltig_entry.grid(row=6, column=1, sticky="w", pady=4)
+        tk.Label(frm, text="(Format JJJJ-MM-TT, z. B. 2026-07-01)", bg="#ffffff", fg="#999", font=("Arial", 8)).grid(row=7, column=1, sticky="w")
+        tk.Button(frm, text="Heute", font=("Arial", 8),
+                  command=lambda: gueltig_var.set(datetime.now().strftime("%Y-%m-%d"))).grid(row=6, column=1, sticky="e", padx=(0, 0))
+
+        def _parse_percent(text):
+            s = str(text or "").strip().replace("%", "").replace(",", ".").strip()
+            if s == "":
+                return None
+            return float(s) / 100.0
+
+        def do_save():
+            try:
+                rabatt_neu = _parse_percent(rabatt_var.get())
+            except ValueError:
+                messagebox.showerror("Ungültig", "Rabatt muss eine Zahl sein (z. B. 12 oder 12,5).", parent=dlg)
+                return
+            gueltig_neu = gueltig_var.get().strip()
+
+            changed_rabatt = abs((rabatt_neu or 0.0) - (rabatt_alt or 0.0)) > 1e-9
+            changed_gueltig = (gueltig_neu or "") != (str(gueltig_ab_alt or ""))
+            if not changed_rabatt and not changed_gueltig:
+                dlg.destroy()
+                return
+
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    con.execute(
+                        "UPDATE nmg_rabatte SET rabatt=?, gueltig_ab=?, letzte_aktualisierung=? WHERE nmg_pzn=?",
+                        (rabatt_neu, gueltig_neu or None,
+                         datetime.now().strftime("%Y-%m-%d %H:%M:%S"), str(nmg_pzn)),
+                    )
+                    # Audit-Log NUR bei echter Rabatt-Aenderung (gleicher Rabatt -> kein Eintrag).
+                    if changed_rabatt:
+                        log_rabatt_change(
+                            con, nmg_pzn, artikel, rabatt_alt, rabatt_neu,
+                            gueltig_neu, getpass.getuser(), typ="manuell",
+                        )
+                    con.commit()
+            except Exception as exc:
+                messagebox.showerror("Fehler", f"Speichern fehlgeschlagen:\n{exc}", parent=dlg)
+                return
+
+            self.status.set(
+                f"Rabatt PZN {nmg_pzn} aktualisiert"
+                + (f" ({(rabatt_alt or 0)*100:.1f} % → {(rabatt_neu or 0)*100:.1f} %)" if changed_rabatt else " (Gültig-ab)")
+            )
+            dlg.destroy()
+            if callable(on_saved):
+                try:
+                    on_saved()
+                except Exception:
+                    pass
+
+        btn_row = tk.Frame(frm, bg="#ffffff")
+        btn_row.grid(row=8, column=0, columnspan=2, sticky="e", pady=(16, 0))
+        tk.Button(btn_row, text="Abbrechen", command=dlg.destroy).pack(side="right", padx=(8, 0))
+        tk.Button(btn_row, text="Speichern", command=do_save, bg="#6b4fb3", fg="white",
+                  activebackground="#5a3fa0", activeforeground="white").pack(side="right")
+
+        rabatt_entry.focus_set()
+        rabatt_entry.bind("<Return>", lambda *_a: do_save())
+        gueltig_entry.bind("<Return>", lambda *_a: do_save())
+        dlg.bind("<Escape>", lambda *_a: dlg.destroy())
 
     def show_apps_page(self):
         """Apps-Übersicht: alle Center als Schnellstart-Kacheln."""
@@ -10636,7 +10898,7 @@ LIMIT 500
     # ── GENERISCHER IMPORT-ASSISTENT ────────────────────────────────────────────
     def _import_assistent(self, title, ziel_tabelle, pflicht_spalten, optionale_spalten,
                            insert_sql, mapping_key, beschreibung="", numeric_fields=None,
-                           rabatt_fields=None):
+                           rabatt_fields=None, gueltig_ab_prompt=False, konstante_felder=None):
         """Generischer Import-Assistent: xlsx/csv/txt → Datenbank.
         Erkennt Spalten automatisch, bietet Mapping-Dialog bei Unklarheit.
 
@@ -10658,6 +10920,22 @@ LIMIT 500
         )
         if not files:
             return
+
+        # V1.1 SP20: Konstante Felder, die in jeden Record geschrieben werden,
+        # sofern die Datei sie nicht selbst liefert. Fuer PK-Rabatte: 'Gueltig ab'.
+        konstante_felder = dict(konstante_felder or {})
+        if gueltig_ab_prompt:
+            from tkinter import simpledialog
+            heute = datetime.now().strftime("%Y-%m-%d")
+            antwort = simpledialog.askstring(
+                "Gültig ab",
+                "Ab wann sollen die importierten Rabatte gelten?\n"
+                "(Format JJJJ-MM-TT – leer lassen = ohne Datum)",
+                initialvalue=heute,
+                parent=self,
+            )
+            if antwort is not None and antwort.strip():
+                konstante_felder["gueltig_ab"] = antwort.strip()
 
         gesamt_neu = 0
         gesamt_aktualisiert = 0
@@ -10793,6 +11071,11 @@ LIMIT 500
                                     record[col_name] = raw if raw not in ("", None) else None
                         record["importdatum"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         record["quelle"] = Path(filepath).name
+                        # SP20: konstante Felder (z.B. Gueltig-ab) nur setzen, wenn die
+                        # Datei selbst keinen Wert geliefert hat.
+                        for k, v in konstante_felder.items():
+                            if record.get(k) in (None, ""):
+                                record[k] = v
 
                         # SP13: Leere PZN bewusst ueberspringen statt NULL-Eintraege zu produzieren.
                         if "pzn" in record and (record["pzn"] is None or str(record["pzn"]).strip() == ""):
@@ -11114,24 +11397,28 @@ LIMIT 500
                 ("hersteller", ["Hersteller", "Lieferant", "Výrobca", "Dodávateľ"], ["herst", "liefer", "vyrobca", "dodavat"]),
                 ("rabatt_prozent", ["Rabatt %", "Rabatt Prozent", "Prozent", "PK-Rabatt", "Rabatt", "Zľava", "Zlava"], ["rabatt", "prozent", " %", "zlava", "zľava"]),
                 ("rabatt_euro", ["Rabatt €", "Rabatt Euro", "Abschlag", "Zľava EUR"], ["euro", "rabatt eur", "abschlag"]),
-                ("gueltigkeit", ["Gültigkeit", "Gültig bis", "Gültig ab", "Laufzeit", "Platnosť"], ["gueltig", "laufzeit", "platnost"]),
+                # SP20: 'Gueltig ab' landet jetzt in nmg_rabatte.gueltig_ab. Liefert
+                # die Datei keinen Wert, greift das beim Import abgefragte Datum.
+                ("gueltig_ab", ["Gültig ab", "Gültig seit", "Gültigkeit", "Laufzeit", "Platnosť od"], ["gueltig ab", "gueltig_ab", "gueltig seit", "platnost"]),
             ],
             # Direkt in die Wahrheits-Tabelle nmg_rabatte (V1.0 SP1).
             # Spaltenmapping: pzn -> nmg_pzn, artikelname -> artikel,
-            # rabatt_prozent -> rabatt, importdatum -> letzte_aktualisierung.
-            # rabatt_euro, hersteller, gueltigkeit landen (noch) nirgends -
-            # Wahrheits-Tabelle hat sie nicht.
-            insert_sql="""INSERT INTO nmg_rabatte(nmg_pzn,artikel,rabatt,quelle,letzte_aktualisierung)
-                VALUES(:pzn,:artikelname,:rabatt_prozent,:quelle,:importdatum)
+            # rabatt_prozent -> rabatt, importdatum -> letzte_aktualisierung,
+            # gueltig_ab -> gueltig_ab (SP20). rabatt_euro, hersteller landen
+            # (noch) nirgends - Wahrheits-Tabelle hat sie nicht.
+            insert_sql="""INSERT INTO nmg_rabatte(nmg_pzn,artikel,rabatt,quelle,letzte_aktualisierung,gueltig_ab)
+                VALUES(:pzn,:artikelname,:rabatt_prozent,:quelle,:importdatum,:gueltig_ab)
                 ON CONFLICT(nmg_pzn) DO UPDATE SET
                     artikel=COALESCE(NULLIF(excluded.artikel,''),nmg_rabatte.artikel),
                     rabatt=COALESCE(excluded.rabatt,nmg_rabatte.rabatt),
                     quelle=excluded.quelle,
-                    letzte_aktualisierung=excluded.letzte_aktualisierung""",
+                    letzte_aktualisierung=excluded.letzte_aktualisierung,
+                    gueltig_ab=COALESCE(NULLIF(excluded.gueltig_ab,''),nmg_rabatte.gueltig_ab)""",
             mapping_key="pk_rabatte",
             beschreibung="Partnerkonditionen-Rabatte importieren. Erwartet PZN und Rabattspalte(n).",
             numeric_fields=["rabatt_prozent", "rabatt_euro"],
             rabatt_fields=["rabatt_prozent"],
+            gueltig_ab_prompt=True,
         )
 
     def import_apu_data(self):
