@@ -20,6 +20,36 @@ except Exception:
     _HAS_TKCAL = False
 
 
+# V1.1 SP11: Einheitliche Button-Stile fuer die App.
+_BTN_PRIMARY = {"bg": "#0b4a86", "fg": "white", "activebackground": "#0b4a86",
+                "relief": "flat", "font": ("Arial", 10, "bold"),
+                "padx": 14, "pady": 7}
+_BTN_DANGER = {"bg": "#9b1c1c", "fg": "white", "activebackground": "#9b1c1c",
+               "relief": "flat", "font": ("Arial", 10, "bold"),
+               "padx": 14, "pady": 7}
+_BTN_NEUTRAL = {"bg": "#f0f4fa", "fg": "#0b4a86", "activebackground": "#e8eef6",
+                "relief": "solid", "borderwidth": 1,
+                "font": ("Arial", 10), "padx": 12, "pady": 6}
+
+
+def primary_button(parent, text, command, **kwargs):
+    """V1.1 SP11: blauer Standard-Button (Haupt-Aktion)."""
+    opts = dict(_BTN_PRIMARY); opts.update(kwargs)
+    return tk.Button(parent, text=text, command=command, **opts)
+
+
+def danger_button(parent, text, command, **kwargs):
+    """V1.1 SP11: roter Button (destruktive Aktion)."""
+    opts = dict(_BTN_DANGER); opts.update(kwargs)
+    return tk.Button(parent, text=text, command=command, **opts)
+
+
+def neutral_button(parent, text, command, **kwargs):
+    """V1.1 SP11: heller Button (Abbrechen, Schliessen, Nebensache)."""
+    opts = dict(_BTN_NEUTRAL); opts.update(kwargs)
+    return tk.Button(parent, text=text, command=command, **opts)
+
+
 def _make_date_entry(parent, textvariable, width: int = 12, **kwargs):
     """V1.1 SP10: Liefert ein DateEntry-Widget (tkcalendar) oder ein
     klassisches tk.Entry mit Datums-Hint, je nach Verfuegbarkeit.
@@ -42,7 +72,7 @@ from .importer import import_excel
 from .learning_db import import_learning_list, import_checked_auswertung
 from .manual_analysis_import import import_manual_analysis_files
 from .exporter import create_linden_export, UnknownInputFormatError
-from .market import export_marktanalyse_nicht_nmg, export_marktanalyse_produktchancen, datenbankstatus, export_produktanalyse_neu
+from .market import export_marktanalyse_nicht_nmg, export_marktanalyse_produktchancen, export_produktanalyse_neu
 from .compare import export_abweichungsanalyse
 from .historical_import import import_historical_market_folder, import_historical_market_file
 from .austausch_db import import_austausch_excel, count_austauschdatenbank, add_austausch_entry
@@ -1504,6 +1534,9 @@ class NMGApp(tk.Tk):
     def _status_card(self, parent):
         auto = self.auto_backup_result
 
+        # V1.1 SP11: 'Datenbank: <Name>' aus Aktiver-Bearbeiter-Box entfernt
+        # (Punkt 6) und die separate Datenbankstatus-Box entfernt (Punkt 5,
+        # Werte waren nicht real).
         box_bearbeiter = tk.Frame(parent, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
         box_bearbeiter.pack(fill="x", pady=(0, 12))
         tk.Label(
@@ -1517,23 +1550,12 @@ class NMGApp(tk.Tk):
             box_bearbeiter,
             text=(
                 f"Windows-Login:\n{self.bearbeiter or 'unbekannt'}\n\n"
-                f"Version:\n{APP_VERSION}\n\n"
-                f"Datenbank:\n{DB_PATH.name}"
+                f"Version:\n{APP_VERSION}"
             ),
             justify="left",
             bg="#ffffff",
             fg="#222"
         ).pack(anchor="w", padx=14, pady=(0, 14))
-
-        box_db = tk.Frame(parent, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
-        box_db.pack(fill="x", pady=(0, 12))
-        tk.Label(box_db, text="🗄 Datenbankstatus", font=("Arial", 13, "bold"), fg="#0b4a86", bg="#ffffff").pack(anchor="w", padx=14, pady=(14, 6))
-        try:
-            st = datenbankstatus()
-            text = f"Auswertungen: {st.get('auswertungen',0)}\nPK-Analysen: {st.get('pk_auswertungen', st.get('nmg_auswertungen',0))}\nZF-Analysen: {st.get('zf_auswertungen',0)}\nPositionen: {st.get('positionen',0)}\nNicht-PK: {st.get('nicht_nmg_positionen',0)}"
-        except Exception:
-            text = "Status nicht verfügbar"
-        tk.Label(box_db, text=text, justify="left", bg="#ffffff").pack(anchor="w", padx=14, pady=(0, 14))
 
         box_updates = tk.Frame(parent, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
         box_updates.pack(fill="x", pady=(0, 12))
@@ -3245,9 +3267,87 @@ LIMIT 500
         tk.Button(bar, text="Wiederherstellen", command=do_restore, bg="#0b4a86", fg="white", padx=18, pady=8).pack(side="right")
 
     def show_version(self):
-        text = versionsinfo() + f"\nUpdate-Ordner: {UPDATE_DIR}"
-        self.status.set(text)
-        messagebox.showinfo("Versionsinfo", text)
+        """V1.1 SP11: Versionsinfo als Seite mit Versionsliste links und
+        Changelog rechts (statt nur Messagebox).
+        """
+        from .changelog import get_changelog
+        self.clear_page()
+        self._page_header(
+            "Versionsinfo",
+            f"Aktuelle Version: {APP_VERSION_DISPLAY} ({APP_VERSION})  ·  DB-Schema: {DB_SCHEMA_VERSION}  ·  Update-Ordner: {UPDATE_DIR}",
+        )
+
+        body = tk.Frame(self.page, bg="#ffffff")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body.columnconfigure(0, weight=0)
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+
+        # Links: Versionsliste
+        left = tk.LabelFrame(body, text=" Versionen ",
+                             bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold"))
+        left.grid(row=0, column=0, sticky="ns", padx=(0, 8))
+        left.rowconfigure(0, weight=1)
+        left.columnconfigure(0, weight=1)
+        version_tree = ttk.Treeview(left, columns=("name", "datum"),
+                                    show="headings", selectmode="browse",
+                                    height=22)
+        version_tree.heading("name", text="Version")
+        version_tree.heading("datum", text="Datum")
+        version_tree.column("name", width=140, anchor="w")
+        version_tree.column("datum", width=100, anchor="w")
+        version_tree.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        vsb = tk.Scrollbar(left, orient="vertical", command=version_tree.yview)
+        vsb.grid(row=0, column=1, sticky="ns")
+        version_tree.configure(yscrollcommand=vsb.set)
+
+        # Rechts: Changelog
+        right = tk.LabelFrame(body, text=" Aenderungen ",
+                              bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold"))
+        right.grid(row=0, column=1, sticky="nsew")
+        right.rowconfigure(0, weight=1)
+        right.columnconfigure(0, weight=1)
+        text_widget = tk.Text(right, wrap="word", font=("Arial", 10),
+                              bg="#fcfdff", fg="#222", relief="flat",
+                              padx=12, pady=10)
+        text_widget.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        tsb = tk.Scrollbar(right, orient="vertical", command=text_widget.yview)
+        tsb.grid(row=0, column=1, sticky="ns")
+        text_widget.configure(yscrollcommand=tsb.set, state="disabled")
+
+        changelog = get_changelog()
+        id_to_entry: dict[str, tuple[str, str, list[str]]] = {}
+        for entry in changelog:
+            name, datum, _lines = entry
+            iid = version_tree.insert("", "end", values=(name, datum))
+            id_to_entry[iid] = entry
+
+        def on_select(_e=None):
+            sel = version_tree.selection()
+            if not sel:
+                return
+            entry = id_to_entry.get(sel[0])
+            if not entry:
+                return
+            name, datum, lines = entry
+            text_widget.configure(state="normal")
+            text_widget.delete("1.0", "end")
+            text_widget.insert("end", f"{name}  ({datum})\n\n", "head")
+            for line in lines:
+                text_widget.insert("end", f"  • {line}\n\n")
+            text_widget.tag_configure("head", font=("Arial", 12, "bold"),
+                                      foreground="#0b4a86")
+            text_widget.configure(state="disabled")
+
+        version_tree.bind("<<TreeviewSelect>>", on_select)
+        # erste Version vorselektieren
+        first = version_tree.get_children()
+        if first:
+            version_tree.selection_set(first[0])
+            version_tree.focus(first[0])
+            on_select()
+
+        self.status.set(f"Versionsinfo: {len(changelog)} Versionen.")
 
     def clear_page(self):
         for widget in self.page.winfo_children():
@@ -3970,9 +4070,8 @@ LIMIT 500
         def save():
             new_tiles = {k for k, v in tile_checks.items() if v.get()}
             new_info = {k for k, v in info_checks.items() if v.get()}
-            if not new_tiles and not new_info:
-                messagebox.showinfo("Dashboard", "Bitte mindestens eine Kachel oder einen Info-Bereich auswählen.")
-                return
+            # V1.1 SP11: leeres Set ist OK - Dashboard wird auf der Startseite
+            # einfach kleiner dargestellt (kein leerer Platzhalter).
             if len(new_tiles) > 8:
                 messagebox.showinfo("Dashboard", f"Maximal 8 Schnellzugriff-Kacheln erlaubt. Aktuell gewählt: {len(new_tiles)}.\nBitte {len(new_tiles)-8} Kachel(n) abwählen.")
                 return
@@ -4678,16 +4777,29 @@ LIMIT 500
             for i in range(cols_count):
                 tile_frame.columnconfigure(i, weight=1)
 
+            # V1.1 SP11: alle Kacheln gleich hoch ueber rowconfigure + grid.
+            rows_needed = (len(active_tiles) + cols_count - 1) // cols_count
+            for ri in range(rows_needed):
+                tile_frame.rowconfigure(ri, weight=1, minsize=210)
             for idx, (key, icon, title, desc, cmd, color) in enumerate(active_tiles):
                 row = idx // cols_count
                 col = idx % cols_count
                 f = tk.Frame(tile_frame, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1)
-                f.grid(row=row, column=col, sticky="nsew", padx=8, pady=8, ipadx=4, ipady=4)
-                tk.Label(f, text=icon, font=("Arial", 28), bg="#f8fbff", fg=color).pack(pady=(14, 4))
-                tk.Label(f, text=title, font=("Arial", 12, "bold"), bg="#f8fbff", fg="#123").pack()
-                tk.Label(f, text=desc, wraplength=190, justify="center", bg="#f8fbff", fg="#555", font=("Arial", 9)).pack(padx=10, pady=6)
-                tk.Button(f, text="Öffnen  →", command=cmd, bg=color, fg="white", activebackground=color,
-                          relief="flat", font=("Arial", 10, "bold"), padx=14, pady=6).pack(fill="x", padx=14, pady=(4, 12))
+                f.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
+                f.rowconfigure(2, weight=1)
+                f.columnconfigure(0, weight=1)
+                tk.Label(f, text=icon, font=("Arial", 26), bg="#f8fbff", fg=color
+                         ).grid(row=0, column=0, pady=(12, 4))
+                tk.Label(f, text=title, font=("Arial", 11, "bold"), bg="#f8fbff",
+                         fg="#123").grid(row=1, column=0)
+                tk.Label(f, text=desc, wraplength=180, justify="center",
+                         bg="#f8fbff", fg="#555", font=("Arial", 9)
+                         ).grid(row=2, column=0, padx=10, pady=6, sticky="n")
+                tk.Button(f, text="Öffnen  →", command=cmd,
+                          bg=color, fg="white", activebackground=color,
+                          relief="flat", font=("Arial", 10, "bold"),
+                          padx=14, pady=7
+                          ).grid(row=3, column=0, sticky="ew", padx=14, pady=(4, 12))
         else:
             tk.Label(inner, text="Keine Kacheln aktiv. Bitte '⚙️ Dashboard anpassen' nutzen.", fg="#888", bg="#ffffff", font=("Arial", 10)).pack(pady=20)
 
@@ -5947,18 +6059,33 @@ LIMIT 500
             # V1.1 SP9: Globale Suche als App-Kachel.
             ("\U0001f50d", "Globale Suche", "Kunden, Analysen und Artikel uebergreifend finden.", self.open_globale_suche_window, "#0b4a86"),
         ]
-        # V1.1 SP9: bei mehr als 4 Tiles in Mehrzeilen-Grid umbrechen.
+        # V1.1 SP11: gleichgrosse Kacheln. rowconfigure(weight=1) + minsize,
+        # grid statt pack innerhalb der Kachel, Beschreibung mit wraplength.
         cols_per_row = 4
+        rows_needed = (len(app_tiles) + cols_per_row - 1) // cols_per_row
+        for ri in range(rows_needed):
+            body.rowconfigure(ri, weight=1, minsize=260)
+
         for idx, (icon, title, desc, cmd, color) in enumerate(app_tiles):
             r, c = divmod(idx, cols_per_row)
-            f = tk.Frame(body, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1)
-            f.grid(row=r, column=c, sticky="nsew", padx=10, pady=10, ipadx=4, ipady=4)
-            tk.Label(f, text=icon, font=("Arial", 36), bg="#f8fbff", fg=color).pack(pady=(20, 6))
-            tk.Label(f, text=title, font=("Arial", 14, "bold"), bg="#f8fbff", fg="#123").pack()
-            tk.Label(f, text=desc, justify="center", bg="#f8fbff", fg="#555", font=("Arial", 10)).pack(padx=14, pady=8)
-            tk.Button(f, text="Öffnen  →", command=cmd, bg=color, fg="white",
-                      activebackground=color, relief="flat", font=("Arial", 11, "bold"),
-                      padx=16, pady=8).pack(fill="x", padx=18, pady=(4, 18))
+            f = tk.Frame(body, bg="#f8fbff", highlightbackground="#d8e2ee",
+                         highlightthickness=1)
+            f.grid(row=r, column=c, sticky="nsew", padx=10, pady=10)
+            f.rowconfigure(2, weight=1)   # Beschreibung zieht sich, Rest fix
+            f.columnconfigure(0, weight=1)
+            tk.Label(f, text=icon, font=("Arial", 32), bg="#f8fbff", fg=color
+                     ).grid(row=0, column=0, pady=(18, 4))
+            tk.Label(f, text=title, font=("Arial", 13, "bold"), bg="#f8fbff",
+                     fg="#123").grid(row=1, column=0)
+            tk.Label(f, text=desc, justify="center", bg="#f8fbff", fg="#555",
+                     font=("Arial", 9), wraplength=190
+                     ).grid(row=2, column=0, padx=14, pady=8, sticky="n")
+            # Einheitlicher Oeffnen-Button (gleiche Hoehe + Schrift in allen Kacheln).
+            tk.Button(f, text="Öffnen  →", command=cmd,
+                      bg=color, fg="white", activebackground=color,
+                      relief="flat", font=("Arial", 10, "bold"),
+                      padx=14, pady=7
+                      ).grid(row=3, column=0, sticky="ew", padx=18, pady=(4, 16))
         self.status.set("Apps bereit.")
 
     def open_vergleichssuche_window(self):
