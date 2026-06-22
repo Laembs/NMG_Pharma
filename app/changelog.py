@@ -5,6 +5,15 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V1.2.0", "2026-06-22", [
+        "Neuer Meilenstein mit der NMG Kassen-App - als eigenes Programm und eigene Verknuepfung; eine NMGone-Installation bringt die Kasse mit (NMGone.exe --kasse).",
+        "Kasse: Verkauf an Apotheken (globale Kunden-/Artikelsuche, Charge/Verfall aus Lager, Rabatt-Kaskade PK->NMG->manuell, Liefertermin-Automatik).",
+        "Wareneingang -> Lagerbestand (Charge/Verfall), Datei-Import (TXT/CSV/Excel) fuer Kunden, Wareneingang und Historie (Verkaeufe/Vorbestellungen).",
+        "Vorbestellungen: Disposition, Teil-Uebernahme in den Verkauf, abgesagt-Auswertung. Verkaeufe: Filter (Status/Zeitraum/MSK), Storno mit Bestand-Rueckbuchung, Top-10-Artikel pro Kunde.",
+        "MSK-Erfassungsstatus pro Verkauf (offen/erfasst, wer/wann) + Schnellmarkierung. Auftragsbestaetigung (Druck/E-Mail) jederzeit erneut erzeugbar.",
+        "Aenderungs-Protokoll (wer/was/wann) mit Volltext- und Aktion-Filter. Manuelle Bestandskorrektur erfordert jetzt einen Pflicht-Kommentar (Grund) - protokolliert und auswertbar.",
+        "Alle Tabellen per Spaltenkopf sortierbar; einheitlicher NMGone-Flat-Button-Stil.",
+    ]),
     ("V1.1 SP19", "2026-06-19", [
         "Neue Auswertung ist 11x schneller: trace_lookup_source nutzt Index-Cache statt pro Zeile die komplette Austauschdatenbank zu scannen. 414 Zeilen jetzt in ~16 s statt ~3 Min.",
         "Bugfix Neue Auswertung (SP18-Regression): Doppelklick-Schutz auf 'Auswertung starten' verhindert stille Mehrfachstarts (Log zeigte 90 Aufrufe in einer Sekunde).",

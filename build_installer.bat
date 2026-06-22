@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 echo =====================================================
-echo   NMGone Installer Build V1.1 SP19 (1.1.19)
+echo   NMGone Installer Build V1.2.0 (inkl. NMG Kasse)
 echo =====================================================
 echo.
 
@@ -17,7 +17,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo EXE liegt unter dist\NMGone\NMGone.exe
+echo EXE liegt unter dist\NMGone\NMGone.exe  (Kasse: NMGone.exe --kasse)
 echo.
 
 echo [3/3] Inno Setup: Setup.exe bauen...
@@ -25,16 +25,16 @@ set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
 if not exist "%ISCC%" set "ISCC=%ProgramFiles%\Inno Setup 6\ISCC.exe"
 
 if exist "%ISCC%" (
-  "%ISCC%" installer\NMGone_Setup_1_1_19.iss
+  "%ISCC%" installer\NMGone_Setup_1_2_0.iss
   if errorlevel 1 (
     echo Inno Setup fehlgeschlagen.
     pause
     exit /b 1
   )
   echo.
-  echo Setup-Datei: dist_setup\NMGone_Setup_1_1_19.exe
+  echo Setup-Datei: dist_setup\NMGone_Setup_1_2_0.exe
 ) else (
   echo Inno Setup 6 nicht gefunden. Installiere via: winget install JRSoftware.InnoSetup
-  echo Skript-Vorlage liegt unter installer\NMGone_Setup_1_1_19.iss
+  echo Skript-Vorlage liegt unter installer\NMGone_Setup_1_2_0.iss
 )
 pause

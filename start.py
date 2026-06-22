@@ -1,4 +1,10 @@
-from app.gui import main
+import sys
 
 if __name__ == "__main__":
-    main()
+    # NMGone.exe --kasse startet direkt die Kasse (eigene Verknuepfung im Setup).
+    if "--kasse" in sys.argv:
+        from app.kasse_app import run_standalone
+        run_standalone()
+    else:
+        from app.gui import main
+        main()

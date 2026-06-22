@@ -2094,11 +2094,20 @@ class KassePanel(tk.Frame):
             return
         if neu == int(menge):
             return
-        if not messagebox.askyesno(
-                "Bestand korrigieren",
-                f"Bestand für PZN {pzn} · Charge {charge or '–'} · Verf {verfall or '–'}\n"
-                f"wirklich von {menge} auf {neu} ändern?"
-                + ("\n\n(0 entfernt die Lagerzeile.)" if neu == 0 else ""), parent=top):
+        # Pflicht-Kommentar: WARUM wird manuell korrigiert? (Abbrechen = keine Aenderung.)
+        grund = simpledialog.askstring(
+            "Bestandskorrektur – Grund (Pflicht)",
+            f"PZN {pzn} · Charge {charge or '–'} · Verf {verfall or '–'}\n"
+            f"Bestand von {menge} auf {neu} ändern"
+            + (" (0 entfernt die Lagerzeile).\n\n" if neu == 0 else ".\n\n")
+            + "Bitte den Grund eingeben (Pflicht):", parent=top)
+        if grund is None:
+            return
+        grund = grund.strip()
+        if not grund:
+            messagebox.showwarning("Bestandskorrektur",
+                                   "Ein Grund (Kommentar) ist Pflicht – Korrektur abgebrochen.",
+                                   parent=top)
             return
         with self._conn() as con:
             if neu == 0:
@@ -2112,7 +2121,7 @@ class KassePanel(tk.Frame):
                     (neu, datetime.now().isoformat(timespec="seconds"), pzn, charge, verfall))
             con.commit()
         self._log("Bestandskorrektur", details=f"PZN {pzn} · Charge {charge or '–'} · "
-                  f"{menge} -> {neu}")
+                  f"{menge} -> {neu} · Grund: {grund}")
         self._refresh_lager()
 
     # ==================================================================== Import
@@ -2197,3 +2206,30 @@ class KassePanel(tk.Frame):
             return ("PDF wird derzeit nicht unterstützt (keine PDF-Bibliothek installiert). "
                     "Bitte als Excel, CSV oder TXT speichern.\n\nDetail: " + msg)
         return "Import fehlgeschlagen:\n" + msg
+
+
+def run_standalone():
+    """Startet die Kasse als eigenstaendiges Fenster (eigenes Taskleisten-Icon).
+    Wird von start_kasse.py und von NMGone.exe --kasse genutzt."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("NMG.Kasse")
+        except Exception:
+            pass
+    try:
+        from .migrations import run_migrations
+        run_migrations()
+    except Exception:
+        pass
+    root = tk.Tk()
+    root.title("NMG Kasse")
+    root.geometry("1040x660")
+    root.minsize(860, 580)
+    root.configure(bg=SHELL_BG)
+    try:
+        root.iconbitmap(str(ASSETS_DIR / "kasse.ico"))
+    except Exception:
+        pass
+    KassePanel(root, on_close=root.destroy).pack(fill="both", expand=True)
+    root.mainloop()

@@ -16,8 +16,8 @@ from .config import BASE_DIR, DATA_DIR, OUTPUT_DIR, DB_PATH, BACKUP_DIR as _CONF
 # Fix: BACKUP_DIR aus config nehmen (USERDATA_ROOT/backups, also
 # C:\ProgramData\NMGone\backups im installierten Programm, writable).
 BACKUP_DIR = _CONFIG_BACKUP_DIR
-APP_VERSION = "1.1.19"
-APP_VERSION_DISPLAY = "V1.1 SP19"
+APP_VERSION = "1.2.0"
+APP_VERSION_DISPLAY = "V1.2.0"
 DB_SCHEMA_VERSION = "1.1"
 
 

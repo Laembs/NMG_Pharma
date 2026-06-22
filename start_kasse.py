@@ -1,8 +1,8 @@
 """Eigenstaendiger Start der NMG Kasse-App (Verkauf + Wareneingang).
 
 Eigener Prozess mit eigenem Taskleisten-Icon, teilt sich die Datenbank mit
-NMGone (app/config.py -> ProgramData/NMGone). Wird als zweite .exe gepackt
-(NMGone_Kasse) und bekommt eine eigene Verknuepfung.
+NMGone (app/config.py -> ProgramData/NMGone). Die eigentliche Logik liegt in
+app.kasse_app.run_standalone (wird auch von NMGone.exe --kasse genutzt).
 """
 import os
 import sys
@@ -12,37 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def main():
-    # Eigene Taskleisten-Identitaet -> eigene Gruppe + eigenes Icon, getrennt
-    # von NMGone (sonst gruppiert Windows beide unter NMGone).
-    if os.name == "nt":
-        try:
-            import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("NMG.Kasse")
-        except Exception:
-            pass
-
-    import tkinter as tk
-    from app.config import ASSETS_DIR
-    from app.kasse_app import KassePanel
-
-    try:
-        from app.migrations import run_migrations
-        run_migrations()
-    except Exception:
-        pass
-
-    root = tk.Tk()
-    root.title("NMG Kasse")
-    root.geometry("1040x660")
-    root.minsize(860, 580)
-    root.configure(bg="#f5f7fb")
-    try:
-        root.iconbitmap(str(ASSETS_DIR / "kasse.ico"))
-    except Exception:
-        pass
-
-    KassePanel(root, on_close=root.destroy).pack(fill="both", expand=True)
-    root.mainloop()
+    from app.kasse_app import run_standalone
+    run_standalone()
 
 
 if __name__ == "__main__":
