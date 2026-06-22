@@ -1048,11 +1048,16 @@ class KassePanel(tk.Frame):
         tk.Label(srow, text="Suche (Kunde / Artikel / PZN):", bg=BG,
                  font=("Arial", 9, "bold")).pack(side="left")
         self._vb_filter_var = tk.StringVar()
-        e = tk.Entry(srow, textvariable=self._vb_filter_var, width=30)
+        e = tk.Entry(srow, textvariable=self._vb_filter_var, width=26)
         e.pack(side="left", padx=(6, 8))
         e.bind("<KeyRelease>", lambda _e: self._refresh_vorbestellungen())
         tk.Button(srow, text="✕", command=lambda: (self._vb_filter_var.set(""),
                   self._refresh_vorbestellungen()), font=("Arial", 8), padx=6).pack(side="left")
+        tk.Label(srow, text="Status:", bg=BG, font=("Arial", 9, "bold")).pack(side="left", padx=(12, 0))
+        self._vb_status_var = tk.StringVar(value="Offen")
+        ttk.Combobox(srow, textvariable=self._vb_status_var, width=11, state="readonly",
+                     values=("Offen", "Abgesagt", "Alle")).pack(side="left", padx=(4, 0))
+        self._vb_status_var.trace_add("write", lambda *_: self._refresh_vorbestellungen())
         tk.Label(parent, text="Disposition: Kunden anrufen, dann Doppelklick → bearbeiten, "
                               "„Als Verkauf bestätigen“ oder stornieren.",
                  bg=BG, fg="#666", font=("Arial", 9)).pack(anchor="w", padx=8, pady=(0, 4))
@@ -1086,6 +1091,14 @@ class KassePanel(tk.Frame):
         self.vb_tree.delete(*self.vb_tree.get_children())
         self._vb_rowmap = {}
         filt = (self._vb_filter_var.get() if hasattr(self, "_vb_filter_var") else "").strip().lower()
+        status_f = self._vb_status_var.get() if hasattr(self, "_vb_status_var") else "Offen"
+        if status_f == "Abgesagt":
+            arten = ("abgesagt",)
+        elif status_f == "Alle":
+            arten = ("Vorbestellung", "abgesagt")
+        else:
+            arten = ("Vorbestellung",)
+        platzhalter = ",".join("?" for _ in arten)
         has_kunden = self._table_exists_now("tbl_kunden_center")
         tel = "COALESCE(k.telefon,'')" if has_kunden else "''"
         join = ("LEFT JOIN tbl_kunden_center k ON k.kundennummer = b.kundennummer"
@@ -1095,7 +1108,8 @@ class KassePanel(tk.Frame):
                 f"SELECT p.id, b.datum, COALESCE(b.apotheke,''), {tel}, p.pzn, p.artikelname, "
                 f"p.menge, COALESCE(p.lieferzeit,''), COALESCE(p.liefertermin,'') "
                 f"FROM tbl_bestellpositionen p JOIN tbl_bestellungen b ON b.id = p.bestell_id "
-                f"{join} WHERE p.bestellart = 'Vorbestellung' ORDER BY p.liefertermin, b.datum"
+                f"{join} WHERE p.bestellart IN ({platzhalter}) ORDER BY p.liefertermin, b.datum",
+                arten
             ).fetchall()
         gezeigt = 0
         for r in rows:
@@ -1105,7 +1119,11 @@ class KassePanel(tk.Frame):
             self._vb_rowmap[iid] = r[0]
             gezeigt += 1
         suffix = f" (gefiltert aus {len(rows)})" if filt else ""
-        self.vb_info.config(text=f"{gezeigt} offene Vorbestellung(en){suffix}")
+        label = {"Abgesagt": "abgesagte", "Alle": "Vorbestellung(en) gesamt"}.get(status_f, "offene")
+        if status_f == "Alle":
+            self.vb_info.config(text=f"{gezeigt} {label}{suffix}")
+        else:
+            self.vb_info.config(text=f"{gezeigt} {label} Vorbestellung(en){suffix}")
 
     def _vorbestellung_dialog(self, _e=None):
         sel = self.vb_tree.selection()
@@ -1256,9 +1274,14 @@ class KassePanel(tk.Frame):
         bar.pack(fill="x", padx=8, pady=(10, 4))
         tk.Label(bar, text="Suche (Kunde):", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
         self._vh_filter_var = tk.StringVar()
-        e = tk.Entry(bar, textvariable=self._vh_filter_var, width=28)
+        e = tk.Entry(bar, textvariable=self._vh_filter_var, width=24)
         e.pack(side="left", padx=(6, 8))
         e.bind("<KeyRelease>", lambda _e: self._refresh_verkaeufe())
+        tk.Label(bar, text="Status:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        self._vh_status_var = tk.StringVar(value="Alle")
+        ttk.Combobox(bar, textvariable=self._vh_status_var, width=11, state="readonly",
+                     values=("Alle", "Aktiv", "Storniert")).pack(side="left", padx=(4, 0))
+        self._vh_status_var.trace_add("write", lambda *_: self._refresh_verkaeufe())
         tk.Button(bar, text="🔄 Aktualisieren", command=self._refresh_verkaeufe,
                   font=("Arial", 9), padx=8, pady=2).pack(side="right")
         self.vh_info = tk.Label(bar, text="", bg=BG, fg=ACCENT, font=("Arial", 9, "bold"))
@@ -1291,6 +1314,7 @@ class KassePanel(tk.Frame):
         self.vh_tree.delete(*self.vh_tree.get_children())
         self._vh_rowmap = {}
         filt = self._vh_filter_var.get().strip().lower()
+        status_f = self._vh_status_var.get() if hasattr(self, "_vh_status_var") else "Alle"
         with self._conn() as con:
             rows = con.execute(
                 "SELECT b.id, b.datum, COALESCE(b.apotheke,''), COALESCE(b.status,'offen'), "
@@ -1303,16 +1327,24 @@ class KassePanel(tk.Frame):
                 "ORDER BY b.id DESC").fetchall()
         summe_ges = 0.0
         gezeigt = 0
+        storniert_anz = 0
         for bid, datum, apotheke, status, anz, summe in rows:
             if filt and filt not in str(apotheke).lower():
+                continue
+            if status_f == "Storniert" and status != "storniert":
+                continue
+            if status_f == "Aktiv" and status == "storniert":
                 continue
             iid = self.vh_tree.insert("", "end",
                                       values=(datum, apotheke, status, anz, _eur(summe)))
             self._vh_rowmap[iid] = bid
             if status != "storniert":
                 summe_ges += summe or 0
+            else:
+                storniert_anz += 1
             gezeigt += 1
-        self.vh_info.config(text=f"{gezeigt} Verkauf/Verkäufe · Summe {_eur(summe_ges)}")
+        self.vh_info.config(text=f"{gezeigt} Verkauf/Verkäufe · {storniert_anz} storniert · "
+                                 f"Summe {_eur(summe_ges)}")
 
     def _verkauf_detail_dialog(self, _e=None):
         sel = self.vh_tree.selection()
