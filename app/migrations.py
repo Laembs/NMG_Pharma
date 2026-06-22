@@ -110,9 +110,19 @@ def run_migrations(db_path: Path = DB_PATH) -> list[str]:
                 notizen TEXT,
                 bearbeiter TEXT,
                 erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,
-                geaendert_am TEXT
+                geaendert_am TEXT,
+                msk_erfasst INTEGER DEFAULT 0,
+                msk_von TEXT,
+                msk_am TEXT
             )"""
         )
+        # MSK-Erfassungsstatus pro Verkauf (muss in MSK eingegeben werden).
+        if _table_exists(con, "tbl_bestellungen"):
+            bcols = _columns(con, "tbl_bestellungen")
+            for col, ddl in (("msk_erfasst", "msk_erfasst INTEGER DEFAULT 0"),
+                             ("msk_von", "msk_von TEXT"), ("msk_am", "msk_am TEXT")):
+                if col not in bcols:
+                    con.execute(f"ALTER TABLE tbl_bestellungen ADD COLUMN {ddl}")
         con.execute(
             """CREATE TABLE IF NOT EXISTS tbl_bestellpositionen(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

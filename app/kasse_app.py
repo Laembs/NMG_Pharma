@@ -157,9 +157,15 @@ def ensure_kasse_tables(db_path=DB_PATH):
                 bestellart TEXT DEFAULT 'Bestellung',
                 lieferzeit TEXT, liefertermin TEXT,
                 status TEXT DEFAULT 'offen', notizen TEXT, bearbeiter TEXT,
-                erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP, geaendert_am TEXT
+                erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP, geaendert_am TEXT,
+                msk_erfasst INTEGER DEFAULT 0, msk_von TEXT, msk_am TEXT
             )"""
         )
+        _bcols = {r[1] for r in con.execute("PRAGMA table_info(tbl_bestellungen)")}
+        for col, ddl in (("msk_erfasst", "msk_erfasst INTEGER DEFAULT 0"),
+                         ("msk_von", "msk_von TEXT"), ("msk_am", "msk_am TEXT")):
+            if col not in _bcols:
+                con.execute(f"ALTER TABLE tbl_bestellungen ADD COLUMN {ddl}")
         con.execute(
             """CREATE TABLE IF NOT EXISTS tbl_bestellpositionen(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1445,21 +1451,34 @@ class KassePanel(tk.Frame):
                  font=("Arial", 8)).pack(side="left")
         ev.bind("<KeyRelease>", lambda _e: self._vh_zeit_var.get() == "Frei" and self._refresh_verkaeufe())
         eb.bind("<KeyRelease>", lambda _e: self._vh_zeit_var.get() == "Frei" and self._refresh_verkaeufe())
+        tk.Label(zrow, text="MSK:", bg=BG, font=("Arial", 9, "bold")).pack(side="left", padx=(14, 0))
+        self._vh_msk_var = tk.StringVar(value="Alle")
+        ttk.Combobox(zrow, textvariable=self._vh_msk_var, width=14, state="readonly",
+                     values=("Alle", "MSK offen", "MSK erfasst")).pack(side="left", padx=(4, 0))
+        self._vh_msk_var.trace_add("write", lambda *_: self._refresh_verkaeufe())
 
-        tk.Label(parent, text="Verkäufe pro Kunde. Doppelklick: Details ansehen oder stornieren "
-                              "(Bestand wird zurückgebucht).",
-                 bg=BG, fg="#666", font=("Arial", 9)).pack(anchor="w", padx=8, pady=(0, 4))
+        # MSK-Schnellmarkierung der ausgewaehlten Zeilen.
+        mrow = tk.Frame(parent, bg=BG)
+        mrow.pack(fill="x", padx=8, pady=(0, 2))
+        tk.Label(mrow, text="Markierte Verkäufe:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        tk.Button(mrow, text="✓ In MSK erfasst", command=lambda: self._msk_markieren(True),
+                  bg="#11823b", fg="white", font=("Arial", 9, "bold"), padx=8, pady=2).pack(side="left", padx=(6, 4))
+        tk.Button(mrow, text="↺ MSK offen", command=lambda: self._msk_markieren(False),
+                  font=("Arial", 9), padx=8, pady=2).pack(side="left")
+        tk.Label(mrow, text="(mehrere mit Strg/Shift markierbar · Doppelklick = Details)",
+                 bg=BG, fg="#999", font=("Arial", 8)).pack(side="left", padx=(10, 0))
 
         tf = tk.Frame(parent, bg=BG)
         tf.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-        cols = ("datum", "kunde", "status", "pos", "summe")
-        heads = {"datum": "Datum", "kunde": "Kunde", "status": "Status",
-                 "pos": "Positionen", "summe": "Summe (netto)"}
-        tree = ttk.Treeview(tf, columns=cols, show="headings")
+        cols = ("datum", "kunde", "bearbeiter", "msk", "status", "pos", "summe")
+        heads = {"datum": "Datum", "kunde": "Kunde", "bearbeiter": "Erfasst von",
+                 "msk": "MSK", "status": "Status", "pos": "Pos.", "summe": "Summe (netto)"}
+        tree = ttk.Treeview(tf, columns=cols, show="headings", selectmode="extended")
         for c in cols:
             tree.heading(c, text=heads[c])
-            tree.column(c, width=200 if c == "kunde" else (110 if c in ("summe", "status") else 80),
-                        anchor="w")
+            w = 180 if c == "kunde" else (110 if c in ("summe",) else (90 if c in ("bearbeiter", "msk", "status") else 70))
+            tree.column(c, width=w, anchor="w")
+        tree.tag_configure("msk_offen", background="#fff3e0")
         tree.pack(side="left", fill="both", expand=True)
         sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
         sb.pack(side="right", fill="y")
@@ -1501,11 +1520,12 @@ class KassePanel(tk.Frame):
         filt = self._vh_filter_var.get().strip().lower()
         status_f = self._vh_status_var.get() if hasattr(self, "_vh_status_var") else "Alle"
         zeit_f = self._vh_zeit_var.get() if hasattr(self, "_vh_zeit_var") else "Alle"
+        msk_f = self._vh_msk_var.get() if hasattr(self, "_vh_msk_var") else "Alle"
         von, bis = self._zeitraum_grenzen(zeit_f)
         with self._conn() as con:
             rows = con.execute(
                 "SELECT b.id, b.datum, COALESCE(b.apotheke,''), COALESCE(b.status,'offen'), "
-                "COUNT(p.id), "
+                "COALESCE(b.bearbeiter,''), COALESCE(b.msk_erfasst,0), COUNT(p.id), "
                 "COALESCE(SUM(CASE WHEN p.bestellart='Bestellung' "
                 "  THEN p.apu*p.menge*(1-COALESCE(p.rabatt_prozent,0)/100.0) ELSE 0 END),0) "
                 "FROM tbl_bestellungen b LEFT JOIN tbl_bestellpositionen p ON p.bestell_id=b.id "
@@ -1513,29 +1533,59 @@ class KassePanel(tk.Frame):
                 "HAVING SUM(CASE WHEN p.bestellart='Bestellung' THEN 1 ELSE 0 END) > 0 "
                 "ORDER BY b.id DESC").fetchall()
         summe_ges = 0.0
-        gezeigt = 0
-        storniert_anz = 0
-        for bid, datum, apotheke, status, anz, summe in rows:
+        gezeigt = storniert_anz = msk_offen_anz = 0
+        for bid, datum, apotheke, status, bearbeiter, msk, anz, summe in rows:
             if filt and filt not in str(apotheke).lower():
                 continue
             if status_f == "Storniert" and status != "storniert":
                 continue
             if status_f == "Aktiv" and status == "storniert":
                 continue
+            if msk_f == "MSK offen" and msk:
+                continue
+            if msk_f == "MSK erfasst" and not msk:
+                continue
             if von and (datum or "") < von:
                 continue
             if bis and (datum or "") > bis:
                 continue
-            iid = self.vh_tree.insert("", "end",
-                                      values=(datum, apotheke, status, anz, _eur(summe)))
+            # MSK nur fuer aktive (nicht stornierte) Verkaeufe relevant.
+            offen = (not msk) and status != "storniert"
+            msk_txt = "✓ erfasst" if msk else ("offen" if status != "storniert" else "–")
+            iid = self.vh_tree.insert("", "end", tags=("msk_offen",) if offen else (),
+                                      values=(datum, apotheke, bearbeiter, msk_txt, status,
+                                              anz, _eur(summe)))
             self._vh_rowmap[iid] = bid
             if status != "storniert":
                 summe_ges += summe or 0
             else:
                 storniert_anz += 1
+            if offen:
+                msk_offen_anz += 1
             gezeigt += 1
-        self.vh_info.config(text=f"{gezeigt} Verkauf/Verkäufe · {storniert_anz} storniert · "
-                                 f"Summe {_eur(summe_ges)}")
+        self.vh_info.config(text=f"{gezeigt} Verkäufe · ⚠ {msk_offen_anz} MSK offen · "
+                                 f"{storniert_anz} storniert · Summe {_eur(summe_ges)}")
+
+    def _msk_markieren(self, erfasst, bids=None):
+        if bids is None:
+            sel = self.vh_tree.selection()
+            if not sel:
+                messagebox.showinfo("MSK", "Bitte erst einen oder mehrere Verkäufe in der Liste "
+                                    "markieren.", parent=self.winfo_toplevel())
+                return
+            bids = [self._vh_rowmap.get(i) for i in sel if self._vh_rowmap.get(i)]
+        jetzt = datetime.now().isoformat(timespec="seconds")
+        von = getpass.getuser()
+        with self._conn() as con:
+            for bid in bids:
+                if erfasst:
+                    con.execute("UPDATE tbl_bestellungen SET msk_erfasst=1, msk_von=?, msk_am=? "
+                                "WHERE id=?", (von, jetzt, bid))
+                else:
+                    con.execute("UPDATE tbl_bestellungen SET msk_erfasst=0, msk_von=NULL, msk_am=NULL "
+                                "WHERE id=?", (bid,))
+            con.commit()
+        self._refresh_verkaeufe()
 
     def _verkauf_detail_dialog(self, _e=None):
         sel = self.vh_tree.selection()
@@ -1545,15 +1595,16 @@ class KassePanel(tk.Frame):
         if not bid:
             return
         with self._conn() as con:
-            h = con.execute("SELECT datum, COALESCE(apotheke,''), COALESCE(status,'offen') "
-                            "FROM tbl_bestellungen WHERE id=?", (bid,)).fetchone()
+            h = con.execute("SELECT datum, COALESCE(apotheke,''), COALESCE(status,'offen'), "
+                            "COALESCE(bearbeiter,''), COALESCE(msk_erfasst,0), COALESCE(msk_von,''), "
+                            "COALESCE(msk_am,'') FROM tbl_bestellungen WHERE id=?", (bid,)).fetchone()
             positions = con.execute(
                 "SELECT pzn, artikelname, menge, COALESCE(rabatt_prozent,0), apu, "
                 "COALESCE(charge,''), COALESCE(verfall,''), COALESCE(bestellart,'Bestellung') "
                 "FROM tbl_bestellpositionen WHERE bestell_id=? ORDER BY id", (bid,)).fetchall()
         if not h:
             return
-        datum, apotheke, status = h
+        datum, apotheke, status, bearbeiter, msk, msk_von, msk_am = h
         top = self.winfo_toplevel()
         win = tk.Toplevel(top)
         win.title(f"Verkauf #{bid}")
@@ -1561,8 +1612,12 @@ class KassePanel(tk.Frame):
         win.transient(top)
         tk.Label(win, text=f"Verkauf #{bid} · {apotheke}", font=("Arial", 13, "bold"),
                  fg=ACCENT, bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
-        tk.Label(win, text=f"Datum {datum} · Status: {status}", font=("Arial", 9),
-                 fg="#555", bg=BG).pack(padx=18, anchor="w", pady=(0, 8))
+        tk.Label(win, text=f"Datum {datum} · Status: {status} · Erfasst von: {bearbeiter or '–'}",
+                 font=("Arial", 9), fg="#555", bg=BG).pack(padx=18, anchor="w")
+        msk_txt = (f"MSK: ✓ erfasst von {msk_von or '?'} am {(msk_am or '')[:16].replace('T', ' ')}"
+                   if msk else "MSK: ⚠ noch nicht erfasst")
+        tk.Label(win, text=msk_txt, font=("Arial", 9, "bold"),
+                 fg=("#11823b" if msk else "#a35a00"), bg=BG).pack(padx=18, anchor="w", pady=(0, 8))
         tf = tk.Frame(win, bg=BG)
         tf.pack(fill="both", expand=True, padx=18, pady=(0, 8))
         cols = ("pzn", "artikel", "menge", "rabatt", "charge", "verfall", "art")
@@ -1613,11 +1668,21 @@ class KassePanel(tk.Frame):
             messagebox.showinfo("Storniert", f"Verkauf #{bid} storniert, Bestand zurückgebucht.",
                                 parent=top)
 
+        def msk_toggle():
+            self._msk_markieren(not bool(msk), bids=[bid])
+            win.destroy()
+
         btns = tk.Frame(win, bg=BG)
         btns.pack(fill="x", padx=18, pady=(4, 14))
         if status != "storniert":
             tk.Button(btns, text="Stornieren", command=stornieren, bg="#a32d2d", fg="white",
                       font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="left")
+            if msk:
+                tk.Button(btns, text="↺ MSK-Markierung aufheben", command=msk_toggle,
+                          padx=12, pady=4).pack(side="left", padx=(8, 0))
+            else:
+                tk.Button(btns, text="✓ In MSK erfasst", command=msk_toggle, bg="#11823b",
+                          fg="white", font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="left", padx=(8, 0))
         tk.Button(btns, text="Schließen", command=win.destroy, padx=12, pady=4).pack(side="right")
         win.lift()
         win.focus_force()

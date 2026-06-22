@@ -87,6 +87,15 @@ def main():
     # --- Abgesagte Vorbestellung ---
     b = bestellung(_d(8), "10001"); pos(b, a2, 3, bestellart="abgesagt")
 
+    # Ein paar Verkaeufe als "in MSK erfasst" markieren (Rest bleibt MSK offen).
+    ids = [r[0] for r in con.execute(
+        "SELECT b.id FROM tbl_bestellungen b JOIN tbl_bestellpositionen p ON p.bestell_id=b.id "
+        "WHERE p.bestellart='Bestellung' AND COALESCE(b.status,'offen')<>'storniert' "
+        "GROUP BY b.id ORDER BY b.id LIMIT 2")]
+    for i in ids:
+        con.execute("UPDATE tbl_bestellungen SET msk_erfasst=1, msk_von='seed', msk_am=? WHERE id=?",
+                    (datetime.now().isoformat(timespec="seconds"), i))
+
     con.commit()
     # Zusammenfassung
     nb = con.execute("SELECT COUNT(*) FROM tbl_bestellungen").fetchone()[0]
