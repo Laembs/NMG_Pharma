@@ -61,6 +61,25 @@ def _normalize_uhrzeit(t):
     return None
 
 
+def _normalize_verfall(t):
+    """Leer -> ''. Gueltiges Verfalldatum (MM/JJ, MM/JJJJ, auch '.' als Trenner,
+    einstelliger Monat) -> 'MM/JJ' bzw. 'MM/JJJJ' mit aufgefuelltem Monat.
+    Ungueltig (z.B. Monat 13) -> None."""
+    t = str(t or "").strip().replace(".", "/").replace("-", "/")
+    if not t:
+        return ""
+    teile = [x for x in t.split("/") if x != ""]
+    if len(teile) != 2:
+        return None
+    mon, jahr = teile
+    if not (mon.isdigit() and jahr.isdigit()) or len(jahr) not in (2, 4):
+        return None
+    m = int(mon)
+    if not (1 <= m <= 12):
+        return None
+    return f"{m:02d}/{jahr}"
+
+
 def _next_liefertermin(now=None):
     """Liefertermin-Vorschlag: vor 15 Uhr -> naechster Liefertag, ab 15 Uhr ->
     uebernaechster. Sonntage werden uebersprungen. Samstag ist nur dann ein
@@ -1560,7 +1579,11 @@ class KassePanel(tk.Frame):
             messagebox.showwarning("Wareneingang", "Bitte zuerst einen NMG-Artikel wählen.", parent=top)
             return
         charge = self.we_charge_var.get().strip()
-        verfall = self.we_verfall_var.get().strip()
+        verfall = _normalize_verfall(self.we_verfall_var.get())
+        if verfall is None:
+            messagebox.showwarning("Wareneingang", "Verfalldatum ungültig. Bitte als MM/JJ oder "
+                                   "MM/JJJJ eingeben (Monat 1–12), z. B. 01/2027.", parent=top)
+            return
         try:
             menge = int(self.we_menge_var.get().strip())
             if menge <= 0:

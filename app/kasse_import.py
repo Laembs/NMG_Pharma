@@ -162,6 +162,10 @@ def import_wareneingang(db_path, path) -> dict:
             artikelname = art[0]
             charge = _cell(row, c_charge)
             verfall = _cell(row, c_verfall)
+            from .kasse_app import _normalize_verfall
+            norm = _normalize_verfall(verfall)
+            if norm is not None:  # gueltig -> aufgefuellt; ungueltig -> Rohwert behalten
+                verfall = norm
             ek = _to_float(_cell(row, c_ek))
             con.execute(
                 "INSERT INTO tbl_wareneingang_positionen(we_id,pzn,artikelname,charge,verfall,menge,ek) "
