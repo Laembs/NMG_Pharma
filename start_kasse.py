@@ -33,9 +33,9 @@ def main():
 
     root = tk.Tk()
     root.title("NMG Kasse")
-    root.geometry("980x640")
-    root.minsize(820, 560)
-    root.configure(bg="#ffffff")
+    root.geometry("1040x660")
+    root.minsize(860, 580)
+    root.configure(bg="#f5f7fb")
     try:
         root.iconbitmap(str(ASSETS_DIR / "kasse.ico"))
     except Exception:

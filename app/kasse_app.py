@@ -14,16 +14,21 @@ from __future__ import annotations
 import getpass
 import os
 import sqlite3
+import subprocess
+import sys
 from datetime import datetime
+from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, filedialog
 
-from .config import DB_PATH
+from .config import DB_PATH, ASSETS_DIR, BASE_DIR
 from . import kasse_import
 from . import auftrag
 
-BG = "#ffffff"
+BG = "#ffffff"           # Inhaltsflaechen (Karten)
+SHELL_BG = "#f5f7fb"     # Fensterhintergrund wie NMGone
 ACCENT = "#0b4a86"
+NAV_SEL = "#e8f1fb"      # Auswahl-Highlight wie NMGone
 
 
 def _table_exists(con, name) -> bool:
@@ -157,10 +162,13 @@ class SearchBox(tk.Frame):
 class KassePanel(tk.Frame):
     """Kasse-Oberflaeche: Reiter Verkauf + Wareneingang."""
 
-    def __init__(self, master, db_path=DB_PATH, on_close=None):
-        super().__init__(master, bg=BG)
+    def __init__(self, master, db_path=DB_PATH, on_close=None, nmgone_action=None):
+        super().__init__(master, bg=SHELL_BG)
         self.db_path = db_path
         self._on_close = on_close or (lambda: self.winfo_toplevel().destroy())
+        # Aktion fuer den "NMGone oeffnen"-Button: aus NMGone heraus = Fenster nach
+        # vorn holen; standalone = NMGone-Programm starten (Default unten).
+        self._nmgone_action = nmgone_action
         ensure_kasse_tables(db_path)
         self.vk_kunde = None          # (kundennummer, apotheke)
         self.vk_cur = None            # aktuell gewaehlter Artikel (dict)
@@ -280,27 +288,120 @@ class KassePanel(tk.Frame):
             return bid
 
     # ================================================================== Aufbau
+    def _load_logo(self):
+        p = ASSETS_DIR / "NMGone.png"
+        if not p.exists():
+            return None
+        try:
+            raw = tk.PhotoImage(file=str(p))
+            factor = max(1, int(max(raw.width() / 200, raw.height() / 66) + 0.999))
+            self._logo_img = raw.subsample(factor, factor)
+            return self._logo_img
+        except Exception:
+            return None
+
     def _build(self):
-        header = tk.Frame(self, bg=BG)
-        header.pack(fill="x", padx=16, pady=(14, 6))
-        tk.Label(header, text="Kasse", font=("Arial", 16, "bold"),
-                 fg=ACCENT, bg=BG).pack(anchor="w")
-        tk.Label(header, text="Verkauf an Apotheken · Wareneingang ins Lager.",
-                 font=("Arial", 9), fg="#666", bg=BG).pack(anchor="w", pady=(2, 0))
+        self.configure(bg=SHELL_BG)
+        self.columnconfigure(1, weight=1)
+        self.rowconfigure(0, weight=1)
 
-        nb = ttk.Notebook(self)
-        nb.pack(fill="both", expand=True, padx=16, pady=(4, 8))
-        verkauf = tk.Frame(nb, bg=BG)
-        wareneingang = tk.Frame(nb, bg=BG)
-        nb.add(verkauf, text="  Verkauf  ")
-        nb.add(wareneingang, text="  Wareneingang  ")
-        self._build_verkauf(verkauf)
-        self._build_wareneingang(wareneingang)
+        # ---------------- linke Menueleiste (NMGone-Stil) ----------------
+        left = tk.Frame(self, bg=BG, width=240)
+        left.grid(row=0, column=0, sticky="ns")
+        left.grid_propagate(False)
+        left.rowconfigure(2, weight=1)
 
-        footer = tk.Frame(self, bg=BG)
-        footer.pack(fill="x", padx=16, pady=(0, 14))
-        tk.Button(footer, text="Schließen", command=self._on_close,
-                  font=("Arial", 10), padx=14, pady=4).pack(side="right")
+        logo_box = tk.Frame(left, bg=BG, height=84)
+        logo_box.grid(row=0, column=0, sticky="ew", padx=8, pady=(12, 4))
+        logo_box.grid_propagate(False)
+        logo = self._load_logo()
+        if logo:
+            tk.Label(logo_box, image=logo, bg=BG).pack(expand=True)
+        else:
+            tk.Label(logo_box, text="NMGone", font=("Arial", 17, "bold"),
+                     fg=ACCENT, bg=BG).pack(expand=True)
+        tk.Label(left, text="K A S S E", font=("Arial", 10, "bold"),
+                 fg="#8aa0bb", bg=BG).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 8))
+
+        nav = tk.Frame(left, bg=BG)
+        nav.grid(row=2, column=0, sticky="new", padx=8)
+        self._nav_buttons = {}
+        for key, text, icon in (("verkauf", "Verkauf", "🛒"),
+                                 ("wareneingang", "Wareneingang", "📦")):
+            b = tk.Button(nav, text=f"  {icon}   {text}", anchor="w", relief="flat",
+                          bg=BG, fg="#11304d", font=("Arial", 11), bd=0,
+                          activebackground=NAV_SEL, cursor="hand2",
+                          command=lambda k=key: self._show_view(k))
+            b.pack(fill="x", pady=2, ipady=4)
+            self._nav_buttons[key] = b
+
+        bottom = tk.Frame(left, bg=BG)
+        bottom.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 6))
+        tk.Button(bottom, text="🏠  NMGone öffnen", command=self._open_nmgone,
+                  bg="#d8e2ee", fg=ACCENT, relief="flat", font=("Arial", 10, "bold"),
+                  padx=10, pady=6, cursor="hand2").pack(fill="x", pady=(0, 6))
+        tk.Button(bottom, text="Schließen", command=self._on_close, relief="flat",
+                  bg="#eef1f5", fg="#444", padx=10, pady=4, cursor="hand2").pack(fill="x")
+        tk.Label(left, text=f"Datenbank:\n{Path(self.db_path).name}", justify="left",
+                 bg=BG, fg="#666", font=("Arial", 9)).grid(row=4, column=0, sticky="w", padx=16, pady=12)
+
+        # ---------------- Hauptbereich ----------------
+        main = tk.Frame(self, bg=SHELL_BG)
+        main.grid(row=0, column=1, sticky="nsew")
+        main.columnconfigure(0, weight=1)
+        main.rowconfigure(1, weight=1)
+
+        head = tk.Frame(main, bg=SHELL_BG)
+        head.grid(row=0, column=0, sticky="ew", padx=22, pady=(16, 0))
+        self._view_title = tk.Label(head, text="Verkauf", font=("Arial", 16, "bold"),
+                                    fg=ACCENT, bg=SHELL_BG)
+        self._view_title.pack(anchor="w")
+
+        page = tk.Frame(main, bg=BG, highlightbackground="#d8e2ee", highlightthickness=1)
+        page.grid(row=1, column=0, sticky="nsew", padx=22, pady=12)
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(0, weight=1)
+
+        self._views = {}
+        for key, builder in (("verkauf", self._build_verkauf),
+                             ("wareneingang", self._build_wareneingang)):
+            frame = tk.Frame(page, bg=BG)
+            frame.grid(row=0, column=0, sticky="nsew")
+            builder(frame)
+            self._views[key] = frame
+
+        self._show_view("verkauf")
+
+    def _show_view(self, key):
+        self._views[key].tkraise()
+        self._view_title.config(text={"verkauf": "Verkauf",
+                                      "wareneingang": "Wareneingang"}.get(key, key))
+        for k, b in self._nav_buttons.items():
+            if k == key:
+                b.config(bg=NAV_SEL, fg=ACCENT, font=("Arial", 11, "bold"))
+            else:
+                b.config(bg=BG, fg="#11304d", font=("Arial", 11))
+
+    def _open_nmgone(self):
+        # Aus NMGone heraus: Hauptfenster nach vorn holen.
+        if self._nmgone_action:
+            try:
+                self._nmgone_action()
+                return
+            except Exception:
+                pass
+        # Standalone: NMGone-Programm starten.
+        try:
+            if getattr(sys, "frozen", False):
+                exe = Path(sys.executable).parent / "NMGone.exe"
+                if not exe.exists():
+                    raise FileNotFoundError("NMGone.exe nicht im Programmordner gefunden.")
+                subprocess.Popen([str(exe)])
+            else:
+                subprocess.Popen([sys.executable, str(BASE_DIR / "start.py")])
+        except Exception as e:
+            messagebox.showerror("NMGone", f"NMGone konnte nicht geöffnet werden:\n{e}",
+                                 parent=self.winfo_toplevel())
 
     # ================================================================= Verkauf
     def _build_verkauf(self, parent):

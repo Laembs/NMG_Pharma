@@ -7144,9 +7144,9 @@ LIMIT 500
 
         win = tk.Toplevel(self)
         win.title("NMG Kasse")
-        win.geometry("980x640")
-        win.minsize(820, 560)
-        win.configure(bg="#ffffff")
+        win.geometry("1040x660")
+        win.minsize(860, 580)
+        win.configure(bg="#f5f7fb")
         try:
             win.iconbitmap(str(ASSETS_DIR / "kasse.ico"))
         except Exception:
@@ -7158,7 +7158,13 @@ LIMIT 500
             win.destroy()
         win.protocol("WM_DELETE_WINDOW", on_close)
 
-        KassePanel(win, on_close=on_close).pack(fill="both", expand=True)
+        def zu_nmgone():
+            haupt = self.winfo_toplevel()
+            haupt.deiconify()
+            haupt.lift()
+            haupt.focus_force()
+
+        KassePanel(win, on_close=on_close, nmgone_action=zu_nmgone).pack(fill="both", expand=True)
         win.lift()
         win.focus_force()
 
