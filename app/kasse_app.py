@@ -227,7 +227,8 @@ class KassePanel(tk.Frame):
         ensure_kasse_tables(db_path)
         self.vk_kunde = None          # (kundennummer, apotheke)
         self.vk_cur = None            # aktuell gewaehlter Artikel (dict)
-        self.vk_positions = []        # Liste der Verkaufspositionen (dicts)
+        self.vk_positions = []        # Liste ALLER Verkaufspositionen (dicts)
+        self._vk_tree_map = {}        # Tree-iid -> Position (nur Bestellungen sichtbar)
         self.we_pzn = None
         self._build()
 
@@ -774,7 +775,6 @@ class KassePanel(tk.Frame):
             "liefertermin": self.vk_pos_termin_var.get().strip(),
         }
         self.vk_positions.append(p)
-        self.vk_pos_tree.insert("", "end", values=self._vk_row_values(p))
         # Eingabe zuruecksetzen
         self.vk_cur = None
         self.vk_artikel_search.clear()
@@ -783,18 +783,31 @@ class KassePanel(tk.Frame):
         self.vk_charge_var.set("")
         self.vk_rabatt_var.set("")
         self.vk_menge_var.set("1")
+        self._vk_render_positions()
+        if p["bestellart"] != "Bestellung":
+            messagebox.showinfo("Vorbestellung", "Als Vorbestellung aufgenommen – erscheint nach "
+                                "dem Speichern im Reiter „Vorbestellungen“ (nicht in dieser Liste).",
+                                parent=self.winfo_toplevel())
+
+    def _vk_render_positions(self):
+        """Zeigt im Verkauf NUR echte Bestellungen; Vorbestellungen/abgesagte sind in
+        self.vk_positions, aber nicht in der Liste. Map iid -> Position."""
+        self.vk_pos_tree.delete(*self.vk_pos_tree.get_children())
+        self._vk_tree_map = {}
+        for pos in self.vk_positions:
+            if pos.get("bestellart", "Bestellung") != "Bestellung":
+                continue
+            iid = self.vk_pos_tree.insert("", "end", values=self._vk_row_values(pos))
+            self._vk_tree_map[iid] = pos
         self._vk_update_total()
 
     def _vk_remove_position(self, _e):
         sel = self.vk_pos_tree.selection()
         if not sel:
             return
-        for item in sel:
-            idx = self.vk_pos_tree.index(item)
-            self.vk_pos_tree.delete(item)
-            if 0 <= idx < len(self.vk_positions):
-                del self.vk_positions[idx]
-        self._vk_update_total()
+        ids = {id(self._vk_tree_map.get(i)) for i in sel}
+        self.vk_positions = [x for x in self.vk_positions if id(x) not in ids]
+        self._vk_render_positions()
 
     def _vk_update_total(self):
         # Nur echte Bestellungen zaehlen; Vorbestellungen/abgesagte nicht.
@@ -806,11 +819,10 @@ class KassePanel(tk.Frame):
         sel = self.vk_pos_tree.selection()
         if not sel:
             return
-        item = sel[0]
-        idx = self.vk_pos_tree.index(item)
-        if not (0 <= idx < len(self.vk_positions)):
+        p = self._vk_tree_map.get(sel[0])
+        if p is None:
             return
-        self._charge_dialog(self.vk_positions[idx], item)
+        self._charge_dialog(p, sel[0])
 
     def _charge_dialog(self, p, item):
         top = self.winfo_toplevel()
@@ -881,8 +893,7 @@ class KassePanel(tk.Frame):
             p["bestellart"] = art_var.get()
             p["lieferzeit"] = lz_var.get()
             p["liefertermin"] = termin_var.get().strip()
-            self.vk_pos_tree.item(item, values=self._vk_row_values(p))
-            self._vk_update_total()
+            self._vk_render_positions()
             win.destroy()
 
         tree.bind("<Double-1>", uebernehmen)
@@ -926,8 +937,7 @@ class KassePanel(tk.Frame):
                 con.commit()
         # Reset
         self.vk_positions = []
-        self.vk_pos_tree.delete(*self.vk_pos_tree.get_children())
-        self._vk_update_total()
+        self._vk_render_positions()
         self.vk_kunde = None
         self.vk_kunde_search.clear()
         self._render_kunde_card(None)
@@ -1214,8 +1224,7 @@ class KassePanel(tk.Frame):
             "lieferzeit": lieferzeit, "liefertermin": termin, "_vb_source": pid,
         }
         self.vk_positions.append(p)
-        self.vk_pos_tree.insert("", "end", values=self._vk_row_values(p))
-        self._vk_update_total()
+        self._vk_render_positions()
         self._show_view("verkauf")
         messagebox.showinfo("Vorbestellung",
                             "In den Verkauf übernommen. Charge/Bestand wählen, ggf. weitere Artikel "
