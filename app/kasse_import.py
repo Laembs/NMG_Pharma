@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import getpass
 import sqlite3
-from datetime import datetime
+from collections import OrderedDict
+from datetime import datetime, date, timedelta
 
 from .file_loader import load_table, find_column
 
@@ -185,3 +186,100 @@ def import_wareneingang(db_path, path) -> dict:
 
     return {"gelesen": len(table.rows), "neu_chargen": neu, "erhoehte_chargen": erhoeht,
             "kein_nmg": kein_nmg, "uebersprungen": uebersprungen, "quelle": table.source_type}
+
+
+def _parse_datum(t):
+    """Datum -> ISO 'YYYY-MM-DD'. Akzeptiert deutsche Formate (TT.MM.JJJJ,
+    TT.MM.JJ, TT/MM/JJJJ), ISO und Excel-Seriennummern. Leer/ungueltig -> None."""
+    t = str(t or "").strip()
+    if not t:
+        return None
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d.%m.%y", "%d/%m/%Y", "%d/%m/%y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(t, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    # Excel-Seriennummer (Tage seit 1899-12-30)
+    try:
+        serial = int(float(t.replace(",", ".")))
+        if 1 <= serial <= 60000:
+            return (date(1899, 12, 30) + timedelta(days=serial)).isoformat()
+    except ValueError:
+        pass
+    return None
+
+
+def import_verkaeufe(db_path, path, als_vorbestellung=False) -> dict:
+    """Importiert historische Bestellungen/Verkaeufe (oder Vorbestellungen) aus
+    TXT/CSV/Excel. Spalten: Kundennummer, PZN, Menge, Preis, Rabatt,
+    Bestell-/Lieferdatum. Je Zeile eine Position; Zeilen mit gleichem Kunden +
+    Datum werden zu EINER Bestellung zusammengefasst. Bucht KEINEN Lagerbestand ab
+    (Historie)."""
+    table = load_table(path)
+    headers = list(table.headers)
+    c_knr = find_column(headers, ["Kundennummer", "Kunden-Nr", "KdNr", "Nr", "Kundennr"],
+                        ["kundennr", "kdnr", "kundennummer"])
+    c_pzn = find_column(headers, ["PZN", "PZN-Code", "Artikel-PZN"], ["pzn"])
+    c_menge = find_column(headers, ["Menge", "Anzahl", "Stück", "Stueck"], ["menge", "anzahl", "stueck"])
+    c_preis = find_column(headers, ["Preis", "APU", "Einzelpreis", "EK", "VK"], ["preis", "apu", "ek", "vk"])
+    c_rabatt = find_column(headers, ["Rabatt", "Rabatt %", "Rabatt%"], ["rabatt"])
+    c_datum = find_column(headers, ["Bestelldatum", "Lieferdatum", "Datum", "Bestell-/Lieferdatum"],
+                          ["bestelldatum", "lieferdatum", "datum"])
+    if c_knr is None or c_pzn is None or c_menge is None:
+        raise ValueError("Spalten Kundennummer, PZN und Menge werden benoetigt.")
+
+    bestellart = "Vorbestellung" if als_vorbestellung else "Bestellung"
+    status = "offen" if als_vorbestellung else "erledigt"
+    erkannt = [n for n, c in (("Preis", c_preis), ("Rabatt", c_rabatt), ("Datum", c_datum))
+               if c is not None]
+    heute = date.today().isoformat()
+
+    gruppen = OrderedDict()
+    uebersprungen = datum_unklar = 0
+    for row in table.rows:
+        knr = _cell(row, c_knr)
+        pzn = _cell(row, c_pzn)
+        menge = _to_int(_cell(row, c_menge))
+        if not knr or not pzn or not menge or menge <= 0:
+            uebersprungen += 1
+            continue
+        datum = _parse_datum(_cell(row, c_datum)) if c_datum is not None else None
+        if c_datum is not None and _cell(row, c_datum) and datum is None:
+            datum_unklar += 1
+        if datum is None:
+            datum = heute
+        preis = _to_float(_cell(row, c_preis)) if c_preis is not None else None
+        rabatt = _to_float(_cell(row, c_rabatt)) if c_rabatt is not None else None
+        gruppen.setdefault((knr, datum), []).append((pzn, menge, preis, rabatt))
+
+    bearbeiter = getpass.getuser()
+    bestellungen = positionen = 0
+    with sqlite3.connect(db_path) as con:
+        hat_kc = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tbl_kunden_center'").fetchone()
+        for (knr, datum), items in gruppen.items():
+            apotheke = ""
+            if hat_kc:
+                r = con.execute("SELECT kundenname FROM tbl_kunden_center WHERE kundennummer=? LIMIT 1",
+                                (knr,)).fetchone()
+                apotheke = r[0] if r else ""
+            cur = con.execute(
+                "INSERT INTO tbl_bestellungen(datum,kundennummer,apotheke,status,bestellart,bearbeiter) "
+                "VALUES(?,?,?,?,?,?)", (datum, knr, apotheke, status, bestellart, bearbeiter))
+            bid = cur.lastrowid
+            bestellungen += 1
+            for pzn, menge, preis, rabatt in items:
+                nmg = con.execute("SELECT artikelname, apu FROM tbl_nmg_stamm WHERE pzn=? LIMIT 1",
+                                  (pzn,)).fetchone()
+                name = nmg[0] if nmg else pzn
+                apu = preis if preis is not None else (nmg[1] if nmg else None)
+                con.execute(
+                    "INSERT INTO tbl_bestellpositionen(bestell_id,pzn,artikelname,apu,menge,"
+                    "rabatt_prozent,rabatt_quelle,bestellart,liefertermin) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (bid, pzn, name, apu, menge, rabatt or 0, "Import", bestellart, datum))
+                positionen += 1
+        con.commit()
+
+    return {"gelesen": len(table.rows), "bestellungen": bestellungen, "positionen": positionen,
+            "uebersprungen": uebersprungen, "datum_unklar": datum_unklar, "spalten": erkannt,
+            "quelle": table.source_type, "als_vorbestellung": als_vorbestellung}

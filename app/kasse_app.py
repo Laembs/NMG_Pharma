@@ -1128,6 +1128,8 @@ class KassePanel(tk.Frame):
         ttk.Combobox(srow, textvariable=self._vb_status_var, width=11, state="readonly",
                      values=("Offen", "Abgesagt", "Alle")).pack(side="left", padx=(4, 0))
         self._vb_status_var.trace_add("write", lambda *_: self._refresh_vorbestellungen())
+        tk.Button(srow, text="📥 Vorbestellungen importieren", command=self._import_vorbestellungen_datei,
+                  font=("Arial", 8), padx=6, pady=1).pack(side="right")
         tk.Label(parent, text="Disposition: Kunden anrufen, dann Doppelklick → bearbeiten, "
                               "„Als Verkauf bestätigen“ oder stornieren.",
                  bg=BG, fg="#666", font=("Arial", 9)).pack(anchor="w", padx=8, pady=(0, 4))
@@ -1367,6 +1369,8 @@ class KassePanel(tk.Frame):
         ttk.Combobox(bar, textvariable=self._vh_status_var, width=11, state="readonly",
                      values=("Alle", "Aktiv", "Storniert")).pack(side="left", padx=(4, 0))
         self._vh_status_var.trace_add("write", lambda *_: self._refresh_verkaeufe())
+        tk.Button(bar, text="📥 Verkäufe importieren", command=self._import_verkaeufe_datei,
+                  font=("Arial", 8), padx=6, pady=1).pack(side="left", padx=(12, 0))
         tk.Button(bar, text="🔄 Aktualisieren", command=self._refresh_verkaeufe,
                   font=("Arial", 9), padx=8, pady=2).pack(side="right")
         self.vh_info = tk.Label(bar, text="", bg=BG, fg=ACCENT, font=("Arial", 9, "bold"))
@@ -1820,6 +1824,36 @@ class KassePanel(tk.Frame):
             f"Quelle: {r['quelle']} · {r['gelesen']} Zeilen gelesen.\n\n"
             f"Neue Chargen: {r['neu_chargen']} · Bestand erhöht: {r['erhoehte_chargen']}\n"
             f"Kein NMG-Artikel: {r['kein_nmg']} · Übersprungen: {r['uebersprungen']}", parent=top)
+
+    def _import_historie(self, als_vorbestellung):
+        top = self.winfo_toplevel()
+        path = self._pick_file()
+        if not path:
+            return
+        try:
+            r = kasse_import.import_verkaeufe(self.db_path, path, als_vorbestellung=als_vorbestellung)
+        except Exception as e:
+            messagebox.showerror("Import", self._import_fehlertext(path, e), parent=top)
+            return
+        if hasattr(self, "vh_tree"):
+            self._refresh_verkaeufe()
+        if hasattr(self, "vb_tree"):
+            self._refresh_vorbestellungen()
+        was = "Vorbestellungen" if als_vorbestellung else "Verkäufe"
+        unklar = (f"\n⚠ {r['datum_unklar']} Datum/Daten nicht erkannt – auf heute gesetzt."
+                  if r.get("datum_unklar") else "")
+        messagebox.showinfo(
+            f"{was}-Import",
+            f"Quelle: {r['quelle']} · {r['gelesen']} Zeilen gelesen.\n"
+            f"Erkannte Zusatzspalten: {', '.join(r['spalten']) or '–'}\n\n"
+            f"Angelegt: {r['bestellungen']} {was} mit {r['positionen']} Position(en) · "
+            f"Übersprungen: {r['uebersprungen']}{unklar}", parent=top)
+
+    def _import_verkaeufe_datei(self):
+        self._import_historie(False)
+
+    def _import_vorbestellungen_datei(self):
+        self._import_historie(True)
 
     @staticmethod
     def _import_fehlertext(path, e):
