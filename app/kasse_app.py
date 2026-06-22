@@ -28,7 +28,36 @@ from . import auftrag
 BG = "#ffffff"           # Inhaltsflaechen (Karten)
 SHELL_BG = "#f5f7fb"     # Fensterhintergrund wie NMGone
 ACCENT = "#0b4a86"
-NAV_SEL = "#e8f1fb"      # Auswahl-Highlight wie NMGone
+ACCENT_DARK = "#093d70"  # Hover/aktiv fuer Primaer-Aktionen
+ACCENT_LIGHT = "#e8f1fb" # Akzent-Flaeche (Auswahl, Linien, Strips)
+NAV_SEL = ACCENT_LIGHT   # Auswahl-Highlight wie NMGone
+NAV_HOVER = "#f2f6fb"    # Maus-ueber in der Navigation
+BORDER = "#dbe4f0"       # dezente Rahmenlinie
+HEAD_BG = "#eef3f9"      # Tabellenkopf-Hintergrund
+TEXT = "#11304d"         # Standard-Textfarbe
+MUTED = "#6b7c93"        # Sekundaer-/Hinweistext
+OK_GREEN = "#11823b"     # Bestaetigen/Speichern (gruen)
+
+
+def _make_card(parent, title=None, subtitle=None):
+    """Moderne Karte (weisse Flaeche mit dezenter 1px-Linie und optionalem
+    Akzent-Titelkopf). Liefert (outer, body): outer wird vom Aufrufer gepackt/
+    gegrid'et, die Inhalte kommen in body. Ersetzt die altmodischen LabelFrames."""
+    outer = tk.Frame(parent, bg=BORDER)
+    inner = tk.Frame(outer, bg=BG)
+    inner.pack(fill="both", expand=True, padx=1, pady=1)
+    if title:
+        head = tk.Frame(inner, bg=BG)
+        head.pack(fill="x", padx=14, pady=(10, 0))
+        tk.Label(head, text=title, bg=BG, fg=ACCENT,
+                 font=("Arial", 11, "bold")).pack(side="left")
+        if subtitle:
+            tk.Label(head, text=subtitle, bg=BG, fg=MUTED,
+                     font=("Arial", 9)).pack(side="left", padx=(8, 0))
+        tk.Frame(inner, bg=ACCENT_LIGHT, height=2).pack(fill="x", padx=14, pady=(7, 0))
+    body = tk.Frame(inner, bg=BG)
+    body.pack(fill="both", expand=True, padx=14, pady=(10, 12))
+    return outer, body
 
 
 def _eur(v):
@@ -489,19 +518,45 @@ class KassePanel(tk.Frame):
         except Exception:
             return None
 
+    def _setup_style(self):
+        """Zentrales ttk-Theme fuer die Kasse. Bewusst EIGENE, benannte Styles
+        (Kasse.*), damit ein eingebettetes NMGone (gemeinsamer ttk-Style-Pool)
+        nicht mit-veraendert wird. Modernisiert Tabellen und Comboboxen."""
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure("Kasse.Treeview", background=BG, fieldbackground=BG,
+                        foreground=TEXT, borderwidth=0, rowheight=28,
+                        font=("Arial", 10))
+        style.configure("Kasse.Treeview.Heading", font=("Arial", 10, "bold"),
+                        background=HEAD_BG, foreground=ACCENT, relief="flat",
+                        padding=(8, 6), borderwidth=0)
+        style.map("Kasse.Treeview",
+                  background=[("selected", ACCENT_LIGHT)],
+                  foreground=[("selected", ACCENT)])
+        style.map("Kasse.Treeview.Heading",
+                  background=[("active", "#e0e9f4")])
+        style.configure("Kasse.TCombobox", fieldbackground=BG, background=BG,
+                        bordercolor=BORDER, arrowcolor=ACCENT, padding=2)
+
     def _build(self):
         self.configure(bg=SHELL_BG)
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
+        self._setup_style()
+        self._current_view = None
 
         # ---------------- linke Menueleiste (NMGone-Stil) ----------------
-        left = tk.Frame(self, bg=BG, width=240)
+        left = tk.Frame(self, bg=BG, width=248,
+                        highlightbackground=BORDER, highlightthickness=1)
         left.grid(row=0, column=0, sticky="ns")
         left.grid_propagate(False)
         left.rowconfigure(2, weight=1)
 
         logo_box = tk.Frame(left, bg=BG, height=84)
-        logo_box.grid(row=0, column=0, sticky="ew", padx=8, pady=(12, 4))
+        logo_box.grid(row=0, column=0, sticky="ew", padx=8, pady=(14, 2))
         logo_box.grid_propagate(False)
         logo = self._load_logo()
         if logo:
@@ -510,23 +565,31 @@ class KassePanel(tk.Frame):
             tk.Label(logo_box, text="NMGone", font=("Arial", 17, "bold"),
                      fg=ACCENT, bg=BG).pack(expand=True)
         tk.Label(left, text="K A S S E", font=("Arial", 10, "bold"),
-                 fg="#8aa0bb", bg=BG).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 8))
+                 fg="#8aa0bb", bg=BG).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 10))
 
         nav = tk.Frame(left, bg=BG)
-        nav.grid(row=2, column=0, sticky="new", padx=8)
+        nav.grid(row=2, column=0, sticky="new", padx=10)
         self._nav_buttons = {}
+        self._nav_bars = {}
         for key, text, icon in (("verkauf", "Verkauf", "🛒"),
                                  ("vorbestellungen", "Vorbestellungen", "🕓"),
                                  ("verkaeufe", "Verkäufe", "🧾"),
                                  ("artikel", "Artikel", "🔍"),
                                  ("wareneingang", "Wareneingang", "📦"),
                                  ("protokoll", "Protokoll", "📝")):
-            b = tk.Button(nav, text=f"  {icon}   {text}", anchor="w", relief="flat",
-                          bg=BG, fg="#11304d", font=("Arial", 11), bd=0,
-                          activebackground=NAV_SEL, cursor="hand2",
-                          command=lambda k=key: self._show_view(k))
-            b.pack(fill="x", pady=2, ipady=4)
+            rowf = tk.Frame(nav, bg=BG)
+            rowf.pack(fill="x", pady=2)
+            bar = tk.Frame(rowf, bg=BG, width=4)   # Akzent-Balken (nur aktiv sichtbar)
+            bar.pack(side="left", fill="y")
+            b = tk.Button(rowf, text=f"   {icon}   {text}", anchor="w", relief="flat",
+                          bg=BG, fg=TEXT, font=("Arial", 11), bd=0,
+                          activebackground=NAV_HOVER, activeforeground=ACCENT,
+                          cursor="hand2", command=lambda k=key: self._show_view(k))
+            b.pack(side="left", fill="x", expand=True, ipady=6)
+            b.bind("<Enter>", lambda _e, k=key: self._nav_hover(k, True))
+            b.bind("<Leave>", lambda _e, k=key: self._nav_hover(k, False))
             self._nav_buttons[key] = b
+            self._nav_bars[key] = bar
 
         bottom = tk.Frame(left, bg=BG)
         bottom.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 6))
@@ -545,12 +608,16 @@ class KassePanel(tk.Frame):
         main.rowconfigure(1, weight=1)
 
         head = tk.Frame(main, bg=SHELL_BG)
-        head.grid(row=0, column=0, sticky="ew", padx=22, pady=(16, 0))
-        self._view_title = tk.Label(head, text="Verkauf", font=("Arial", 16, "bold"),
+        head.grid(row=0, column=0, sticky="ew", padx=22, pady=(18, 0))
+        self._view_title = tk.Label(head, text="Verkauf", font=("Arial", 18, "bold"),
                                     fg=ACCENT, bg=SHELL_BG)
         self._view_title.pack(anchor="w")
+        self._view_subtitle = tk.Label(head, text="", font=("Arial", 10),
+                                       fg=MUTED, bg=SHELL_BG)
+        self._view_subtitle.pack(anchor="w", pady=(1, 0))
+        tk.Frame(head, bg=ACCENT_LIGHT, height=3).pack(fill="x", pady=(10, 0))
 
-        page = tk.Frame(main, bg=BG, highlightbackground="#d8e2ee", highlightthickness=1)
+        page = tk.Frame(main, bg=BG, highlightbackground=BORDER, highlightthickness=1)
         page.grid(row=1, column=0, sticky="nsew", padx=22, pady=12)
         page.columnconfigure(0, weight=1)
         page.rowconfigure(0, weight=1)
@@ -570,14 +637,30 @@ class KassePanel(tk.Frame):
         self._show_view("verkauf")
         self._restyle_buttons(self)
 
+    def _nav_hover(self, key, on):
+        """Maus-ueber-Hervorhebung in der Navigation (aktiver Eintrag bleibt
+        unveraendert)."""
+        if key == self._current_view:
+            return
+        self._nav_buttons[key].config(bg=NAV_HOVER if on else BG)
+
     def _show_view(self, key):
+        self._current_view = key
         self._views[key].tkraise()
-        self._view_title.config(text={"verkauf": "Verkauf",
-                                      "vorbestellungen": "Vorbestellungen",
-                                      "verkaeufe": "Verkäufe",
-                                      "artikel": "Artikel-Übersicht",
-                                      "wareneingang": "Wareneingang",
-                                      "protokoll": "Änderungs-Protokoll"}.get(key, key))
+        titel = {"verkauf": "Verkauf",
+                 "vorbestellungen": "Vorbestellungen",
+                 "verkaeufe": "Verkäufe",
+                 "artikel": "Artikel-Übersicht",
+                 "wareneingang": "Wareneingang",
+                 "protokoll": "Änderungs-Protokoll"}.get(key, key)
+        untertitel = {"verkauf": "Warenausgang an die Apotheke erfassen",
+                      "vorbestellungen": "Offene Vorbestellungen disponieren – Kunden anrufen",
+                      "verkaeufe": "Abgeschlossene Verkäufe & MSK-Status",
+                      "artikel": "Artikelstamm und aktueller Lagerbestand",
+                      "wareneingang": "NMG-Ware mit Charge/Verfall ins Lager buchen",
+                      "protokoll": "Wer hat was wann geändert"}.get(key, "")
+        self._view_title.config(text=titel)
+        self._view_subtitle.config(text=untertitel)
         if key == "vorbestellungen":
             self._refresh_vorbestellungen()
         elif key == "verkaeufe":
@@ -589,8 +672,10 @@ class KassePanel(tk.Frame):
         for k, b in self._nav_buttons.items():
             if k == key:
                 b.config(bg=NAV_SEL, fg=ACCENT, font=("Arial", 11, "bold"))
+                self._nav_bars[k].config(bg=ACCENT)
             else:
-                b.config(bg=BG, fg="#11304d", font=("Arial", 11))
+                b.config(bg=BG, fg=TEXT, font=("Arial", 11))
+                self._nav_bars[k].config(bg=BG)
 
     def _open_nmgone(self):
         # Aus NMGone heraus: Hauptfenster nach vorn holen.
@@ -628,9 +713,8 @@ class KassePanel(tk.Frame):
         tk.Label(nrbar, text="(nur ansehen – legt keinen Auftrag an)", bg=BG, fg="#999",
                  font=("Arial", 8)).pack(side="left", padx=(8, 0))
 
-        kopf = tk.LabelFrame(parent, text="Kunde", bg=BG, fg=ACCENT,
-                             font=("Arial", 10, "bold"), padx=12, pady=8)
-        kopf.pack(fill="x", padx=8, pady=(6, 6))
+        kopf_card, kopf = _make_card(parent, "Kunde")
+        kopf_card.pack(fill="x", padx=8, pady=(10, 6))
 
         khead = tk.Frame(kopf, bg=BG)
         khead.pack(fill="x")
@@ -659,9 +743,8 @@ class KassePanel(tk.Frame):
         self.vk_kunde_card_label.pack(fill="x", padx=10, pady=8)
 
         # Artikel hinzufuegen
-        addf = tk.LabelFrame(parent, text="Artikel hinzufügen (nur NMG)", bg=BG, fg=ACCENT,
-                             font=("Arial", 10, "bold"), padx=12, pady=8)
-        addf.pack(fill="x", padx=8, pady=(0, 6))
+        addf_card, addf = _make_card(parent, "Artikel hinzufügen", "nur NMG")
+        addf_card.pack(fill="x", padx=8, pady=(0, 6))
         self.vk_artikel_search = SearchBox(
             addf,
             fetch=lambda t: [(f"{pzn}  ·  {name}", pzn) for pzn, name in self._search_nmg(t)],
@@ -710,16 +793,16 @@ class KassePanel(tk.Frame):
                   padx=10, pady=2).pack(side="left")
 
         # Positionsliste
-        pos = tk.LabelFrame(parent, text="Positionen", bg=BG, fg=ACCENT,
-                            font=("Arial", 10, "bold"), padx=12, pady=8)
-        pos.pack(fill="both", expand=True, padx=8, pady=(0, 6))
+        pos_card, pos = _make_card(parent, "Positionen")
+        pos_card.pack(fill="both", expand=True, padx=8, pady=(0, 6))
         pcols = ("pzn", "artikel", "df", "pck", "apu", "menge", "rabatt", "charge", "verfall", "liefer")
         ph = {"pzn": "PZN", "artikel": "Artikel", "df": "DF", "pck": "PCK", "apu": "APU",
               "menge": "Menge", "rabatt": "Rab%", "charge": "Charge", "verfall": "Verfall",
               "liefer": "Liefervorgabe"}
         tf = tk.Frame(pos, bg=BG)
         tf.pack(fill="both", expand=True)
-        tree = ttk.Treeview(tf, columns=pcols, show="headings", height=6)
+        tree = ttk.Treeview(tf, columns=pcols, show="headings", height=6,
+                            style="Kasse.Treeview")
         for c in pcols:
             tree.heading(c, text=ph[c])
             if c == "artikel":
@@ -827,7 +910,7 @@ class KassePanel(tk.Frame):
         cols = ("rang", "pzn", "artikel", "menge", "anzahl", "umsatz")
         heads = {"rang": "#", "pzn": "PZN", "artikel": "Artikel", "menge": "Menge",
                  "anzahl": "Bestellungen", "umsatz": "Umsatz netto"}
-        tree = ttk.Treeview(tf, columns=cols, show="headings")
+        tree = ttk.Treeview(tf, columns=cols, show="headings", style="Kasse.Treeview")
         for c in cols:
             tree.heading(c, text=heads[c])
             w = 240 if c == "artikel" else (30 if c == "rang" else 90)
@@ -1095,7 +1178,8 @@ class KassePanel(tk.Frame):
         tf = tk.Frame(win, bg=BG)
         tf.pack(fill="both", padx=18, pady=(4, 8))
         cols = ("charge", "verfall", "bestand")
-        tree = ttk.Treeview(tf, columns=cols, show="headings", height=6, selectmode="browse")
+        tree = ttk.Treeview(tf, columns=cols, show="headings", height=6,
+                            selectmode="browse", style="Kasse.Treeview")
         for c, t, w in (("charge", "Charge", 150), ("verfall", "Verfall", 120), ("bestand", "Bestand", 80)):
             tree.heading(c, text=t)
             tree.column(c, width=w, anchor="w")
@@ -1316,7 +1400,7 @@ class KassePanel(tk.Frame):
         cols = ("datum", "kunde", "telefon", "pzn", "artikel", "menge", "lieferzeit", "termin")
         heads = {"datum": "Datum", "kunde": "Kunde", "telefon": "Telefon", "pzn": "PZN",
                  "artikel": "Artikel", "menge": "Menge", "lieferzeit": "Lieferzeit", "termin": "Termin"}
-        tree = ttk.Treeview(tf, columns=cols, show="headings")
+        tree = ttk.Treeview(tf, columns=cols, show="headings", style="Kasse.Treeview")
         for c in cols:
             tree.heading(c, text=heads[c])
             if c == "artikel":
@@ -1423,7 +1507,7 @@ class KassePanel(tk.Frame):
         tf = tk.Frame(win, bg=BG)
         tf.pack(fill="both", padx=18, pady=(4, 8))
         ctree = ttk.Treeview(tf, columns=("charge", "verfall", "bestand"), show="headings",
-                             height=4, selectmode="browse")
+                             height=4, selectmode="browse", style="Kasse.Treeview")
         for c, t, w in (("charge", "Charge", 150), ("verfall", "Verfall", 120), ("bestand", "Bestand", 80)):
             ctree.heading(c, text=t)
             ctree.column(c, width=w, anchor="w")
@@ -1578,7 +1662,7 @@ class KassePanel(tk.Frame):
         cols = ("kunde", "pzn", "artikel", "offen", "bestand", "uebernehmen")
         heads = {"kunde": "Kunde", "pzn": "PZN", "artikel": "Artikel", "offen": "Vorbestellt",
                  "bestand": "Bestand", "uebernehmen": "Übernehmen"}
-        tree = ttk.Treeview(tf, columns=cols, show="headings")
+        tree = ttk.Treeview(tf, columns=cols, show="headings", style="Kasse.Treeview")
         for c in cols:
             tree.heading(c, text=heads[c])
             w = 200 if c == "artikel" else (150 if c == "kunde" else 90)
@@ -1791,7 +1875,8 @@ class KassePanel(tk.Frame):
         cols = ("nr", "datum", "kunde", "bearbeiter", "msk", "status", "pos", "summe")
         heads = {"nr": "Auftrag", "datum": "Datum", "kunde": "Kunde", "bearbeiter": "Erfasst von",
                  "msk": "MSK", "status": "Status", "pos": "Pos.", "summe": "Summe (netto)"}
-        tree = ttk.Treeview(tf, columns=cols, show="headings", selectmode="extended")
+        tree = ttk.Treeview(tf, columns=cols, show="headings", selectmode="extended",
+                            style="Kasse.Treeview")
         for c in cols:
             tree.heading(c, text=heads[c])
             w = 180 if c == "kunde" else (110 if c in ("summe",) else (
@@ -1978,7 +2063,8 @@ class KassePanel(tk.Frame):
         cols = ("pzn", "artikel", "menge", "rabatt", "charge", "verfall", "art")
         heads = {"pzn": "PZN", "artikel": "Artikel", "menge": "Menge", "rabatt": "Rab%",
                  "charge": "Charge", "verfall": "Verfall", "art": "Art"}
-        tree = ttk.Treeview(tf, columns=cols, show="headings", height=8)
+        tree = ttk.Treeview(tf, columns=cols, show="headings", height=8,
+                            style="Kasse.Treeview")
         for c in cols:
             tree.heading(c, text=heads[c])
             tree.column(c, width=200 if c == "artikel" else 80, anchor="w")
@@ -2073,7 +2159,7 @@ class KassePanel(tk.Frame):
         cols = ("pzn", "artikel", "df", "pck", "apu", "bestand")
         heads = {"pzn": "PZN", "artikel": "Artikel", "df": "DF", "pck": "PCK",
                  "apu": "APU €", "bestand": "Bestand"}
-        tree = ttk.Treeview(tf, columns=cols, show="headings")
+        tree = ttk.Treeview(tf, columns=cols, show="headings", style="Kasse.Treeview")
         for c in cols:
             tree.heading(c, text=heads[c])
             tree.column(c, width=250 if c == "artikel" else 80, anchor="w")
@@ -2128,7 +2214,8 @@ class KassePanel(tk.Frame):
         tk.Label(win, text=f"PZN {pzn}", font=("Arial", 9), fg="#555", bg=BG).pack(padx=18, anchor="w")
         tf = tk.Frame(win, bg=BG)
         tf.pack(fill="both", expand=True, padx=18, pady=(8, 8))
-        tree = ttk.Treeview(tf, columns=("charge", "verfall", "bestand"), show="headings", height=8)
+        tree = ttk.Treeview(tf, columns=("charge", "verfall", "bestand"), show="headings",
+                            height=8, style="Kasse.Treeview")
         for c, t, w in (("charge", "Charge", 160), ("verfall", "Verfall", 130), ("bestand", "Bestand", 90)):
             tree.heading(c, text=t)
             tree.column(c, width=w, anchor="w")
@@ -2177,7 +2264,7 @@ class KassePanel(tk.Frame):
         cols = ("zeit", "bearbeiter", "aktion", "auftrag", "kunde", "details")
         heads = {"zeit": "Zeitpunkt", "bearbeiter": "Mitarbeiter", "aktion": "Aktion",
                  "auftrag": "Auftrag", "kunde": "Kunde", "details": "Details"}
-        tree = ttk.Treeview(tf, columns=cols, show="headings")
+        tree = ttk.Treeview(tf, columns=cols, show="headings", style="Kasse.Treeview")
         for c in cols:
             tree.heading(c, text=heads[c])
             w = 140 if c == "zeit" else (250 if c == "details" else (
@@ -2233,9 +2320,8 @@ class KassePanel(tk.Frame):
                   relief="flat", font=("Arial", 9, "bold"), padx=10, pady=4,
                   cursor="hand2").pack(side="left")
 
-        form = tk.LabelFrame(parent, text="Artikel ins Lager buchen (nur NMG)", bg=BG,
-                             fg=ACCENT, font=("Arial", 10, "bold"), padx=12, pady=8)
-        form.pack(fill="x", padx=8, pady=(8, 6))
+        form_card, form = _make_card(parent, "Artikel ins Lager buchen", "nur NMG")
+        form_card.pack(fill="x", padx=8, pady=(8, 6))
 
         whead = tk.Frame(form, bg=BG)
         whead.pack(fill="x")
@@ -2266,15 +2352,16 @@ class KassePanel(tk.Frame):
                   bg=ACCENT, fg="white", font=("Arial", 10, "bold"),
                   padx=12, pady=3).pack(side="left")
 
-        lager = tk.LabelFrame(parent, text="Lagerbestand  (Doppelklick = Bestand korrigieren)",
-                              bg=BG, fg=ACCENT, font=("Arial", 10, "bold"), padx=12, pady=8)
-        lager.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        lager_card, lager = _make_card(parent, "Lagerbestand",
+                                       "Doppelklick = Bestand korrigieren")
+        lager_card.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         lcols = ("pzn", "artikel", "charge", "verfall", "menge")
         lh = {"pzn": "PZN", "artikel": "Artikel", "charge": "Charge",
               "verfall": "Verfall", "menge": "Bestand"}
         tf = tk.Frame(lager, bg=BG)
         tf.pack(fill="both", expand=True)
-        tree = ttk.Treeview(tf, columns=lcols, show="headings", height=10)
+        tree = ttk.Treeview(tf, columns=lcols, show="headings", height=10,
+                            style="Kasse.Treeview")
         for c in lcols:
             tree.heading(c, text=lh[c])
             tree.column(c, width=240 if c == "artikel" else 90, anchor="w")

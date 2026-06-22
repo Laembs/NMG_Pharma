@@ -5,6 +5,14 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V1.2 SP2", "2026-06-22", [
+        "Kasse: grafischer Umbau - moderne Oberflaeche im NMGone-Blau. Navigationsleiste mit aktivem Akzent-Balken und Hover-Effekt, Kopfzeile mit Untertitel je Ansicht, Inhalte in klaren Karten statt der alten Rahmen.",
+        "Kasse: alle Tabellen einheitlich gestylt (hoehere Zeilen, hervorgehobener Spaltenkopf, blaues Auswahl-Highlight). Reine Optik - Bedienung und Daten unveraendert.",
+        "Kunden App heisst wieder 'Kunden'. Kundenmaske neu als kompaktes Reiter-Fenster (Stammdaten, Artikel-Rabatte, Analysen, Verkaufte Artikel, Notizen) statt Vollbild; Typ PK/ZW als Pflicht-Auswahl, Quartalsverguetung als Ja/Nein.",
+        "Kunden App: Formular ausgebaut - MSK-Kundennummer (auto), Inhaber (Titel/Anrede/Vor-/Zuname), Verantwortlicher Besteller, Rechnungs-E-Mail/-Art, Hausnummer. PLZ-Pruefung mit Ort-Autofill offline (10.814 PLZ).",
+        "Kunden App: spezielle Artikel-Rabatte je Kunde pflegbar - sie wirken direkt in der Kasse (PK-Kondition vor NMG-Rabatt).",
+        "Anzeige 'ZF' -> 'ZW' umbenannt (nur Beschriftung in UI, Filtern, Produktanalyse-Sheets/Dateinamen; intern bleibt alles unveraendert).",
+    ]),
     ("V1.2 SP1", "2026-06-22", [
         "Vorbestellungen: neues Sammelfenster 'Mehrere in Verkauf uebernehmen' - alle offenen Vorbestellungen mit Menge und aktuellem Bestand, Uebernehmen-Menge je Zeile anpassbar (0 = ueberspringen), Uebernahme in einem Rutsch (ein Kunde gleichzeitig).",
         "Verkaeufe + Verkauf: Suche und Anzeige nach Auftrag-Nr (neue Auftrag-Spalte in der Liste). Im Verkauf nur Ansicht - es wird kein neuer Auftrag angelegt.",
