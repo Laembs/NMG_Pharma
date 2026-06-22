@@ -523,6 +523,8 @@ class KassePanel(tk.Frame):
         tk.Label(khead, text="Kunde suchen:", bg=BG, font=("Arial", 10, "bold")).pack(side="left")
         tk.Button(khead, text="📥 Kundenliste importieren", command=self._import_kunden,
                   font=("Arial", 8), padx=6, pady=1).pack(side="right")
+        tk.Button(khead, text="📊 Top-Artikel (12 Mon.)", command=self._show_kunde_top,
+                  font=("Arial", 8), padx=6, pady=1).pack(side="right", padx=(0, 6))
         self.vk_kunde_search = SearchBox(
             kopf,
             fetch=lambda t: [(f"{knr or '—'}  ·  {name}  ·  {plz} {ort}", (knr, name, plz, ort))
@@ -654,6 +656,66 @@ class KassePanel(tk.Frame):
                 "SELECT COUNT(*) FROM tbl_bestellpositionen p "
                 "JOIN tbl_bestellungen b ON b.id = p.bestell_id "
                 "WHERE p.bestellart='Vorbestellung' AND b.kundennummer=?", (knr,)).fetchone()[0]
+
+    def _kunde_top_artikel(self, knr, monate=12, limit=10):
+        """Top-Artikel eines Kunden nach gekaufter Menge in den letzten N Monaten.
+        Nur echte Bestellungen, keine stornierten Verkaeufe."""
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=int(monate * 30.4))).isoformat()
+        with self._conn() as con:
+            return con.execute(
+                "SELECT p.pzn, p.artikelname, SUM(p.menge), COUNT(DISTINCT b.id), "
+                "SUM(p.apu*p.menge*(1-COALESCE(p.rabatt_prozent,0)/100.0)) "
+                "FROM tbl_bestellpositionen p JOIN tbl_bestellungen b ON b.id=p.bestell_id "
+                "WHERE b.kundennummer=? AND p.bestellart='Bestellung' "
+                "AND COALESCE(b.status,'offen')<>'storniert' AND b.datum >= ? "
+                "GROUP BY p.pzn, p.artikelname ORDER BY SUM(p.menge) DESC, SUM(p.apu*p.menge) DESC "
+                "LIMIT ?", (knr, cutoff, limit)).fetchall()
+
+    def _show_kunde_top(self):
+        top = self.winfo_toplevel()
+        if not self.vk_kunde:
+            messagebox.showinfo("Top-Artikel", "Bitte zuerst einen Kunden wählen.", parent=top)
+            return
+        knr = self.vk_kunde.get("kundennummer")
+        rows = self._kunde_top_artikel(knr)
+        win = tk.Toplevel(top)
+        win.title("Top-Artikel")
+        win.configure(bg=BG)
+        win.transient(top)
+        tk.Label(win, text=f"Top-Artikel · {self.vk_kunde.get('kundenname', '')}",
+                 font=("Arial", 13, "bold"), fg=ACCENT, bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
+        tk.Label(win, text="Meistgekaufte Artikel der letzten 12 Monate (nur abgeschlossene "
+                          "Verkäufe, ohne Stornos).", font=("Arial", 9), fg="#555",
+                 bg=BG).pack(padx=18, anchor="w", pady=(0, 8))
+        if not rows:
+            tk.Label(win, text="Keine Käufe in den letzten 12 Monaten.", font=("Arial", 10),
+                     fg="#888", bg=BG).pack(padx=18, pady=(0, 14))
+        else:
+            tf = tk.Frame(win, bg=BG)
+            tf.pack(fill="both", expand=True, padx=18, pady=(0, 8))
+            cols = ("rang", "pzn", "artikel", "menge", "anzahl", "umsatz")
+            heads = {"rang": "#", "pzn": "PZN", "artikel": "Artikel", "menge": "Menge",
+                     "anzahl": "Bestellungen", "umsatz": "Umsatz netto"}
+            tree = ttk.Treeview(tf, columns=cols, show="headings", height=min(10, len(rows)))
+            for c in cols:
+                tree.heading(c, text=heads[c])
+                if c == "artikel":
+                    w = 240
+                elif c == "rang":
+                    w = 30
+                else:
+                    w = 90
+                tree.column(c, width=w, anchor="w")
+            tree.pack(side="left", fill="both", expand=True)
+            sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
+            sb.pack(side="right", fill="y")
+            tree.configure(yscrollcommand=sb.set)
+            for i, (pzn, art, menge, anzahl, umsatz) in enumerate(rows, 1):
+                tree.insert("", "end", values=(i, pzn, art, int(menge or 0), anzahl, _eur(umsatz)))
+        tk.Button(win, text="Schließen", command=win.destroy, padx=14, pady=4).pack(pady=(2, 14))
+        win.lift()
+        win.focus_force()
 
     def _vk_pick_kunde(self, payload):
         knr, name, plz, ort = payload
