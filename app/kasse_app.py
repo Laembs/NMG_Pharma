@@ -712,6 +712,8 @@ class KassePanel(tk.Frame):
         sb.pack(side="right", fill="y")
         tree.configure(yscrollcommand=sb.set)
         _make_treeview_sortable(tree)
+        # Vorbestellungs-/abgesagte Zeilen optisch absetzen (zaehlen nicht zur Summe).
+        tree.tag_configure("vorbestellung", background="#fff8e1", foreground="#7a6000")
         tree.bind("<Delete>", self._vk_remove_position)
         tree.bind("<Double-1>", self._vk_edit_position)
         self.vk_pos_tree = tree
@@ -969,19 +971,19 @@ class KassePanel(tk.Frame):
         self.vk_menge_var.set("1")
         self._vk_render_positions()
         if p["bestellart"] != "Bestellung":
-            messagebox.showinfo("Vorbestellung", "Als Vorbestellung aufgenommen – erscheint nach "
-                                "dem Speichern im Reiter „Vorbestellungen“ (nicht in dieser Liste).",
-                                parent=self.winfo_toplevel())
+            messagebox.showinfo("Vorbestellung", "Als Vorbestellung in der Liste markiert (gelb) – "
+                                "wird NICHT berechnet und wandert beim Speichern in die "
+                                "Vorbestellungen.", parent=self.winfo_toplevel())
 
     def _vk_render_positions(self):
-        """Zeigt im Verkauf NUR echte Bestellungen; Vorbestellungen/abgesagte sind in
-        self.vk_positions, aber nicht in der Liste. Map iid -> Position."""
+        """Zeigt ALLE Positionen; Vorbestellungen/abgesagte werden farblich abgesetzt
+        und zaehlen NICHT zur Summe (sie wandern beim Speichern in die Vorbestellungen).
+        Map iid -> Position fuer Loeschen/Bearbeiten."""
         self.vk_pos_tree.delete(*self.vk_pos_tree.get_children())
         self._vk_tree_map = {}
         for pos in self.vk_positions:
-            if pos.get("bestellart", "Bestellung") != "Bestellung":
-                continue
-            iid = self.vk_pos_tree.insert("", "end", values=self._vk_row_values(pos))
+            tags = () if pos.get("bestellart", "Bestellung") == "Bestellung" else ("vorbestellung",)
+            iid = self.vk_pos_tree.insert("", "end", tags=tags, values=self._vk_row_values(pos))
             self._vk_tree_map[iid] = pos
         self._vk_update_total()
 
@@ -1748,6 +1750,11 @@ class KassePanel(tk.Frame):
             else:
                 tk.Button(btns, text="✓ In MSK erfasst", command=msk_toggle, bg="#11823b",
                           fg="white", font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="left", padx=(8, 0))
+        # Auftragsbestaetigung jederzeit erneut erzeugen.
+        tk.Button(btns, text="🖨 Auftragsbestätigung", command=lambda: self._auftrag_drucken(bid, win),
+                  bg=ACCENT, fg="white", font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="left", padx=(8, 0))
+        tk.Button(btns, text="📧 Per E-Mail", command=lambda: self._auftrag_mail(bid, win),
+                  bg="#3867b7", fg="white", font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="left", padx=(6, 0))
         tk.Button(btns, text="Schließen", command=win.destroy, padx=12, pady=4).pack(side="right")
         self._restyle_buttons(win)
         win.lift()
@@ -1859,9 +1866,15 @@ class KassePanel(tk.Frame):
         tk.Label(bar, text="Suche (Mitarbeiter / Aktion / Kunde / Auftrag-Nr / Detail):",
                  bg=BG, font=("Arial", 9, "bold")).pack(side="left")
         self._log_filter_var = tk.StringVar()
-        e = tk.Entry(bar, textvariable=self._log_filter_var, width=28)
+        e = tk.Entry(bar, textvariable=self._log_filter_var, width=24)
         e.pack(side="left", padx=(6, 8))
         e.bind("<KeyRelease>", lambda _e: self._refresh_log())
+        tk.Label(bar, text="Aktion:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        self._log_aktion_var = tk.StringVar(value="Alle")
+        self._log_aktion_cmb = ttk.Combobox(bar, textvariable=self._log_aktion_var, width=22,
+                                            state="readonly", values=("Alle",))
+        self._log_aktion_cmb.pack(side="left", padx=(4, 0))
+        self._log_aktion_var.trace_add("write", lambda *_: self._refresh_log())
         tk.Button(bar, text="🔄 Aktualisieren", command=self._refresh_log,
                   font=("Arial", 9), padx=8, pady=2).pack(side="right")
         self.log_info = tk.Label(bar, text="", bg=BG, fg=ACCENT, font=("Arial", 9, "bold"))
@@ -1893,24 +1906,34 @@ class KassePanel(tk.Frame):
             return
         self.log_tree.delete(*self.log_tree.get_children())
         filt = self._log_filter_var.get().strip().lower()
+        aktion_f = self._log_aktion_var.get() if hasattr(self, "_log_aktion_var") else "Alle"
         with self._conn() as con:
             if not _table_exists(con, "tbl_kasse_log"):
                 self.log_info.config(text="0 Einträge")
                 return
+            alle_aktionen = [r[0] for r in con.execute(
+                "SELECT DISTINCT COALESCE(aktion,'') FROM tbl_kasse_log WHERE aktion<>'' ORDER BY aktion")]
             rows = con.execute(
                 "SELECT zeitpunkt, COALESCE(bearbeiter,''), COALESCE(aktion,''), bestell_id, "
                 "COALESCE(kunde,''), COALESCE(details,'') FROM tbl_kasse_log "
-                "ORDER BY id DESC LIMIT 1000").fetchall()
+                "ORDER BY id DESC LIMIT 2000").fetchall()
+        # Aktions-Dropdown aktuell halten.
+        werte = ("Alle",) + tuple(alle_aktionen)
+        if self._log_aktion_cmb.cget("values") != werte:
+            self._log_aktion_cmb.config(values=werte)
         gezeigt = 0
         for z, bearb, aktion, bid, kunde, details in rows:
             auftrag = f"#{bid}" if bid else ""
+            if aktion_f != "Alle" and aktion != aktion_f:
+                continue
             if filt and filt not in " ".join(str(x).lower() for x in
                                              (bearb, aktion, auftrag, kunde, details)):
                 continue
             zt = str(z).replace("T", " ")[:16]
             self.log_tree.insert("", "end", values=(zt, bearb, aktion, auftrag, kunde, details))
             gezeigt += 1
-        self.log_info.config(text=f"{gezeigt} Einträge")
+        suffix = f" · Aktion: {aktion_f}" if aktion_f != "Alle" else ""
+        self.log_info.config(text=f"{gezeigt} Einträge{suffix}")
 
     # ============================================================ Wareneingang
     def _build_wareneingang(self, parent):
@@ -2068,6 +2091,14 @@ class KassePanel(tk.Frame):
             f"(0 entfernt die Zeile):",
             parent=top, initialvalue=int(menge), minvalue=0)
         if neu is None:
+            return
+        if neu == int(menge):
+            return
+        if not messagebox.askyesno(
+                "Bestand korrigieren",
+                f"Bestand für PZN {pzn} · Charge {charge or '–'} · Verf {verfall or '–'}\n"
+                f"wirklich von {menge} auf {neu} ändern?"
+                + ("\n\n(0 entfernt die Lagerzeile.)" if neu == 0 else ""), parent=top):
             return
         with self._conn() as con:
             if neu == 0:
