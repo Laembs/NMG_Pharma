@@ -300,6 +300,29 @@ class KassePanel(tk.Frame):
         with self._conn() as con:
             return _table_exists(con, name)
 
+    def _restyle_buttons(self, widget):
+        """Vereinheitlicht alle tk.Button im NMGone-Flat-Stil: farbige Aktions-
+        Buttons behalten ihre Farbe (nur flach + Hand-Cursor), neutrale Standard-
+        Buttons bekommen den hellblauen Sekundaer-Look. Aendert nur die Optik."""
+        for ch in widget.winfo_children():
+            if isinstance(ch, tk.Button):
+                try:
+                    bg = str(ch.cget("background"))
+                    # Nur die grauen Standard-Buttons (Win95-Look) umstylen; weisse
+                    # (Nav) und farbige (Aktions-) Buttons behalten ihren Hintergrund.
+                    plain = bg.startswith("System") or bg.lower() in (
+                        "#f0f0f0", "#ececec", "#e1e1e1", "#d9d9d9")
+                    if plain:
+                        ch.configure(bg="#e8eef5", fg="#11304d", activebackground="#d8e2ee",
+                                     activeforeground=ACCENT, relief="flat", bd=0,
+                                     cursor="hand2", highlightthickness=0, padx=10, pady=3)
+                    else:
+                        ch.configure(relief="flat", bd=0, cursor="hand2",
+                                     activebackground=bg, highlightthickness=0)
+                except tk.TclError:
+                    pass
+            self._restyle_buttons(ch)
+
     def _search_nmg(self, text, limit=25):
         like = f"%{text}%"
         with self._conn() as con:
@@ -512,6 +535,7 @@ class KassePanel(tk.Frame):
             self._views[key] = frame
 
         self._show_view("verkauf")
+        self._restyle_buttons(self)
 
     def _show_view(self, key):
         self._views[key].tkraise()
@@ -759,6 +783,7 @@ class KassePanel(tk.Frame):
             for i, (pzn, art, menge, anzahl, umsatz) in enumerate(rows, 1):
                 tree.insert("", "end", values=(i, pzn, art, int(menge or 0), anzahl, _eur(umsatz)))
         tk.Button(win, text="Schließen", command=win.destroy, padx=14, pady=4).pack(pady=(2, 14))
+        self._restyle_buttons(win)
         win.lift()
         win.focus_force()
 
@@ -1035,6 +1060,7 @@ class KassePanel(tk.Frame):
         tk.Button(btns, text="Übernehmen", command=uebernehmen, bg=ACCENT, fg="white",
                   font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="right", padx=(8, 0))
         tk.Button(btns, text="Abbrechen", command=win.destroy, padx=12, pady=4).pack(side="right")
+        self._restyle_buttons(win)
         win.lift()
         win.focus_force()
 
@@ -1122,6 +1148,7 @@ class KassePanel(tk.Frame):
         tk.Button(btns, text="Vorlage bearbeiten", width=22,
                   command=self._auftrag_vorlage_oeffnen, pady=3).grid(row=2, column=0, padx=4, pady=3)
         tk.Button(win, text="Schließen", command=win.destroy, padx=14, pady=3).pack(pady=(2, 14))
+        self._restyle_buttons(win)
         win.lift()
         win.focus_force()
 
@@ -1359,6 +1386,7 @@ class KassePanel(tk.Frame):
         tk.Button(btns, text="Speichern", command=speichern, bg=ACCENT, fg="white",
                   font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="left", padx=(8, 0))
         tk.Button(btns, text="Stornieren", command=stornieren, padx=12, pady=4).pack(side="right")
+        self._restyle_buttons(win)
         win.lift()
         win.focus_force()
 
@@ -1684,6 +1712,7 @@ class KassePanel(tk.Frame):
                 tk.Button(btns, text="✓ In MSK erfasst", command=msk_toggle, bg="#11823b",
                           fg="white", font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="left", padx=(8, 0))
         tk.Button(btns, text="Schließen", command=win.destroy, padx=12, pady=4).pack(side="right")
+        self._restyle_buttons(win)
         win.lift()
         win.focus_force()
 
@@ -1782,6 +1811,7 @@ class KassePanel(tk.Frame):
         else:
             tree.insert("", "end", values=("(kein Bestand)", "", ""))
         tk.Button(win, text="Schließen", command=win.destroy, padx=14, pady=4).pack(pady=(0, 14))
+        self._restyle_buttons(win)
         win.lift()
         win.focus_force()
 
