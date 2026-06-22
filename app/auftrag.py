@@ -76,6 +76,9 @@ def _load(db_path, bestell_id):
 def render(db_path=DB_PATH, bestell_id=None) -> Path:
     """Erzeugt die Auftragsbestaetigung als HTML-Datei und gibt den Pfad zurueck."""
     header, positions, kunde = _load(db_path, bestell_id)
+    # Vorbestellungen (und abgesagte) gehoeren NICHT auf die Auftragsbestaetigung -
+    # nur tatsaechlich gelieferte Bestellungen.
+    positions = [p for p in positions if (p.get("bestellart") or "Bestellung") == "Bestellung"]
     tpl = template_path()
     text = tpl.read_text(encoding="utf-8")
 
