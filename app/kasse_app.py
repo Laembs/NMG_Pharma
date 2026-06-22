@@ -61,6 +61,41 @@ def _normalize_uhrzeit(t):
     return None
 
 
+def _make_treeview_sortable(tree):
+    """Macht jede Spalte einer Treeview per Klick auf den Spaltenkopf sortierbar
+    (auf/ab umschaltend). Zahlen/Waehrung/Prozent werden numerisch sortiert,
+    Datum/Text alphabetisch. iids bleiben erhalten (Row-Maps bleiben gueltig)."""
+    state = {"col": None, "desc": False}
+
+    def _key(val):
+        s = str(val).strip()
+        if not s:
+            return (2, "")
+        cand = s.replace("€", "").replace("%", "").replace(" ", "").strip()
+        if "," in cand:
+            cand = cand.replace(".", "").replace(",", ".")
+        if cand.count(".") <= 1 and "-" not in cand and "/" not in cand:
+            try:
+                return (0, float(cand))
+            except ValueError:
+                pass
+        return (1, s.lower())
+
+    def sort_by(col):
+        desc = (state["col"] == col) and not state["desc"]
+        state["col"], state["desc"] = col, desc
+        data = [(tree.set(iid, col), iid) for iid in tree.get_children("")]
+        data.sort(key=lambda x: _key(x[0]), reverse=desc)
+        for i, (_, iid) in enumerate(data):
+            tree.move(iid, "", i)
+        for c in tree["columns"]:
+            txt = tree.heading(c, "text").rstrip(" ▲▼")
+            tree.heading(c, text=txt + (" ▼" if desc else " ▲") if c == col else txt)
+
+    for col in tree["columns"]:
+        tree.heading(col, command=lambda c=col: sort_by(c))
+
+
 def _normalize_verfall(t):
     """Leer -> ''. Gueltiges Verfalldatum (MM/JJ, MM/JJJJ, auch '.' als Trenner,
     einstelliger Monat) -> 'MM/JJ' bzw. 'MM/JJJJ' mit aufgefuelltem Monat.
@@ -619,6 +654,7 @@ class KassePanel(tk.Frame):
         sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
         sb.pack(side="right", fill="y")
         tree.configure(yscrollcommand=sb.set)
+        _make_treeview_sortable(tree)
         tree.bind("<Delete>", self._vk_remove_position)
         tree.bind("<Double-1>", self._vk_edit_position)
         self.vk_pos_tree = tree
@@ -713,6 +749,7 @@ class KassePanel(tk.Frame):
             sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
             sb.pack(side="right", fill="y")
             tree.configure(yscrollcommand=sb.set)
+            _make_treeview_sortable(tree)
             for i, (pzn, art, menge, anzahl, umsatz) in enumerate(rows, 1):
                 tree.insert("", "end", values=(i, pzn, art, int(menge or 0), anzahl, _eur(umsatz)))
         tk.Button(win, text="Schließen", command=win.destroy, padx=14, pady=4).pack(pady=(2, 14))
@@ -942,6 +979,7 @@ class KassePanel(tk.Frame):
         sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
         sb.pack(side="right", fill="y")
         tree.configure(yscrollcommand=sb.set)
+        _make_treeview_sortable(tree)
 
         rowmap = {}
         first = tree.insert("", "end", values=("(ohne Charge)", "", ""))
@@ -1153,6 +1191,7 @@ class KassePanel(tk.Frame):
         sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
         sb.pack(side="right", fill="y")
         tree.configure(yscrollcommand=sb.set)
+        _make_treeview_sortable(tree)
         tree.bind("<Double-1>", self._vorbestellung_dialog)
         self.vb_tree = tree
         self._vb_rowmap = {}
@@ -1253,6 +1292,7 @@ class KassePanel(tk.Frame):
         sb = tk.Scrollbar(tf, orient="vertical", command=ctree.yview)
         sb.pack(side="right", fill="y")
         ctree.configure(yscrollcommand=sb.set)
+        _make_treeview_sortable(ctree)
         rowmap = {}
         f0 = ctree.insert("", "end", values=("(ohne Charge)", "", ""))
         rowmap[f0] = ("", "")
@@ -1416,6 +1456,7 @@ class KassePanel(tk.Frame):
         sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
         sb.pack(side="right", fill="y")
         tree.configure(yscrollcommand=sb.set)
+        _make_treeview_sortable(tree)
         tree.bind("<Double-1>", self._verkauf_detail_dialog)
         self.vh_tree = tree
         self._vh_rowmap = {}
@@ -1527,6 +1568,7 @@ class KassePanel(tk.Frame):
         sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
         sb.pack(side="right", fill="y")
         tree.configure(yscrollcommand=sb.set)
+        _make_treeview_sortable(tree)
         gesamt = 0.0
         for pzn, art, menge, rab, apu, ch, vf, ba in positions:
             tree.insert("", "end", values=(pzn, art, menge, f"{rab:.0f}", ch, vf, ba))
@@ -1604,6 +1646,7 @@ class KassePanel(tk.Frame):
         sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
         sb.pack(side="right", fill="y")
         tree.configure(yscrollcommand=sb.set)
+        _make_treeview_sortable(tree)
         tree.bind("<Double-1>", self._artikel_chargen_view)
         self.art_tree = tree
 
@@ -1658,6 +1701,7 @@ class KassePanel(tk.Frame):
         sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
         sb.pack(side="right", fill="y")
         tree.configure(yscrollcommand=sb.set)
+        _make_treeview_sortable(tree)
         chargen = self._lager_chargen(pzn)
         if chargen:
             for ch, vf, m in chargen:
@@ -1726,6 +1770,7 @@ class KassePanel(tk.Frame):
         sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
         sb.pack(side="right", fill="y")
         tree.configure(yscrollcommand=sb.set)
+        _make_treeview_sortable(tree)
         tree.bind("<Double-1>", self._lager_korrektur)
         self.we_lager_tree = tree
         self._refresh_lager()
