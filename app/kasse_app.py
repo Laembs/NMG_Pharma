@@ -31,6 +31,19 @@ ACCENT = "#0b4a86"
 NAV_SEL = "#e8f1fb"      # Auswahl-Highlight wie NMGone
 
 
+def _eur(v):
+    if v is None:
+        return "—"
+    return f"{v:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _pos_netto(p):
+    """Netto-Zeilensumme einer Position (APU * Menge * (1 - Rabatt%))."""
+    if p.get("apu") is None:
+        return 0.0
+    return p["apu"] * (p.get("menge") or 0) * (1 - (p.get("rabatt") or 0) / 100.0)
+
+
 def _table_exists(con, name) -> bool:
     return con.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
@@ -493,15 +506,19 @@ class KassePanel(tk.Frame):
         sb.pack(side="right", fill="y")
         tree.configure(yscrollcommand=sb.set)
         tree.bind("<Delete>", self._vk_remove_position)
+        tree.bind("<Double-1>", self._vk_edit_position)
         self.vk_pos_tree = tree
 
         afoot = tk.Frame(parent, bg=BG)
         afoot.pack(fill="x", padx=8, pady=(0, 8))
-        tk.Label(afoot, text="Entf = markierte Position löschen", bg=BG, fg="#999",
-                 font=("Arial", 8)).pack(side="left")
+        tk.Label(afoot, text="Doppelklick auf Position = Charge/Menge ändern · Entf = löschen",
+                 bg=BG, fg="#999", font=("Arial", 8)).pack(side="left")
         tk.Button(afoot, text="Verkauf speichern", command=self._vk_save,
                   bg=ACCENT, fg="white", font=("Arial", 10, "bold"),
                   padx=14, pady=4).pack(side="right")
+        self._vk_total_label = tk.Label(afoot, text="Gesamt (netto): 0,00 €", bg=BG,
+                                        fg=ACCENT, font=("Arial", 13, "bold"))
+        self._vk_total_label.pack(side="right", padx=(0, 18))
 
     def _vk_pick_kunde(self, payload):
         knr, name = payload
@@ -572,6 +589,7 @@ class KassePanel(tk.Frame):
         self.vk_charge_var.set("")
         self.vk_rabatt_var.set("")
         self.vk_menge_var.set("1")
+        self._vk_update_total()
 
     def _vk_remove_position(self, _e):
         sel = self.vk_pos_tree.selection()
@@ -582,6 +600,90 @@ class KassePanel(tk.Frame):
             self.vk_pos_tree.delete(item)
             if 0 <= idx < len(self.vk_positions):
                 del self.vk_positions[idx]
+        self._vk_update_total()
+
+    def _vk_update_total(self):
+        gesamt = sum(_pos_netto(p) for p in self.vk_positions)
+        self._vk_total_label.config(text=f"Gesamt (netto): {_eur(gesamt)}")
+
+    def _vk_edit_position(self, _e=None):
+        sel = self.vk_pos_tree.selection()
+        if not sel:
+            return
+        item = sel[0]
+        idx = self.vk_pos_tree.index(item)
+        if not (0 <= idx < len(self.vk_positions)):
+            return
+        self._charge_dialog(self.vk_positions[idx], item)
+
+    def _charge_dialog(self, p, item):
+        top = self.winfo_toplevel()
+        win = tk.Toplevel(top)
+        win.title("Position bearbeiten")
+        win.configure(bg=BG)
+        win.transient(top)
+        win.resizable(False, False)
+
+        tk.Label(win, text=p["artikelname"] or p["pzn"], font=("Arial", 13, "bold"),
+                 fg=ACCENT, bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
+        tk.Label(win, text=f"PZN {p['pzn']}  ·  DF {p['df'] or '—'}  ·  PCK {p['pck'] or '—'}  "
+                          f"·  APU {_eur(p['apu'])}", font=("Arial", 9), fg="#555",
+                 bg=BG).pack(padx=18, anchor="w")
+        tk.Label(win, text=f"Aktuell gewählt: Charge {p['charge'] or '—'}  ·  Verfall {p['verfall'] or '—'}",
+                 font=("Arial", 9, "italic"), fg="#888", bg=BG).pack(padx=18, pady=(2, 8), anchor="w")
+
+        tk.Label(win, text="Verfügbare Chargen dieses Artikels (Doppelklick = übernehmen):",
+                 font=("Arial", 9, "bold"), bg=BG).pack(padx=18, anchor="w")
+        tf = tk.Frame(win, bg=BG)
+        tf.pack(fill="both", padx=18, pady=(4, 8))
+        cols = ("charge", "verfall", "bestand")
+        tree = ttk.Treeview(tf, columns=cols, show="headings", height=6, selectmode="browse")
+        for c, t, w in (("charge", "Charge", 150), ("verfall", "Verfall", 120), ("bestand", "Bestand", 80)):
+            tree.heading(c, text=t)
+            tree.column(c, width=w, anchor="w")
+        tree.pack(side="left", fill="both", expand=True)
+        sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
+        sb.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=sb.set)
+
+        rowmap = {}
+        first = tree.insert("", "end", values=("(ohne Charge)", "", ""))
+        rowmap[first] = ("", "")
+        for charge, verfall, menge in self._lager_chargen(p["pzn"]):
+            iid = tree.insert("", "end", values=(charge or "—", verfall or "—", menge))
+            rowmap[iid] = (charge or "", verfall or "")
+
+        mrow = tk.Frame(win, bg=BG)
+        mrow.pack(fill="x", padx=18, pady=(0, 8))
+        tk.Label(mrow, text="Menge:", font=("Arial", 9, "bold"), bg=BG).pack(side="left")
+        menge_var = tk.StringVar(value=str(p["menge"]))
+        tk.Entry(mrow, textvariable=menge_var, width=6).pack(side="left", padx=(6, 0))
+
+        def uebernehmen(_e=None):
+            sel = tree.selection()
+            if sel:
+                p["charge"], p["verfall"] = rowmap.get(sel[0], (p["charge"], p["verfall"]))
+            try:
+                m = int(menge_var.get().strip())
+                if m > 0:
+                    p["menge"] = m
+            except ValueError:
+                pass
+            self.vk_pos_tree.item(item, values=(
+                p["pzn"], p["artikelname"], p["df"], p["pck"],
+                p["apu"] if p["apu"] is not None else "", p["menge"],
+                f"{p['rabatt']:.0f}", p["rabatt_quelle"], p["charge"], p["verfall"]))
+            self._vk_update_total()
+            win.destroy()
+
+        tree.bind("<Double-1>", uebernehmen)
+        btns = tk.Frame(win, bg=BG)
+        btns.pack(padx=18, pady=(0, 14), anchor="e")
+        tk.Button(btns, text="Übernehmen", command=uebernehmen, bg=ACCENT, fg="white",
+                  font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="right", padx=(8, 0))
+        tk.Button(btns, text="Abbrechen", command=win.destroy, padx=12, pady=4).pack(side="right")
+        win.lift()
+        win.focus_force()
 
     def _vk_save(self):
         top = self.winfo_toplevel()
@@ -603,6 +705,7 @@ class KassePanel(tk.Frame):
         # Reset
         self.vk_positions = []
         self.vk_pos_tree.delete(*self.vk_pos_tree.get_children())
+        self._vk_update_total()
         self.vk_kunde = None
         self.vk_kunde_search.clear()
         self.vk_kunde_label.config(text="Kein Kunde gewählt.", fg="#999")
