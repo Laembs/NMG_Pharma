@@ -1375,6 +1375,29 @@ class KassePanel(tk.Frame):
                   font=("Arial", 9), padx=8, pady=2).pack(side="right")
         self.vh_info = tk.Label(bar, text="", bg=BG, fg=ACCENT, font=("Arial", 9, "bold"))
         self.vh_info.pack(side="right", padx=(0, 12))
+
+        # Zeitraum-Filter
+        zrow = tk.Frame(parent, bg=BG)
+        zrow.pack(fill="x", padx=8, pady=(0, 4))
+        tk.Label(zrow, text="Zeitraum:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        self._vh_zeit_var = tk.StringVar(value="Alle")
+        ttk.Combobox(zrow, textvariable=self._vh_zeit_var, width=16, state="readonly",
+                     values=("Alle", "Aktueller Monat", "Vormonat", "Aktuelles Quartal",
+                             "Aktuelles Jahr", "Frei")).pack(side="left", padx=(4, 12))
+        self._vh_zeit_var.trace_add("write", lambda *_: self._refresh_verkaeufe())
+        tk.Label(zrow, text="von:", bg=BG, font=("Arial", 9)).pack(side="left")
+        self._vh_von_var = tk.StringVar()
+        ev = tk.Entry(zrow, textvariable=self._vh_von_var, width=11)
+        ev.pack(side="left", padx=(3, 8))
+        tk.Label(zrow, text="bis:", bg=BG, font=("Arial", 9)).pack(side="left")
+        self._vh_bis_var = tk.StringVar()
+        eb = tk.Entry(zrow, textvariable=self._vh_bis_var, width=11)
+        eb.pack(side="left", padx=(3, 6))
+        tk.Label(zrow, text="(TT.MM.JJJJ – nur bei „Frei“)", bg=BG, fg="#999",
+                 font=("Arial", 8)).pack(side="left")
+        ev.bind("<KeyRelease>", lambda _e: self._vh_zeit_var.get() == "Frei" and self._refresh_verkaeufe())
+        eb.bind("<KeyRelease>", lambda _e: self._vh_zeit_var.get() == "Frei" and self._refresh_verkaeufe())
+
         tk.Label(parent, text="Verkäufe pro Kunde. Doppelklick: Details ansehen oder stornieren "
                               "(Bestand wird zurückgebucht).",
                  bg=BG, fg="#666", font=("Arial", 9)).pack(anchor="w", padx=8, pady=(0, 4))
@@ -1397,6 +1420,30 @@ class KassePanel(tk.Frame):
         self.vh_tree = tree
         self._vh_rowmap = {}
 
+    def _zeitraum_grenzen(self, modus):
+        """Liefert (von_iso, bis_iso) fuer den gewaehlten Zeitraum; (None,None)=Alle."""
+        import calendar
+        from datetime import date as _date
+        h = _date.today()
+        if modus == "Aktueller Monat":
+            von, bis = h.replace(day=1), h.replace(day=calendar.monthrange(h.year, h.month)[1])
+        elif modus == "Vormonat":
+            jahr, monat = (h.year, h.month - 1) if h.month > 1 else (h.year - 1, 12)
+            von, bis = _date(jahr, monat, 1), _date(jahr, monat, calendar.monthrange(jahr, monat)[1])
+        elif modus == "Aktuelles Quartal":
+            q = (h.month - 1) // 3
+            endm = q * 3 + 3
+            von = _date(h.year, q * 3 + 1, 1)
+            bis = _date(h.year, endm, calendar.monthrange(h.year, endm)[1])
+        elif modus == "Aktuelles Jahr":
+            von, bis = _date(h.year, 1, 1), _date(h.year, 12, 31)
+        elif modus == "Frei":
+            return (kasse_import._parse_datum(self._vh_von_var.get()),
+                    kasse_import._parse_datum(self._vh_bis_var.get()))
+        else:
+            return None, None
+        return von.isoformat(), bis.isoformat()
+
     def _refresh_verkaeufe(self):
         if not hasattr(self, "vh_tree"):
             return
@@ -1404,6 +1451,8 @@ class KassePanel(tk.Frame):
         self._vh_rowmap = {}
         filt = self._vh_filter_var.get().strip().lower()
         status_f = self._vh_status_var.get() if hasattr(self, "_vh_status_var") else "Alle"
+        zeit_f = self._vh_zeit_var.get() if hasattr(self, "_vh_zeit_var") else "Alle"
+        von, bis = self._zeitraum_grenzen(zeit_f)
         with self._conn() as con:
             rows = con.execute(
                 "SELECT b.id, b.datum, COALESCE(b.apotheke,''), COALESCE(b.status,'offen'), "
@@ -1423,6 +1472,10 @@ class KassePanel(tk.Frame):
             if status_f == "Storniert" and status != "storniert":
                 continue
             if status_f == "Aktiv" and status == "storniert":
+                continue
+            if von and (datum or "") < von:
+                continue
+            if bis and (datum or "") > bis:
                 continue
             iid = self.vh_tree.insert("", "end",
                                       values=(datum, apotheke, status, anz, _eur(summe)))
