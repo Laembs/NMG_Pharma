@@ -521,6 +521,8 @@ class KassePanel(tk.Frame):
         khead = tk.Frame(kopf, bg=BG)
         khead.pack(fill="x")
         tk.Label(khead, text="Kunde suchen:", bg=BG, font=("Arial", 10, "bold")).pack(side="left")
+        tk.Button(khead, text="✕ Kunde entfernen", command=self._vk_clear_kunde,
+                  font=("Arial", 8), padx=6, pady=1).pack(side="left", padx=(10, 0))
         tk.Button(khead, text="📥 Kundenliste importieren", command=self._import_kunden,
                   font=("Arial", 8), padx=6, pady=1).pack(side="right")
         tk.Button(khead, text="📊 Top-Artikel (12 Mon.)", command=self._show_kunde_top,
@@ -757,6 +759,12 @@ class KassePanel(tk.Frame):
             if z:
                 txt += "\n" + z
         self.vk_kunde_card_label.config(text=txt, fg="#11304d", font=("Arial", 9))
+
+    def _vk_clear_kunde(self):
+        """Gewaehlten Kunden im Verkauf mit einem Klick entfernen."""
+        self.vk_kunde = None
+        self.vk_kunde_search.clear()
+        self._render_kunde_card(None)
 
     def _vk_pick_artikel(self, pzn):
         det = self._artikel_details(pzn)
@@ -1229,22 +1237,26 @@ class KassePanel(tk.Frame):
         termin_var = tk.StringVar(value=termin)
         tk.Entry(erow, textvariable=termin_var, width=11).pack(side="left", padx=(4, 0))
 
-        tk.Label(win, text="Aktueller Bestand dieses Artikels:",
+        tk.Label(win, text="Charge wählen (Doppelklick oder markieren – wird beim Übernehmen "
+                          "in den Verkauf mitgenommen):",
                  font=("Arial", 9, "bold"), bg=BG).pack(padx=18, anchor="w")
         tf = tk.Frame(win, bg=BG)
         tf.pack(fill="both", padx=18, pady=(4, 8))
         ctree = ttk.Treeview(tf, columns=("charge", "verfall", "bestand"), show="headings",
-                             height=4, selectmode="none")
+                             height=4, selectmode="browse")
         for c, t, w in (("charge", "Charge", 150), ("verfall", "Verfall", 120), ("bestand", "Bestand", 80)):
             ctree.heading(c, text=t)
             ctree.column(c, width=w, anchor="w")
         ctree.pack(side="left", fill="both", expand=True)
-        chg = self._lager_chargen(pzn)
-        if chg:
-            for ch, vf, m in chg:
-                ctree.insert("", "end", values=(ch or "—", vf or "—", m))
-        else:
-            ctree.insert("", "end", values=("(kein Bestand)", "", ""))
+        sb = tk.Scrollbar(tf, orient="vertical", command=ctree.yview)
+        sb.pack(side="right", fill="y")
+        ctree.configure(yscrollcommand=sb.set)
+        rowmap = {}
+        f0 = ctree.insert("", "end", values=("(ohne Charge)", "", ""))
+        rowmap[f0] = ("", "")
+        for ch, vf, m in self._lager_chargen(pzn):
+            iid = ctree.insert("", "end", values=(ch or "—", vf or "—", m))
+            rowmap[iid] = (ch or "", vf or "")
 
         def _menge():
             try:
@@ -1252,6 +1264,10 @@ class KassePanel(tk.Frame):
                 return v if v > 0 else menge
             except ValueError:
                 return menge
+
+        def _charge():
+            sel = ctree.selection()
+            return rowmap.get(sel[0], ("", "")) if sel else ("", "")
 
         def speichern():
             with self._conn() as con:
@@ -1262,12 +1278,19 @@ class KassePanel(tk.Frame):
             win.destroy()
 
         def uebernehmen():
-            # In den Verkauf laden (NICHT direkt verkaufen) - Charge/Bestand wird
-            # dort gewaehlt, weitere Artikel koennen mitverkauft werden.
-            if self._vb_in_verkauf(pid, _menge(), lz_var.get(), termin_var.get().strip()):
+            # In den Verkauf laden (NICHT direkt verkaufen). Gewaehlte Charge mitnehmen.
+            ch, vf = _charge()
+            if self._vb_in_verkauf(pid, _menge(), lz_var.get(), termin_var.get().strip(), ch, vf):
                 win.destroy()
 
+        ctree.bind("<Double-1>", lambda _e: uebernehmen())
+
         def stornieren():
+            if not messagebox.askyesno(
+                    "Vorbestellung stornieren",
+                    f"Vorbestellung „{artikel or pzn}“ für {apotheke or 'diesen Kunden'} "
+                    "wirklich absagen?", parent=win):
+                return
             with self._conn() as con:
                 con.execute("UPDATE tbl_bestellpositionen SET bestellart='abgesagt' WHERE id=?", (pid,))
                 con.commit()
@@ -1284,7 +1307,7 @@ class KassePanel(tk.Frame):
         win.lift()
         win.focus_force()
 
-    def _vb_in_verkauf(self, pid, menge, lieferzeit, termin):
+    def _vb_in_verkauf(self, pid, menge, lieferzeit, termin, charge="", verfall=""):
         """Laedt eine Vorbestellung als Position in den Verkauf-Reiter. Das Original
         wird erst beim Speichern des Verkaufs entfernt (_vb_source).
         Liefert True, wenn uebernommen; False bei Abbruch (z.B. anderer Kunde)."""
@@ -1319,7 +1342,7 @@ class KassePanel(tk.Frame):
         p = {
             "pzn": pzn, "artikelname": artikel, "df": df or "", "pck": pck or "", "apu": apu,
             "menge": menge, "rabatt": rabatt or 0, "rabatt_quelle": rquelle or "manuell",
-            "charge": "", "verfall": "", "bestellart": "Bestellung",
+            "charge": charge or "", "verfall": verfall or "", "bestellart": "Bestellung",
             "lieferzeit": lieferzeit, "liefertermin": termin, "_vb_source": pid,
         }
         self.vk_positions.append(p)
