@@ -1055,12 +1055,19 @@ class KassePanel(tk.Frame):
         anzahl = len(self.vk_positions)
         bestellungen = sum(1 for p in self.vk_positions if p.get("bestellart") == "Bestellung")
         vorbestellungen = sum(1 for p in self.vk_positions if p.get("bestellart") == "Vorbestellung")
-        # Aus Vorbestellungen uebernommene Positionen: Originale jetzt entfernen.
-        consumed = [p["_vb_source"] for p in self.vk_positions if p.get("_vb_source")]
-        if consumed:
+        # Aus Vorbestellungen uebernommene Positionen: Original-Vorbestellung um die
+        # uebernommene Menge reduzieren (Rest bleibt Vorbestellung); nur bei voller
+        # Uebernahme loeschen.
+        herkunft = [(p["_vb_source"], p.get("_vb_orig_menge", p["menge"]), p["menge"])
+                    for p in self.vk_positions if p.get("_vb_source")]
+        if herkunft:
             with self._conn() as con:
-                con.executemany("DELETE FROM tbl_bestellpositionen WHERE id=?",
-                                [(i,) for i in consumed])
+                for src, orig, genommen in herkunft:
+                    rest = (orig or 0) - (genommen or 0)
+                    if rest > 0:
+                        con.execute("UPDATE tbl_bestellpositionen SET menge=? WHERE id=?", (rest, src))
+                    else:
+                        con.execute("DELETE FROM tbl_bestellpositionen WHERE id=?", (src,))
                 con.commit()
         # Reset
         self.vk_positions = []
@@ -1356,12 +1363,12 @@ class KassePanel(tk.Frame):
         with self._conn() as con:
             row = con.execute(
                 "SELECT p.pzn, p.artikelname, p.df, p.pck, p.apu, p.rabatt_prozent, p.rabatt_quelle, "
-                "b.kundennummer, COALESCE(b.apotheke,'') "
+                "b.kundennummer, COALESCE(b.apotheke,''), p.menge "
                 "FROM tbl_bestellpositionen p JOIN tbl_bestellungen b ON b.id=p.bestell_id "
                 "WHERE p.id=?", (pid,)).fetchone()
         if not row:
             return False
-        pzn, artikel, df, pck, apu, rabatt, rquelle, knr, apotheke = row
+        pzn, artikel, df, pck, apu, rabatt, rquelle, knr, apotheke, orig_menge = row
         # Konflikt: im Verkauf liegt schon ein ANDERER Kunde.
         if (self.vk_kunde and self.vk_kunde.get("kundennummer") != knr) or \
            (self.vk_positions and not self.vk_kunde):
@@ -1385,7 +1392,8 @@ class KassePanel(tk.Frame):
             "pzn": pzn, "artikelname": artikel, "df": df or "", "pck": pck or "", "apu": apu,
             "menge": menge, "rabatt": rabatt or 0, "rabatt_quelle": rquelle or "manuell",
             "charge": charge or "", "verfall": verfall or "", "bestellart": "Bestellung",
-            "lieferzeit": lieferzeit, "liefertermin": termin, "_vb_source": pid,
+            "lieferzeit": lieferzeit, "liefertermin": termin,
+            "_vb_source": pid, "_vb_orig_menge": orig_menge or 0,
         }
         self.vk_positions.append(p)
         self._vk_render_positions()
