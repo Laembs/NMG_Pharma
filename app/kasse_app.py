@@ -15,9 +15,10 @@ import getpass
 import sqlite3
 from datetime import datetime
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox, simpledialog, filedialog
 
 from .config import DB_PATH
+from . import kasse_import
 
 BG = "#ffffff"
 ACCENT = "#0b4a86"
@@ -307,7 +308,11 @@ class KassePanel(tk.Frame):
 
         krow = tk.Frame(kopf, bg=BG)
         krow.pack(fill="x")
-        tk.Label(krow, text="Kunde suchen:", bg=BG, font=("Arial", 10, "bold")).pack(anchor="w")
+        khead = tk.Frame(krow, bg=BG)
+        khead.pack(fill="x")
+        tk.Label(khead, text="Kunde suchen:", bg=BG, font=("Arial", 10, "bold")).pack(side="left")
+        tk.Button(khead, text="📥 Kundenliste importieren", command=self._import_kunden,
+                  font=("Arial", 8), padx=6, pady=1).pack(side="right")
         self.vk_kunde_search = SearchBox(
             krow,
             fetch=lambda t: [(f"{knr or '—'}  ·  {name}  ·  {plz} {ort}", (knr, name))
@@ -509,7 +514,11 @@ class KassePanel(tk.Frame):
                              fg=ACCENT, font=("Arial", 10, "bold"), padx=12, pady=8)
         form.pack(fill="x", padx=8, pady=(10, 6))
 
-        tk.Label(form, text="Artikel suchen:", bg=BG, font=("Arial", 9, "bold")).pack(anchor="w")
+        whead = tk.Frame(form, bg=BG)
+        whead.pack(fill="x")
+        tk.Label(whead, text="Artikel suchen:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        tk.Button(whead, text="📥 Wareneingangs-Liste importieren", command=self._import_wareneingang,
+                  font=("Arial", 8), padx=6, pady=1).pack(side="right")
         self.we_search = SearchBox(
             form,
             fetch=lambda t: [(f"{pzn}  ·  {name}", (pzn, name)) for pzn, name in self._search_nmg(t)],
@@ -654,3 +663,54 @@ class KassePanel(tk.Frame):
                     (neu, datetime.now().isoformat(timespec="seconds"), pzn, charge, verfall))
             con.commit()
         self._refresh_lager()
+
+    # ==================================================================== Import
+    def _pick_file(self):
+        return filedialog.askopenfilename(
+            title="Datei wählen (Excel, CSV oder TXT)",
+            filetypes=[("Tabellen", "*.xlsx *.xlsm *.csv *.txt"),
+                       ("Excel", "*.xlsx *.xlsm"), ("CSV", "*.csv"),
+                       ("Text", "*.txt"), ("Alle Dateien", "*.*")],
+            parent=self.winfo_toplevel())
+
+    def _import_kunden(self):
+        top = self.winfo_toplevel()
+        path = self._pick_file()
+        if not path:
+            return
+        try:
+            r = kasse_import.import_kunden(self.db_path, path)
+        except Exception as e:
+            messagebox.showerror("Kunden-Import", self._import_fehlertext(path, e), parent=top)
+            return
+        messagebox.showinfo(
+            "Kunden-Import",
+            f"Quelle: {r['quelle']} · {r['gelesen']} Zeilen gelesen.\n"
+            f"Erkannte Spalten: {', '.join(r['spalten'])}\n\n"
+            f"Neu: {r['neu']} · Aktualisiert: {r['aktualisiert']} · "
+            f"Übersprungen: {r['uebersprungen']}", parent=top)
+
+    def _import_wareneingang(self):
+        top = self.winfo_toplevel()
+        path = self._pick_file()
+        if not path:
+            return
+        try:
+            r = kasse_import.import_wareneingang(self.db_path, path)
+        except Exception as e:
+            messagebox.showerror("Wareneingang-Import", self._import_fehlertext(path, e), parent=top)
+            return
+        self._refresh_lager()
+        messagebox.showinfo(
+            "Wareneingang-Import",
+            f"Quelle: {r['quelle']} · {r['gelesen']} Zeilen gelesen.\n\n"
+            f"Neue Chargen: {r['neu_chargen']} · Bestand erhöht: {r['erhoehte_chargen']}\n"
+            f"Kein NMG-Artikel: {r['kein_nmg']} · Übersprungen: {r['uebersprungen']}", parent=top)
+
+    @staticmethod
+    def _import_fehlertext(path, e):
+        msg = str(e)
+        if path.lower().endswith(".pdf"):
+            return ("PDF wird derzeit nicht unterstützt (keine PDF-Bibliothek installiert). "
+                    "Bitte als Excel, CSV oder TXT speichern.\n\nDetail: " + msg)
+        return "Import fehlgeschlagen:\n" + msg
