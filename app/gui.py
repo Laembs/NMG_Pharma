@@ -163,7 +163,7 @@ ADMIN_CLEAR_TABLES = [
     ("tbl_pzn_basisdaten", "Artikelstamm / PZN-Basis"),
     ("tbl_auswertungen", "Gespeicherte Auswertungen"),
     ("tbl_auswertungspositionen", "Auswertungspositionen"),
-    ("tbl_kunden_center", "Kunden-Center"),
+    ("tbl_kunden_center", "Kunden App"),
     ("tbl_todo_center", "ToDo-Center"),
     ("tbl_mitarbeiter", "Mitarbeiter"),
     ("tbl_mitarbeiterprofil", "Mitarbeiterprofile"),
@@ -4191,7 +4191,7 @@ LIMIT 500
             ("neue_auswertung",  "📊", "Neue Auswertung",      "PK-/ZF-Auswertung starten.",               self.show_neue_auswertung_page,              "#0b4a86"),
             ("gespeicherte",     "📁", "Ges. Analysen",        "Vorhandene Analysen öffnen.",               self.open_saved_analyses,                    "#3867b7"),
             ("schulbank",        "🎓", "Schulbank",            "Lernvorschläge bearbeiten.",                lambda: self.show_schulbank_page("Schulbank"),"#11823b"),
-            ("kunden",           "👥", "Kunden",               "Kundenstamm und -history.",                 self.show_kunden_center,                     "#0b4a86"),
+            ("kunden",           "👥", "Kunden App",           "Kundenstamm und -history.",                 self.show_kunden_center,                     "#0b4a86"),
             ("kasse",            "🛒", "Kasse",                "Verkauf an Apotheken + Wareneingang.",      self.open_kasse_app,                         "#8b5a00"),
             ("todo",             "✅", "ToDo",                 "Aufgaben und offene Punkte.",               self.show_todo_center,                        "#11823b"),
             ("mitarbeiter",      "👥", "Mitarbeiter",          "Zuständigkeiten und Datenpfade.",           self.show_mitarbeiter_center,                "#6b4fb3"),
@@ -4756,7 +4756,7 @@ LIMIT 500
         typ = entry.get("typ")
         payload = entry.get("payload") or {}
         if typ == "kunde":
-            # Such-Wert fuer das Kunden-Center vormerken, dann Seite oeffnen.
+            # Such-Wert fuer die Kunden App vormerken, dann Seite oeffnen.
             self._kunden_center_pre_search = payload.get("search_value", "")
             self.show_kunden_center()
         elif typ == "analyse":
@@ -6598,7 +6598,7 @@ LIMIT 500
         body.columnconfigure((0, 1, 2, 3), weight=1)
 
         app_tiles = [
-            ("\U0001f465", "Kunden", "Kundenstamm, Analysen, E-Mail-Versand.", self.show_kunden_center, "#0b4a86"),
+            ("\U0001f465", "Kunden App", "Kundenstamm, Analysen, E-Mail-Versand.", self.show_kunden_center, "#0b4a86"),
             ("\U0001f464", "Mitarbeiter", "Mitarbeiterdaten, Profile, Vertretungen.", self.show_mitarbeiter_center, "#6b4fb3"),
             ("\u2705", "ToDo", "Aufgaben, offene Punkte und Notizen.", self.show_todo_center, "#11823b"),
             ("\U0001f6d2", "Kasse", "Verkauf an Apotheken + Wareneingang.", self.open_kasse_app, "#8b5a00"),
@@ -6983,11 +6983,11 @@ LIMIT 500
             win.after(50, do_search)
 
     def show_kunden_center(self):
-        """Neues Kunden-Center: Tabelle + Detail-Dialog mit Analysen und E-Mail."""
+        """Kunden App: Tabelle + Detail-Dialog mit Analysen und E-Mail."""
         self._ensure_center_tables()
         self._ensure_kunden_center_extended()
         self.clear_page()
-        self._page_header("Kunden-Center", "Apotheken verwalten · Analysen einsehen · per E-Mail versenden.")
+        self._page_header("Kunden App", "Apotheken verwalten · Analysen einsehen · per E-Mail versenden.")
 
         body = tk.Frame(self.page, bg="#ffffff")
         body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
@@ -7107,7 +7107,7 @@ LIMIT 500
             row = row_map.get(sel[0])
             if not row:
                 return
-            if not messagebox.askyesno("Kunden-Center", f"Kunde '{row.get('kundenname','')}' wirklich löschen?"):
+            if not messagebox.askyesno("Kunden App", f"Kunde '{row.get('kundenname','')}' wirklich löschen?"):
                 return
             with sqlite3.connect(DB_PATH) as con:
                 con.execute("DELETE FROM tbl_kunden_center WHERE id=?", (row["id"],))
@@ -7121,7 +7121,7 @@ LIMIT 500
         tk.Button(toolbar, text="Löschen", command=delete_kunde, padx=14, pady=7).pack(side="left", padx=(0, 6))
         tk.Button(toolbar, text="Aktualisieren", command=lambda: reload(search_var.get().strip()), padx=14, pady=7).pack(side="left")
 
-        self.status.set("Kunden-Center bereit.")
+        self.status.set("Kunden App bereit.")
 
     def open_kasse_app(self):
         """Kasse-App (Verkauf + Wareneingang) als eigenes Toplevel-Fenster mit
