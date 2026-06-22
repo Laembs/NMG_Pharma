@@ -96,6 +96,17 @@ def main():
         con.execute("UPDATE tbl_bestellungen SET msk_erfasst=1, msk_von='seed', msk_am=? WHERE id=?",
                     (datetime.now().isoformat(timespec="seconds"), i))
 
+    # Ein paar Protokoll-Beispiele (sonst fuellt sich das Log erst im Betrieb).
+    con.execute("DELETE FROM tbl_kasse_log")
+    vk = con.execute("SELECT b.id, COALESCE(b.apotheke,'') FROM tbl_bestellungen b "
+                     "JOIN tbl_bestellpositionen p ON p.bestell_id=b.id "
+                     "WHERE p.bestellart='Bestellung' GROUP BY b.id ORDER BY b.id LIMIT 3").fetchall()
+    beispiele = [("anna", "Verkauf gespeichert"), ("bernd", "MSK erfasst"), ("anna", "Verkauf storniert")]
+    for (bid, apo), (wer, aktion) in zip(vk, beispiele):
+        con.execute("INSERT INTO tbl_kasse_log(zeitpunkt,bearbeiter,aktion,bestell_id,kunde,details) "
+                    "VALUES(?,?,?,?,?,?)", (datetime.now().isoformat(timespec="seconds"),
+                    wer, aktion, bid, apo, "Testdaten"))
+
     con.commit()
     # Zusammenfassung
     nb = con.execute("SELECT COUNT(*) FROM tbl_bestellungen").fetchone()[0]

@@ -192,6 +192,18 @@ def run_migrations(db_path: Path = DB_PATH) -> list[str]:
         con.execute("CREATE INDEX IF NOT EXISTS idx_lagerbestand_pzn ON tbl_lagerbestand(pzn)")
         actions.append("tbl_wareneingang(_positionen) + tbl_lagerbestand sichergestellt")
 
+        # Aenderungs-Protokoll der Kasse: wer hat was wann gemacht (Nachvollziehbarkeit).
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_kasse_log(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                zeitpunkt TEXT DEFAULT CURRENT_TIMESTAMP,
+                bearbeiter TEXT, aktion TEXT, bestell_id INTEGER,
+                kunde TEXT, details TEXT
+            )"""
+        )
+        con.execute("CREATE INDEX IF NOT EXISTS idx_kasse_log_bestell ON tbl_kasse_log(bestell_id)")
+        actions.append("tbl_kasse_log sichergestellt")
+
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('db_schema_version', ?)", (DB_SCHEMA_VERSION,))
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('last_migration_at', ?)", (datetime.now().isoformat(timespec='seconds'),))
         con.commit()

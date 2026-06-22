@@ -208,6 +208,13 @@ def ensure_kasse_tables(db_path=DB_PATH):
                 UNIQUE(pzn, charge, verfall)
             )"""
         )
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_kasse_log(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                zeitpunkt TEXT DEFAULT CURRENT_TIMESTAMP,
+                bearbeiter TEXT, aktion TEXT, bestell_id INTEGER, kunde TEXT, details TEXT
+            )"""
+        )
         con.commit()
 
 
@@ -299,6 +306,21 @@ class KassePanel(tk.Frame):
     def _table_exists_now(self, name):
         with self._conn() as con:
             return _table_exists(con, name)
+
+    def _log(self, aktion, bestell_id=None, kunde="", details=""):
+        """Schreibt einen Eintrag ins Aenderungs-Protokoll (wer/was/wann)."""
+        try:
+            with self._conn() as con:
+                con.execute(
+                    "INSERT INTO tbl_kasse_log(zeitpunkt,bearbeiter,aktion,bestell_id,kunde,details) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (datetime.now().isoformat(timespec="seconds"), getpass.getuser(),
+                     aktion, bestell_id, kunde, details))
+                con.commit()
+            if hasattr(self, "log_tree"):
+                self._refresh_log()
+        except Exception:
+            pass
 
     def _restyle_buttons(self, widget):
         """Vereinheitlicht alle tk.Button im NMGone-Flat-Stil: farbige Aktions-
@@ -488,7 +510,8 @@ class KassePanel(tk.Frame):
                                  ("vorbestellungen", "Vorbestellungen", "🕓"),
                                  ("verkaeufe", "Verkäufe", "🧾"),
                                  ("artikel", "Artikel", "🔍"),
-                                 ("wareneingang", "Wareneingang", "📦")):
+                                 ("wareneingang", "Wareneingang", "📦"),
+                                 ("protokoll", "Protokoll", "📝")):
             b = tk.Button(nav, text=f"  {icon}   {text}", anchor="w", relief="flat",
                           bg=BG, fg="#11304d", font=("Arial", 11), bd=0,
                           activebackground=NAV_SEL, cursor="hand2",
@@ -528,7 +551,8 @@ class KassePanel(tk.Frame):
                              ("vorbestellungen", self._build_vorbestellungen),
                              ("verkaeufe", self._build_verkaeufe),
                              ("artikel", self._build_artikel),
-                             ("wareneingang", self._build_wareneingang)):
+                             ("wareneingang", self._build_wareneingang),
+                             ("protokoll", self._build_protokoll)):
             frame = tk.Frame(page, bg=BG)
             frame.grid(row=0, column=0, sticky="nsew")
             builder(frame)
@@ -543,13 +567,16 @@ class KassePanel(tk.Frame):
                                       "vorbestellungen": "Vorbestellungen",
                                       "verkaeufe": "Verkäufe",
                                       "artikel": "Artikel-Übersicht",
-                                      "wareneingang": "Wareneingang"}.get(key, key))
+                                      "wareneingang": "Wareneingang",
+                                      "protokoll": "Änderungs-Protokoll"}.get(key, key))
         if key == "vorbestellungen":
             self._refresh_vorbestellungen()
         elif key == "verkaeufe":
             self._refresh_verkaeufe()
         elif key == "artikel":
             self._refresh_artikel()
+        elif key == "protokoll":
+            self._refresh_log()
         for k, b in self._nav_buttons.items():
             if k == key:
                 b.config(bg=NAV_SEL, fg=ACCENT, font=("Arial", 11, "bold"))
@@ -1101,6 +1128,9 @@ class KassePanel(tk.Frame):
                     else:
                         con.execute("DELETE FROM tbl_bestellpositionen WHERE id=?", (src,))
                 con.commit()
+        self._log("Verkauf gespeichert", bid, self.vk_kunde["kundenname"],
+                  f"{bestellungen} Bestellung(en), {vorbestellungen} Vorbestellung(en)"
+                  + (f", {len(herkunft)} aus Vorbestellung übernommen" if herkunft else ""))
         # Reset
         self.vk_positions = []
         self._vk_render_positions()
@@ -1356,6 +1386,8 @@ class KassePanel(tk.Frame):
                 con.execute("UPDATE tbl_bestellpositionen SET menge=?, lieferzeit=?, liefertermin=? WHERE id=?",
                             (_menge(), lz_var.get(), termin_var.get().strip(), pid))
                 con.commit()
+            self._log("Vorbestellung geändert", kunde=apotheke,
+                      details=f"{artikel or pzn}, Menge {_menge()}")
             self._refresh_vorbestellungen()
             win.destroy()
 
@@ -1376,6 +1408,7 @@ class KassePanel(tk.Frame):
             with self._conn() as con:
                 con.execute("UPDATE tbl_bestellpositionen SET bestellart='abgesagt' WHERE id=?", (pid,))
                 con.commit()
+            self._log("Vorbestellung abgesagt", kunde=apotheke, details=f"{artikel or pzn}")
             self._refresh_vorbestellungen()
             win.destroy()
 
@@ -1506,7 +1539,7 @@ class KassePanel(tk.Frame):
             tree.heading(c, text=heads[c])
             w = 180 if c == "kunde" else (110 if c in ("summe",) else (90 if c in ("bearbeiter", "msk", "status") else 70))
             tree.column(c, width=w, anchor="w")
-        tree.tag_configure("msk_offen", background="#fff3e0")
+        tree.tag_configure("msk_erfasst", background="#e7f4ea")
         tree.pack(side="left", fill="both", expand=True)
         sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
         sb.pack(side="right", fill="y")
@@ -1579,8 +1612,9 @@ class KassePanel(tk.Frame):
                 continue
             # MSK nur fuer aktive (nicht stornierte) Verkaeufe relevant.
             offen = (not msk) and status != "storniert"
+            erfasst = bool(msk) and status != "storniert"
             msk_txt = "✓ erfasst" if msk else ("offen" if status != "storniert" else "–")
-            iid = self.vh_tree.insert("", "end", tags=("msk_offen",) if offen else (),
+            iid = self.vh_tree.insert("", "end", tags=("msk_erfasst",) if erfasst else (),
                                       values=(datum, apotheke, bearbeiter, msk_txt, status,
                                               anz, _eur(summe)))
             self._vh_rowmap[iid] = bid
@@ -1613,6 +1647,8 @@ class KassePanel(tk.Frame):
                     con.execute("UPDATE tbl_bestellungen SET msk_erfasst=0, msk_von=NULL, msk_am=NULL "
                                 "WHERE id=?", (bid,))
             con.commit()
+        for bid in bids:
+            self._log("MSK erfasst" if erfasst else "MSK offen gesetzt", bid)
         self._refresh_verkaeufe()
 
     def _verkauf_detail_dialog(self, _e=None):
@@ -1690,6 +1726,7 @@ class KassePanel(tk.Frame):
                                 "INSERT INTO tbl_lagerbestand(pzn,artikelname,charge,verfall,menge,aktualisiert_am) "
                                 "VALUES(?,?,?,?,?,?)", (pzn, art, ch, vf, menge, jetzt))
                 con.commit()
+            self._log("Verkauf storniert", bid, apotheke, "Bestand zurückgebucht")
             self._refresh_verkaeufe()
             self._refresh_lager()
             win.destroy()
@@ -1814,6 +1851,66 @@ class KassePanel(tk.Frame):
         self._restyle_buttons(win)
         win.lift()
         win.focus_force()
+
+    # =============================================================== Protokoll
+    def _build_protokoll(self, parent):
+        bar = tk.Frame(parent, bg=BG)
+        bar.pack(fill="x", padx=8, pady=(10, 4))
+        tk.Label(bar, text="Suche (Mitarbeiter / Aktion / Kunde / Auftrag-Nr / Detail):",
+                 bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        self._log_filter_var = tk.StringVar()
+        e = tk.Entry(bar, textvariable=self._log_filter_var, width=28)
+        e.pack(side="left", padx=(6, 8))
+        e.bind("<KeyRelease>", lambda _e: self._refresh_log())
+        tk.Button(bar, text="🔄 Aktualisieren", command=self._refresh_log,
+                  font=("Arial", 9), padx=8, pady=2).pack(side="right")
+        self.log_info = tk.Label(bar, text="", bg=BG, fg=ACCENT, font=("Arial", 9, "bold"))
+        self.log_info.pack(side="right", padx=(0, 12))
+        tk.Label(parent, text="Wer hat was wann geändert (neueste oben). Spalten sortierbar – "
+                              "z. B. nach Mitarbeiter oder Auftrag, um Fehler/Änderungen zu finden.",
+                 bg=BG, fg="#666", font=("Arial", 9)).pack(anchor="w", padx=8, pady=(0, 4))
+
+        tf = tk.Frame(parent, bg=BG)
+        tf.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        cols = ("zeit", "bearbeiter", "aktion", "auftrag", "kunde", "details")
+        heads = {"zeit": "Zeitpunkt", "bearbeiter": "Mitarbeiter", "aktion": "Aktion",
+                 "auftrag": "Auftrag", "kunde": "Kunde", "details": "Details"}
+        tree = ttk.Treeview(tf, columns=cols, show="headings")
+        for c in cols:
+            tree.heading(c, text=heads[c])
+            w = 140 if c == "zeit" else (250 if c == "details" else (
+                110 if c in ("bearbeiter", "aktion", "kunde") else 70))
+            tree.column(c, width=w, anchor="w")
+        tree.pack(side="left", fill="both", expand=True)
+        sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
+        sb.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=sb.set)
+        _make_treeview_sortable(tree)
+        self.log_tree = tree
+
+    def _refresh_log(self):
+        if not hasattr(self, "log_tree"):
+            return
+        self.log_tree.delete(*self.log_tree.get_children())
+        filt = self._log_filter_var.get().strip().lower()
+        with self._conn() as con:
+            if not _table_exists(con, "tbl_kasse_log"):
+                self.log_info.config(text="0 Einträge")
+                return
+            rows = con.execute(
+                "SELECT zeitpunkt, COALESCE(bearbeiter,''), COALESCE(aktion,''), bestell_id, "
+                "COALESCE(kunde,''), COALESCE(details,'') FROM tbl_kasse_log "
+                "ORDER BY id DESC LIMIT 1000").fetchall()
+        gezeigt = 0
+        for z, bearb, aktion, bid, kunde, details in rows:
+            auftrag = f"#{bid}" if bid else ""
+            if filt and filt not in " ".join(str(x).lower() for x in
+                                             (bearb, aktion, auftrag, kunde, details)):
+                continue
+            zt = str(z).replace("T", " ")[:16]
+            self.log_tree.insert("", "end", values=(zt, bearb, aktion, auftrag, kunde, details))
+            gezeigt += 1
+        self.log_info.config(text=f"{gezeigt} Einträge")
 
     # ============================================================ Wareneingang
     def _build_wareneingang(self, parent):
@@ -1948,6 +2045,8 @@ class KassePanel(tk.Frame):
                     "VALUES(?,?,?,?,?,?)",
                     (pzn, artikelname, charge, verfall, menge, jetzt))
             con.commit()
+        self._log("Wareneingang", details=f"{artikelname} (PZN {pzn}) +{menge} · "
+                  f"Charge {charge or '–'} · Verf {verfall or '–'}")
 
         self.we_pzn = None
         self.we_search.clear()
@@ -1981,6 +2080,8 @@ class KassePanel(tk.Frame):
                     "AND COALESCE(charge,'')=? AND COALESCE(verfall,'')=?",
                     (neu, datetime.now().isoformat(timespec="seconds"), pzn, charge, verfall))
             con.commit()
+        self._log("Bestandskorrektur", details=f"PZN {pzn} · Charge {charge or '–'} · "
+                  f"{menge} -> {neu}")
         self._refresh_lager()
 
     # ==================================================================== Import
@@ -2041,6 +2142,8 @@ class KassePanel(tk.Frame):
         if hasattr(self, "vb_tree"):
             self._refresh_vorbestellungen()
         was = "Vorbestellungen" if als_vorbestellung else "Verkäufe"
+        self._log(f"{was} importiert",
+                  details=f"{r['bestellungen']} {was}, {r['positionen']} Positionen aus {r['quelle']}")
         unklar = (f"\n⚠ {r['datum_unklar']} Datum/Daten nicht erkannt – auf heute gesetzt."
                   if r.get("datum_unklar") else "")
         messagebox.showinfo(
