@@ -12,6 +12,7 @@ Datenmodell siehe migrations.py.
 from __future__ import annotations
 
 import getpass
+import os
 import sqlite3
 from datetime import datetime
 import tkinter as tk
@@ -19,6 +20,7 @@ from tkinter import ttk, messagebox, simpledialog, filedialog
 
 from .config import DB_PATH
 from . import kasse_import
+from . import auftrag
 
 BG = "#ffffff"
 ACCENT = "#0b4a86"
@@ -504,9 +506,64 @@ class KassePanel(tk.Frame):
         self.vk_kunde_search.clear()
         self.vk_kunde_label.config(text="Kein Kunde gewählt.", fg="#999")
         self._refresh_lager()
-        messagebox.showinfo("Verkauf",
-                            f"Verkauf #{bid} gespeichert ({anzahl} Position(en)). "
-                            f"Lagerbestand wurde abgebucht.", parent=top)
+        self._auftrag_dialog(bid, anzahl)
+
+    # ==================================================== Auftragsbestaetigung
+    def _auftrag_dialog(self, bestell_id, anzahl):
+        top = self.winfo_toplevel()
+        win = tk.Toplevel(top)
+        win.title("Auftragsbestätigung")
+        win.configure(bg=BG)
+        win.transient(top)
+        win.resizable(False, False)
+        tk.Label(win, text=f"✓ Verkauf #{bestell_id} gespeichert",
+                 font=("Arial", 12, "bold"), fg="#11823b", bg=BG).pack(padx=20, pady=(16, 2))
+        tk.Label(win, text=f"{anzahl} Position(en) · Lagerbestand abgebucht.",
+                 font=("Arial", 9), fg="#666", bg=BG).pack(padx=20, pady=(0, 12))
+
+        btns = tk.Frame(win, bg=BG)
+        btns.pack(padx=20, pady=(0, 8))
+        tk.Button(btns, text="🖨  Drucken / Vorschau", width=22,
+                  command=lambda: self._auftrag_drucken(bestell_id, win),
+                  bg=ACCENT, fg="white", font=("Arial", 10, "bold"), pady=4).grid(row=0, column=0, padx=4, pady=3)
+        tk.Button(btns, text="📧  Per E-Mail senden", width=22,
+                  command=lambda: self._auftrag_mail(bestell_id, win),
+                  bg="#3867b7", fg="white", font=("Arial", 10, "bold"), pady=4).grid(row=1, column=0, padx=4, pady=3)
+        tk.Button(btns, text="Vorlage bearbeiten", width=22,
+                  command=self._auftrag_vorlage_oeffnen, pady=3).grid(row=2, column=0, padx=4, pady=3)
+        tk.Button(win, text="Schließen", command=win.destroy, padx=14, pady=3).pack(pady=(2, 14))
+        win.lift()
+        win.focus_force()
+
+    def _auftrag_drucken(self, bestell_id, parent):
+        try:
+            path = auftrag.render(self.db_path, bestell_id)
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        except Exception as e:
+            messagebox.showerror("Auftragsbestätigung", f"Konnte nicht erstellt werden:\n{e}", parent=parent)
+
+    def _auftrag_mail(self, bestell_id, parent):
+        try:
+            path = auftrag.render(self.db_path, bestell_id)
+        except Exception as e:
+            messagebox.showerror("Auftragsbestätigung", f"Konnte nicht erstellt werden:\n{e}", parent=parent)
+            return
+        to = auftrag.kunde_email(self.db_path, bestell_id)
+        if not to:
+            to = simpledialog.askstring("E-Mail", "Keine E-Mail beim Kunden hinterlegt.\n"
+                                        "Empfänger-Adresse eingeben:", parent=parent) or ""
+        try:
+            html = path.read_text(encoding="utf-8")
+            auftrag.send_via_outlook(to.strip(), f"Auftragsbestätigung #{bestell_id}", html, path)
+        except Exception as e:
+            messagebox.showerror("E-Mail", f"Outlook konnte nicht geöffnet werden:\n{e}", parent=parent)
+
+    def _auftrag_vorlage_oeffnen(self):
+        try:
+            os.startfile(str(auftrag.template_path()))  # type: ignore[attr-defined]
+        except Exception as e:
+            messagebox.showerror("Vorlage", f"Vorlage konnte nicht geöffnet werden:\n{e}",
+                                 parent=self.winfo_toplevel())
 
     # ============================================================ Wareneingang
     def _build_wareneingang(self, parent):
