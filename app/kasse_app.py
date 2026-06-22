@@ -1,13 +1,13 @@
 """NMG Kasse-App (ehem. Bestell-App) - gemeinsame Oberflaeche fuer NMGone
 (Toplevel) und die eigenstaendige Kasse-.exe (eigenes Fenster / Taskleisten-Icon).
 
-Warenkreislauf: Wareneingang -> Lagerbestand -> Verkauf. Die UI liegt in
-KassePanel (tk.Frame) mit zwei Reitern:
-  - Verkauf      = Warenausgang an Apotheke (Geruest; Phasen C folgen)
+Warenkreislauf: Wareneingang -> Lagerbestand -> Verkauf. UI in KassePanel
+(tk.Frame) mit zwei Reitern:
+  - Verkauf      = Warenausgang an Apotheke (globale Kunden-/Artikelsuche,
+                   Bestand/Charge-Auswahl, Rabatt-Kaskade, Speichern -> Lager ab)
   - Wareneingang = NMG-Artikel mit Charge/Verfall/Menge ins Lager buchen
 
-Datenmodell siehe migrations.py: tbl_bestellungen/_positionen (Verkauf),
-tbl_wareneingang/_positionen, tbl_lagerbestand.
+Datenmodell siehe migrations.py.
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import getpass
 import sqlite3
 from datetime import datetime
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 
 from .config import DB_PATH
 
@@ -23,18 +23,20 @@ BG = "#ffffff"
 ACCENT = "#0b4a86"
 
 
-def ensure_kasse_tables(db_path=DB_PATH):
-    """Alle Kasse-Tabellen idempotent anlegen (spiegelt migrations.py).
+def _table_exists(con, name) -> bool:
+    return con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone() is not None
 
-    Aktiviert WAL, damit NMGone und die Kasse-.exe gleichzeitig auf dieselbe
-    SQLite-Datei zugreifen koennen.
-    """
+
+def ensure_kasse_tables(db_path=DB_PATH):
+    """Alle Kasse-Tabellen idempotent anlegen (spiegelt migrations.py). WAL fuer
+    parallelen Zugriff von NMGone und Kasse-.exe."""
     with sqlite3.connect(db_path) as con:
         try:
             con.execute("PRAGMA journal_mode=WAL")
         except sqlite3.Error:
             pass
-        # Verkauf (ehem. Bestellung)
         con.execute(
             """CREATE TABLE IF NOT EXISTS tbl_bestellungen(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,7 +60,6 @@ def ensure_kasse_tables(db_path=DB_PATH):
         for col in ("charge", "verfall"):
             if col not in {r[1] for r in con.execute("PRAGMA table_info(tbl_bestellpositionen)")}:
                 con.execute(f"ALTER TABLE tbl_bestellpositionen ADD COLUMN {col} TEXT")
-        # Wareneingang
         con.execute(
             """CREATE TABLE IF NOT EXISTS tbl_wareneingang(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,7 +77,6 @@ def ensure_kasse_tables(db_path=DB_PATH):
                 FOREIGN KEY(we_id) REFERENCES tbl_wareneingang(id) ON DELETE CASCADE
             )"""
         )
-        # Lagerbestand: eine Zeile pro PZN x Charge x Verfall
         con.execute(
             """CREATE TABLE IF NOT EXISTS tbl_lagerbestand(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,17 +88,195 @@ def ensure_kasse_tables(db_path=DB_PATH):
         con.commit()
 
 
+class SearchBox(tk.Frame):
+    """Eingabezeile mit Live-Vorschlagsliste. fetch(text)->[(label,payload)],
+    on_select(payload) bei Auswahl."""
+
+    def __init__(self, master, fetch, on_select, width=46, height=6):
+        super().__init__(master, bg=BG)
+        self._fetch = fetch
+        self._on_select = on_select
+        self.var = tk.StringVar()
+        self.entry = tk.Entry(self, textvariable=self.var, width=width)
+        self.entry.pack(fill="x")
+        self.lb = tk.Listbox(self, height=height, activestyle="dotbox")
+        self._payloads = []
+        self.entry.bind("<KeyRelease>", self._on_key)
+        self.lb.bind("<ButtonRelease-1>", self._on_pick)
+        self.lb.bind("<Return>", self._on_pick)
+        self.entry.bind("<Down>", self._focus_list)
+
+    def _focus_list(self, _e):
+        if self._payloads:
+            self.lb.focus_set()
+            self.lb.selection_clear(0, "end")
+            self.lb.selection_set(0)
+
+    def _on_key(self, e):
+        if e.keysym in ("Up", "Down", "Return"):
+            return
+        text = self.var.get().strip()
+        if not text:
+            self._hide()
+            return
+        results = list(self._fetch(text))
+        self.lb.delete(0, "end")
+        self._payloads = []
+        for label, payload in results:
+            self.lb.insert("end", label)
+            self._payloads.append(payload)
+        if results:
+            self.lb.pack(fill="x", pady=(2, 0))
+        else:
+            self._hide()
+
+    def _on_pick(self, _e):
+        sel = self.lb.curselection()
+        if not sel:
+            return
+        i = sel[0]
+        self.var.set(self.lb.get(i))
+        payload = self._payloads[i]
+        self._hide()
+        self._on_select(payload)
+
+    def _hide(self):
+        self.lb.pack_forget()
+
+    def set_text(self, t):
+        self.var.set(t)
+
+    def clear(self):
+        self.var.set("")
+        self._hide()
+
+
 class KassePanel(tk.Frame):
-    """Komplette Kasse-Oberflaeche: Reiter Verkauf + Wareneingang."""
+    """Kasse-Oberflaeche: Reiter Verkauf + Wareneingang."""
 
     def __init__(self, master, db_path=DB_PATH, on_close=None):
         super().__init__(master, bg=BG)
         self.db_path = db_path
         self._on_close = on_close or (lambda: self.winfo_toplevel().destroy())
         ensure_kasse_tables(db_path)
+        self.vk_kunde = None          # (kundennummer, apotheke)
+        self.vk_cur = None            # aktuell gewaehlter Artikel (dict)
+        self.vk_positions = []        # Liste der Verkaufspositionen (dicts)
+        self.we_pzn = None
         self._build()
 
-    # ------------------------------------------------------------------ Aufbau
+    # =============================================================== Datenbank
+    def _conn(self):
+        return sqlite3.connect(self.db_path)
+
+    def _search_nmg(self, text, limit=25):
+        like = f"%{text}%"
+        with self._conn() as con:
+            return con.execute(
+                "SELECT pzn, artikelname FROM tbl_nmg_stamm "
+                "WHERE pzn LIKE ? OR artikelname LIKE ? ORDER BY artikelname LIMIT ?",
+                (like, like, limit),
+            ).fetchall()
+
+    def _artikel_details(self, pzn):
+        with self._conn() as con:
+            nmg = con.execute(
+                "SELECT artikelname, apu, menge, einheit FROM tbl_nmg_stamm WHERE pzn=? LIMIT 1",
+                (pzn,),
+            ).fetchone()
+            if not nmg:
+                return None
+            artikelname, apu, menge, einheit = nmg
+            df = pck = None
+            if _table_exists(con, "tbl_artikelstamm"):
+                a = con.execute(
+                    "SELECT df, pck FROM tbl_artikelstamm WHERE pzn=? LIMIT 1", (pzn,)
+                ).fetchone()
+                if a:
+                    df, pck = a
+            pck = pck or " ".join(str(x) for x in (menge, einheit) if x)
+            return {"pzn": pzn, "artikelname": artikelname, "df": df or "",
+                    "pck": pck or "", "apu": apu}
+
+    def _search_kunden(self, text, limit=25):
+        like = f"%{text}%"
+        with self._conn() as con:
+            if not _table_exists(con, "tbl_kunden_center"):
+                return []
+            have = {r[1] for r in con.execute("PRAGMA table_info(tbl_kunden_center)")}
+            felder = [c for c in ("kundennummer", "kundenname", "plz", "ort",
+                                  "strasse", "inhaber", "ansprechpartner") if c in have]
+            if not felder:
+                return []
+            where = " OR ".join(f"COALESCE({c},'') LIKE ?" for c in felder)
+            rows = con.execute(
+                f"SELECT kundennummer, kundenname, "
+                f"COALESCE(plz,''), COALESCE(ort,'') FROM tbl_kunden_center "
+                f"WHERE {where} ORDER BY kundenname LIMIT ?",
+                tuple(like for _ in felder) + (limit,),
+            ).fetchall()
+            return rows
+
+    def _resolve_rabatt(self, kundennummer, pzn):
+        """Kaskade: PK-Kondition -> NMG-Rabatt -> 0. Liefert (prozent, quelle)."""
+        with self._conn() as con:
+            if kundennummer and _table_exists(con, "tbl_pk_konditionen"):
+                r = con.execute(
+                    "SELECT rabatt_prozent FROM tbl_pk_konditionen "
+                    "WHERE kundennummer=? AND pzn=? AND rabatt_prozent IS NOT NULL LIMIT 1",
+                    (kundennummer, pzn),
+                ).fetchone()
+                if r and r[0] is not None:
+                    return float(r[0]), "PK"
+            r = con.execute(
+                "SELECT rabatt FROM nmg_rabatte WHERE nmg_pzn=? AND rabatt IS NOT NULL LIMIT 1",
+                (pzn,),
+            ).fetchone()
+            if r and r[0] is not None:
+                val = float(r[0])
+                # nmg_rabatte.rabatt ist ein Bruch (0.2 = 20 %); >1 = schon Prozent.
+                return (val * 100 if val <= 1 else val), "NMG"
+        return 0.0, "manuell"
+
+    def _lager_chargen(self, pzn):
+        with self._conn() as con:
+            return con.execute(
+                "SELECT charge, verfall, menge FROM tbl_lagerbestand "
+                "WHERE pzn=? AND menge > 0 ORDER BY verfall",
+                (pzn,),
+            ).fetchall()
+
+    def _save_verkauf(self, header, positions):
+        with self._conn() as con:
+            cur = con.execute(
+                "INSERT INTO tbl_bestellungen(datum,kundennummer,apotheke,bestellart,"
+                "lieferzeit,liefertermin,status,bearbeiter) VALUES(?,?,?,?,?,?,?,?)",
+                (header["datum"], header["kundennummer"], header["apotheke"],
+                 header["bestellart"], header["lieferzeit"], header["liefertermin"],
+                 "offen", getpass.getuser()),
+            )
+            bid = cur.lastrowid
+            for p in positions:
+                con.execute(
+                    "INSERT INTO tbl_bestellpositionen(bestell_id,pzn,artikelname,df,pck,"
+                    "apu,menge,rabatt_prozent,rabatt_quelle,charge,verfall) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    (bid, p["pzn"], p["artikelname"], p["df"], p["pck"], p["apu"],
+                     p["menge"], p["rabatt"], p["rabatt_quelle"], p["charge"], p["verfall"]),
+                )
+                # Lager abbuchen, wenn eine konkrete Charge gewaehlt wurde (locker:
+                # nie unter 0, keine Sperre).
+                if p["charge"] or p["verfall"]:
+                    con.execute(
+                        "UPDATE tbl_lagerbestand SET menge=MAX(0, menge - ?), aktualisiert_am=? "
+                        "WHERE pzn=? AND COALESCE(charge,'')=? AND COALESCE(verfall,'')=?",
+                        (p["menge"], datetime.now().isoformat(timespec="seconds"),
+                         p["pzn"], p["charge"], p["verfall"]),
+                    )
+            con.commit()
+            return bid
+
+    # ================================================================== Aufbau
     def _build(self):
         header = tk.Frame(self, bg=BG)
         header.pack(fill="x", padx=16, pady=(14, 6))
@@ -121,191 +299,358 @@ class KassePanel(tk.Frame):
         tk.Button(footer, text="Schließen", command=self._on_close,
                   font=("Arial", 10), padx=14, pady=4).pack(side="right")
 
-    # ----------------------------------------------------------------- Verkauf
+    # ================================================================= Verkauf
     def _build_verkauf(self, parent):
         kopf = tk.LabelFrame(parent, text="Kunde & Lieferung", bg=BG, fg=ACCENT,
-                             font=("Arial", 10, "bold"), padx=12, pady=10)
-        kopf.pack(fill="x", padx=8, pady=(10, 8))
+                             font=("Arial", 10, "bold"), padx=12, pady=8)
+        kopf.pack(fill="x", padx=8, pady=(10, 6))
 
         krow = tk.Frame(kopf, bg=BG)
-        krow.pack(fill="x", pady=(0, 8))
-        tk.Label(krow, text="Kunde:", width=12, anchor="w", bg=BG,
-                 font=("Arial", 10, "bold")).pack(side="left")
-        self.vk_kunde_var = tk.StringVar()
-        tk.Entry(krow, textvariable=self.vk_kunde_var, width=44).pack(side="left")
-        tk.Label(krow, text="(globale Kundensuche folgt)", bg=BG, fg="#999",
-                 font=("Arial", 8)).pack(side="left", padx=8)
+        krow.pack(fill="x")
+        tk.Label(krow, text="Kunde suchen:", bg=BG, font=("Arial", 10, "bold")).pack(anchor="w")
+        self.vk_kunde_search = SearchBox(
+            krow,
+            fetch=lambda t: [(f"{knr or '—'}  ·  {name}  ·  {plz} {ort}", (knr, name))
+                             for knr, name, plz, ort in self._search_kunden(t)],
+            on_select=self._vk_pick_kunde, height=5,
+        )
+        self.vk_kunde_search.pack(fill="x", pady=(2, 4))
+        self.vk_kunde_label = tk.Label(kopf, text="Kein Kunde gewählt.", bg=BG,
+                                       fg="#999", font=("Arial", 9, "italic"))
+        self.vk_kunde_label.pack(anchor="w")
 
-        brow = tk.Frame(kopf, bg=BG)
-        brow.pack(fill="x", pady=(0, 8))
-        tk.Label(brow, text="Bestellart:", width=12, anchor="w", bg=BG,
-                 font=("Arial", 10, "bold")).pack(side="left")
+        opt = tk.Frame(kopf, bg=BG)
+        opt.pack(fill="x", pady=(6, 0))
+        tk.Label(opt, text="Bestellart:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
         self.vk_art_var = tk.StringVar(value="Bestellung")
-        for txt in ("Bestellung", "Vorbestellung", "abgesagt"):
-            tk.Radiobutton(brow, text=txt, value=txt, variable=self.vk_art_var,
-                           bg=BG, font=("Arial", 9)).pack(side="left", padx=(0, 10))
-
-        lrow = tk.Frame(kopf, bg=BG)
-        lrow.pack(fill="x")
-        tk.Label(lrow, text="Liefern:", width=12, anchor="w", bg=BG,
-                 font=("Arial", 10, "bold")).pack(side="left")
+        ttk.Combobox(opt, textvariable=self.vk_art_var, width=13, state="readonly",
+                     values=("Bestellung", "Vorbestellung", "abgesagt")).pack(side="left", padx=(4, 14))
+        tk.Label(opt, text="Liefern:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
         self.vk_lieferzeit_var = tk.StringVar(value="10 Uhr")
-        for txt in ("10 Uhr", "12 Uhr", "Frei"):
-            tk.Radiobutton(lrow, text=txt, value=txt, variable=self.vk_lieferzeit_var,
-                           bg=BG, font=("Arial", 9)).pack(side="left", padx=(0, 8))
-        self.vk_lieferzeit_frei_var = tk.StringVar()
-        tk.Entry(lrow, textvariable=self.vk_lieferzeit_frei_var, width=10).pack(side="left", padx=(0, 16))
-        tk.Label(lrow, text="Termin:", bg=BG, font=("Arial", 10, "bold")).pack(side="left")
+        ttk.Combobox(opt, textvariable=self.vk_lieferzeit_var, width=8,
+                     values=("10 Uhr", "12 Uhr", "Frei")).pack(side="left", padx=(4, 14))
+        tk.Label(opt, text="Termin:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
         self.vk_termin_var = tk.StringVar()
-        tk.Entry(lrow, textvariable=self.vk_termin_var, width=12).pack(side="left", padx=(4, 0))
+        tk.Entry(opt, textvariable=self.vk_termin_var, width=12).pack(side="left", padx=(4, 0))
 
-        pos = tk.LabelFrame(parent, text="Positionen (nur NMG-Artikel)", bg=BG, fg=ACCENT,
-                            font=("Arial", 10, "bold"), padx=12, pady=10)
-        pos.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-        arow = tk.Frame(pos, bg=BG)
-        arow.pack(fill="x", pady=(0, 8))
-        tk.Label(arow, text="Artikel:", bg=BG, font=("Arial", 10, "bold")).pack(side="left")
-        self.vk_artikel_var = tk.StringVar()
-        tk.Entry(arow, textvariable=self.vk_artikel_var, width=40).pack(side="left", padx=(6, 8))
-        tk.Label(arow, text="(NMG-Artikelsuche + Bestand/Charge folgen)", bg=BG, fg="#999",
-                 font=("Arial", 8)).pack(side="left")
+        # Artikel hinzufuegen
+        addf = tk.LabelFrame(parent, text="Artikel hinzufügen (nur NMG)", bg=BG, fg=ACCENT,
+                             font=("Arial", 10, "bold"), padx=12, pady=8)
+        addf.pack(fill="x", padx=8, pady=(0, 6))
+        self.vk_artikel_search = SearchBox(
+            addf,
+            fetch=lambda t: [(f"{pzn}  ·  {name}", pzn) for pzn, name in self._search_nmg(t)],
+            on_select=self._vk_pick_artikel, height=5,
+        )
+        self.vk_artikel_search.pack(fill="x", pady=(2, 4))
 
-        pcols = ("pzn", "artikel", "df", "pck", "apu", "menge", "rabatt", "charge", "verfall")
-        pheads = {"pzn": "PZN", "artikel": "Artikel", "df": "DF", "pck": "PCK", "apu": "APU",
-                  "menge": "Menge", "rabatt": "Rabatt %", "charge": "Charge", "verfall": "Verfall"}
+        line = tk.Frame(addf, bg=BG)
+        line.pack(fill="x", pady=(2, 0))
+        self.vk_detail_label = tk.Label(line, text="—", bg=BG, fg="#444",
+                                        font=("Arial", 9), anchor="w")
+        self.vk_detail_label.pack(side="left", fill="x", expand=True)
+
+        line2 = tk.Frame(addf, bg=BG)
+        line2.pack(fill="x", pady=(6, 0))
+        tk.Label(line2, text="Charge/Bestand:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        self.vk_charge_var = tk.StringVar()
+        self.vk_charge_cmb = ttk.Combobox(line2, textvariable=self.vk_charge_var,
+                                          width=34, state="readonly")
+        self.vk_charge_cmb.pack(side="left", padx=(4, 12))
+        tk.Label(line2, text="Rabatt %:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        self.vk_rabatt_var = tk.StringVar()
+        tk.Entry(line2, textvariable=self.vk_rabatt_var, width=7).pack(side="left", padx=(4, 12))
+        tk.Label(line2, text="Menge:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        self.vk_menge_var = tk.StringVar(value="1")
+        tk.Entry(line2, textvariable=self.vk_menge_var, width=6).pack(side="left", padx=(4, 12))
+        tk.Button(line2, text="+ Position", command=self._vk_add_position,
+                  bg="#11823b", fg="white", font=("Arial", 9, "bold"),
+                  padx=10, pady=2).pack(side="left")
+
+        # Positionsliste
+        pos = tk.LabelFrame(parent, text="Positionen", bg=BG, fg=ACCENT,
+                            font=("Arial", 10, "bold"), padx=12, pady=8)
+        pos.pack(fill="both", expand=True, padx=8, pady=(0, 6))
+        pcols = ("pzn", "artikel", "df", "pck", "apu", "menge", "rabatt", "quelle", "charge", "verfall")
+        ph = {"pzn": "PZN", "artikel": "Artikel", "df": "DF", "pck": "PCK", "apu": "APU",
+              "menge": "Menge", "rabatt": "Rab%", "quelle": "Quelle", "charge": "Charge", "verfall": "Verfall"}
         tf = tk.Frame(pos, bg=BG)
         tf.pack(fill="both", expand=True)
-        tree = ttk.Treeview(tf, columns=pcols, show="headings", height=7)
+        tree = ttk.Treeview(tf, columns=pcols, show="headings", height=6)
         for c in pcols:
-            tree.heading(c, text=pheads[c])
-            tree.column(c, width=200 if c == "artikel" else 64, anchor="w")
+            tree.heading(c, text=ph[c])
+            tree.column(c, width=190 if c == "artikel" else 58, anchor="w")
         tree.pack(side="left", fill="both", expand=True)
         sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
         sb.pack(side="right", fill="y")
         tree.configure(yscrollcommand=sb.set)
+        tree.bind("<Delete>", self._vk_remove_position)
         self.vk_pos_tree = tree
 
         afoot = tk.Frame(parent, bg=BG)
         afoot.pack(fill="x", padx=8, pady=(0, 8))
-        tk.Button(afoot, text="Verkauf speichern", command=self._verkauf_todo,
+        tk.Label(afoot, text="Entf = markierte Position löschen", bg=BG, fg="#999",
+                 font=("Arial", 8)).pack(side="left")
+        tk.Button(afoot, text="Verkauf speichern", command=self._vk_save,
                   bg=ACCENT, fg="white", font=("Arial", 10, "bold"),
                   padx=14, pady=4).pack(side="right")
 
-    def _verkauf_todo(self):
-        messagebox.showinfo(
-            "Kasse",
-            "Verkauf speichern folgt (globale Kundensuche, NMG-Artikelsuche mit "
-            "Bestand/Charge, Rabatt-Kaskade). Aktuell Geruest.",
-            parent=self.winfo_toplevel(),
-        )
+    def _vk_pick_kunde(self, payload):
+        knr, name = payload
+        self.vk_kunde = (knr, name)
+        self.vk_kunde_label.config(
+            text=f"Gewählt: {name}  ({knr or 'ohne Nr.'})", fg=ACCENT)
 
-    # ------------------------------------------------------------ Wareneingang
+    def _vk_pick_artikel(self, pzn):
+        det = self._artikel_details(pzn)
+        if not det:
+            return
+        knr = self.vk_kunde[0] if self.vk_kunde else None
+        prozent, quelle = self._resolve_rabatt(knr, pzn)
+        det["rabatt"] = prozent
+        det["rabatt_quelle"] = quelle
+        self.vk_cur = det
+        self.vk_detail_label.config(
+            text=f"{det['artikelname']}  ·  DF {det['df'] or '—'}  ·  PCK {det['pck'] or '—'}  "
+                 f"·  APU {det['apu'] if det['apu'] is not None else '—'}")
+        self.vk_rabatt_var.set(f"{prozent:.0f}")
+        # Chargen/Bestand
+        chargen = self._lager_chargen(pzn)
+        self._vk_charge_map = [("", "")]
+        labels = ["(ohne Charge / kein Bestand)"]
+        for charge, verfall, menge in chargen:
+            labels.append(f"{charge or '—'}  ·  Verf {verfall or '—'}  ·  Bestand {menge}")
+            self._vk_charge_map.append((charge or "", verfall or ""))
+        self.vk_charge_cmb.config(values=labels)
+        self.vk_charge_cmb.current(1 if chargen else 0)
+        self.vk_menge_var.set("1")
+
+    def _vk_add_position(self, *_):
+        if not self.vk_cur:
+            messagebox.showwarning("Verkauf", "Bitte zuerst einen Artikel wählen.",
+                                   parent=self.winfo_toplevel())
+            return
+        try:
+            menge = int(self.vk_menge_var.get().strip())
+            if menge <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showwarning("Verkauf", "Menge muss eine positive Zahl sein.",
+                                   parent=self.winfo_toplevel())
+            return
+        try:
+            rabatt = float(str(self.vk_rabatt_var.get()).replace(",", ".") or 0)
+        except ValueError:
+            rabatt = 0.0
+        idx = self.vk_charge_cmb.current()
+        charge, verfall = self._vk_charge_map[idx] if 0 <= idx < len(self._vk_charge_map) else ("", "")
+        p = {
+            "pzn": self.vk_cur["pzn"], "artikelname": self.vk_cur["artikelname"],
+            "df": self.vk_cur["df"], "pck": self.vk_cur["pck"], "apu": self.vk_cur["apu"],
+            "menge": menge, "rabatt": rabatt, "rabatt_quelle": self.vk_cur["rabatt_quelle"],
+            "charge": charge, "verfall": verfall,
+        }
+        self.vk_positions.append(p)
+        self.vk_pos_tree.insert(
+            "", "end",
+            values=(p["pzn"], p["artikelname"], p["df"], p["pck"],
+                    p["apu"] if p["apu"] is not None else "", p["menge"],
+                    f"{rabatt:.0f}", p["rabatt_quelle"], p["charge"], p["verfall"]))
+        # Eingabe zuruecksetzen
+        self.vk_cur = None
+        self.vk_artikel_search.clear()
+        self.vk_detail_label.config(text="—")
+        self.vk_charge_cmb.config(values=[])
+        self.vk_charge_var.set("")
+        self.vk_rabatt_var.set("")
+        self.vk_menge_var.set("1")
+
+    def _vk_remove_position(self, _e):
+        sel = self.vk_pos_tree.selection()
+        if not sel:
+            return
+        for item in sel:
+            idx = self.vk_pos_tree.index(item)
+            self.vk_pos_tree.delete(item)
+            if 0 <= idx < len(self.vk_positions):
+                del self.vk_positions[idx]
+
+    def _vk_save(self):
+        top = self.winfo_toplevel()
+        if not self.vk_kunde:
+            messagebox.showwarning("Verkauf", "Bitte einen Kunden wählen.", parent=top)
+            return
+        if not self.vk_positions:
+            messagebox.showwarning("Verkauf", "Keine Positionen erfasst.", parent=top)
+            return
+        lieferzeit = self.vk_lieferzeit_var.get()
+        header = {
+            "datum": datetime.now().strftime("%Y-%m-%d"),
+            "kundennummer": self.vk_kunde[0], "apotheke": self.vk_kunde[1],
+            "bestellart": self.vk_art_var.get(), "lieferzeit": lieferzeit,
+            "liefertermin": self.vk_termin_var.get().strip(),
+        }
+        bid = self._save_verkauf(header, self.vk_positions)
+        anzahl = len(self.vk_positions)
+        # Reset
+        self.vk_positions = []
+        self.vk_pos_tree.delete(*self.vk_pos_tree.get_children())
+        self.vk_kunde = None
+        self.vk_kunde_search.clear()
+        self.vk_kunde_label.config(text="Kein Kunde gewählt.", fg="#999")
+        self._refresh_lager()
+        messagebox.showinfo("Verkauf",
+                            f"Verkauf #{bid} gespeichert ({anzahl} Position(en)). "
+                            f"Lagerbestand wurde abgebucht.", parent=top)
+
+    # ============================================================ Wareneingang
     def _build_wareneingang(self, parent):
-        form = tk.LabelFrame(parent, text="Artikel ins Lager buchen", bg=BG, fg=ACCENT,
-                             font=("Arial", 10, "bold"), padx=12, pady=10)
-        form.pack(fill="x", padx=8, pady=(10, 8))
+        form = tk.LabelFrame(parent, text="Artikel ins Lager buchen (nur NMG)", bg=BG,
+                             fg=ACCENT, font=("Arial", 10, "bold"), padx=12, pady=8)
+        form.pack(fill="x", padx=8, pady=(10, 6))
+
+        tk.Label(form, text="Artikel suchen:", bg=BG, font=("Arial", 9, "bold")).pack(anchor="w")
+        self.we_search = SearchBox(
+            form,
+            fetch=lambda t: [(f"{pzn}  ·  {name}", (pzn, name)) for pzn, name in self._search_nmg(t)],
+            on_select=self._we_pick_artikel, height=5,
+        )
+        self.we_search.pack(fill="x", pady=(2, 4))
+        self.we_artikel_label = tk.Label(form, text="Kein Artikel gewählt.", bg=BG,
+                                         fg="#999", font=("Arial", 9, "italic"))
+        self.we_artikel_label.pack(anchor="w")
 
         row = tk.Frame(form, bg=BG)
-        row.pack(fill="x")
-        self.we_pzn_var = tk.StringVar()
+        row.pack(fill="x", pady=(6, 0))
         self.we_charge_var = tk.StringVar()
         self.we_verfall_var = tk.StringVar()
         self.we_menge_var = tk.StringVar()
-        for label, var, w in (("PZN", self.we_pzn_var, 12), ("Charge", self.we_charge_var, 12),
-                              ("Verfall", self.we_verfall_var, 10), ("Menge", self.we_menge_var, 6)):
-            tk.Label(row, text=label + ":", bg=BG, font=("Arial", 10, "bold")).pack(side="left", padx=(0, 4))
+        self.we_ek_var = tk.StringVar()
+        for label, var, w in (("Charge", self.we_charge_var, 12), ("Verfall", self.we_verfall_var, 10),
+                              ("Menge", self.we_menge_var, 6), ("EK €", self.we_ek_var, 8)):
+            tk.Label(row, text=label + ":", bg=BG, font=("Arial", 9, "bold")).pack(side="left", padx=(0, 4))
             tk.Entry(row, textvariable=var, width=w).pack(side="left", padx=(0, 12))
         tk.Button(row, text="Einbuchen", command=self._wareneingang_buchen,
                   bg=ACCENT, fg="white", font=("Arial", 10, "bold"),
                   padx=12, pady=3).pack(side="left")
-        tk.Label(form, text="Nur NMG-Artikel (PZN aus tbl_nmg_stamm). Verfall frei als Text.",
-                 bg=BG, fg="#999", font=("Arial", 8)).pack(anchor="w", pady=(6, 0))
 
-        lager = tk.LabelFrame(parent, text="Lagerbestand", bg=BG, fg=ACCENT,
-                              font=("Arial", 10, "bold"), padx=12, pady=10)
+        lager = tk.LabelFrame(parent, text="Lagerbestand  (Doppelklick = Bestand korrigieren)",
+                              bg=BG, fg=ACCENT, font=("Arial", 10, "bold"), padx=12, pady=8)
         lager.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         lcols = ("pzn", "artikel", "charge", "verfall", "menge")
-        lheads = {"pzn": "PZN", "artikel": "Artikel", "charge": "Charge",
-                  "verfall": "Verfall", "menge": "Bestand"}
+        lh = {"pzn": "PZN", "artikel": "Artikel", "charge": "Charge",
+              "verfall": "Verfall", "menge": "Bestand"}
         tf = tk.Frame(lager, bg=BG)
         tf.pack(fill="both", expand=True)
         tree = ttk.Treeview(tf, columns=lcols, show="headings", height=10)
         for c in lcols:
-            tree.heading(c, text=lheads[c])
+            tree.heading(c, text=lh[c])
             tree.column(c, width=240 if c == "artikel" else 90, anchor="w")
         tree.pack(side="left", fill="both", expand=True)
         sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
         sb.pack(side="right", fill="y")
         tree.configure(yscrollcommand=sb.set)
+        tree.bind("<Double-1>", self._lager_korrektur)
         self.we_lager_tree = tree
         self._refresh_lager()
 
+    def _we_pick_artikel(self, payload):
+        pzn, name = payload
+        self.we_pzn = pzn
+        self.we_artikel_label.config(text=f"Gewählt: {pzn} · {name}", fg=ACCENT)
+
     def _refresh_lager(self):
         self.we_lager_tree.delete(*self.we_lager_tree.get_children())
-        with sqlite3.connect(self.db_path) as con:
+        with self._conn() as con:
             rows = con.execute(
                 "SELECT pzn, artikelname, charge, verfall, menge FROM tbl_lagerbestand "
                 "WHERE menge <> 0 ORDER BY artikelname, verfall"
             ).fetchall()
         for r in rows:
-            self.we_lager_tree.insert("", "end", values=tuple("" if v is None else v for v in r))
+            self.we_lager_tree.insert("", "end", iid=None,
+                                      values=tuple("" if v is None else v for v in r))
 
     def _wareneingang_buchen(self):
-        pzn = self.we_pzn_var.get().strip()
+        top = self.winfo_toplevel()
+        pzn = self.we_pzn
+        if not pzn:
+            messagebox.showwarning("Wareneingang", "Bitte zuerst einen NMG-Artikel wählen.", parent=top)
+            return
         charge = self.we_charge_var.get().strip()
         verfall = self.we_verfall_var.get().strip()
-        menge_raw = self.we_menge_var.get().strip()
-        top = self.winfo_toplevel()
-        if not pzn:
-            messagebox.showwarning("Wareneingang", "Bitte eine PZN eingeben.", parent=top)
-            return
         try:
-            menge = int(menge_raw)
+            menge = int(self.we_menge_var.get().strip())
             if menge <= 0:
                 raise ValueError
         except ValueError:
             messagebox.showwarning("Wareneingang", "Menge muss eine positive Zahl sein.", parent=top)
             return
+        ek = None
+        if self.we_ek_var.get().strip():
+            try:
+                ek = float(self.we_ek_var.get().strip().replace(",", "."))
+            except ValueError:
+                ek = None
 
-        with sqlite3.connect(self.db_path) as con:
+        with self._conn() as con:
             row = con.execute(
-                "SELECT artikelname FROM tbl_nmg_stamm WHERE pzn = ? LIMIT 1", (pzn,)
+                "SELECT artikelname FROM tbl_nmg_stamm WHERE pzn=? LIMIT 1", (pzn,)
             ).fetchone()
             if not row:
-                messagebox.showwarning(
-                    "Wareneingang",
-                    f"PZN {pzn} ist kein NMG-Artikel (nicht in tbl_nmg_stamm).",
-                    parent=top,
-                )
+                messagebox.showwarning("Wareneingang",
+                                       f"PZN {pzn} ist kein NMG-Artikel.", parent=top)
                 return
             artikelname = row[0]
             jetzt = datetime.now().isoformat(timespec="seconds")
-            bearbeiter = getpass.getuser()
-            # Wareneingang-Beleg + Position (Historie)
             cur = con.execute(
                 "INSERT INTO tbl_wareneingang(datum, lieferant, bearbeiter) VALUES(?,?,?)",
-                (jetzt, "NMG", bearbeiter),
-            )
+                (jetzt, "NMG", getpass.getuser()))
             we_id = cur.lastrowid
             con.execute(
-                "INSERT INTO tbl_wareneingang_positionen(we_id, pzn, artikelname, charge, verfall, menge) "
-                "VALUES(?,?,?,?,?,?)",
-                (we_id, pzn, artikelname, charge, verfall, menge),
-            )
-            # Lagerbestand hochbuchen (Upsert pro pzn/charge/verfall)
+                "INSERT INTO tbl_wareneingang_positionen(we_id,pzn,artikelname,charge,verfall,menge,ek) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (we_id, pzn, artikelname, charge, verfall, menge, ek))
             upd = con.execute(
                 "UPDATE tbl_lagerbestand SET menge = menge + ?, aktualisiert_am = ? "
-                "WHERE pzn = ? AND COALESCE(charge,'') = ? AND COALESCE(verfall,'') = ?",
-                (menge, jetzt, pzn, charge, verfall),
-            )
+                "WHERE pzn=? AND COALESCE(charge,'')=? AND COALESCE(verfall,'')=?",
+                (menge, jetzt, pzn, charge, verfall))
             if upd.rowcount == 0:
                 con.execute(
-                    "INSERT INTO tbl_lagerbestand(pzn, artikelname, charge, verfall, menge, aktualisiert_am) "
+                    "INSERT INTO tbl_lagerbestand(pzn,artikelname,charge,verfall,menge,aktualisiert_am) "
                     "VALUES(?,?,?,?,?,?)",
-                    (pzn, artikelname, charge, verfall, menge, jetzt),
-                )
+                    (pzn, artikelname, charge, verfall, menge, jetzt))
             con.commit()
 
-        for var in (self.we_pzn_var, self.we_charge_var, self.we_verfall_var, self.we_menge_var):
+        self.we_pzn = None
+        self.we_search.clear()
+        self.we_artikel_label.config(text="Kein Artikel gewählt.", fg="#999")
+        for var in (self.we_charge_var, self.we_verfall_var, self.we_menge_var, self.we_ek_var):
             var.set("")
+        self._refresh_lager()
+
+    def _lager_korrektur(self, _e):
+        top = self.winfo_toplevel()
+        sel = self.we_lager_tree.selection()
+        if not sel:
+            return
+        vals = self.we_lager_tree.item(sel[0], "values")
+        pzn, _art, charge, verfall, menge = vals
+        neu = simpledialog.askinteger(
+            "Bestand korrigieren",
+            f"Neuer Bestand für\nPZN {pzn} · Charge {charge or '—'} · Verf {verfall or '—'}\n"
+            f"(0 entfernt die Zeile):",
+            parent=top, initialvalue=int(menge), minvalue=0)
+        if neu is None:
+            return
+        with self._conn() as con:
+            if neu == 0:
+                con.execute(
+                    "DELETE FROM tbl_lagerbestand WHERE pzn=? AND COALESCE(charge,'')=? "
+                    "AND COALESCE(verfall,'')=?", (pzn, charge, verfall))
+            else:
+                con.execute(
+                    "UPDATE tbl_lagerbestand SET menge=?, aktualisiert_am=? WHERE pzn=? "
+                    "AND COALESCE(charge,'')=? AND COALESCE(verfall,'')=?",
+                    (neu, datetime.now().isoformat(timespec="seconds"), pzn, charge, verfall))
+            con.commit()
         self._refresh_lager()
