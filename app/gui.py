@@ -1479,7 +1479,8 @@ class NMGApp(tk.Tk):
             "globale_suche": self.open_globale_suche_window,
             "mitarbeiter_center": self.show_mitarbeiter_center,
             "todo_center": self.show_todo_center,
-            "bestell_center": self.open_bestell_app,
+            "kasse": self.open_kasse_app,
+            "bestell_center": self.open_kasse_app,
             "report": self.show_report_page,
             "roadmap": self.show_roadmap_page,
             "datenbankpfad": self.show_datenbankpfad_page,
@@ -4191,7 +4192,7 @@ LIMIT 500
             ("gespeicherte",     "📁", "Ges. Analysen",        "Vorhandene Analysen öffnen.",               self.open_saved_analyses,                    "#3867b7"),
             ("schulbank",        "🎓", "Schulbank",            "Lernvorschläge bearbeiten.",                lambda: self.show_schulbank_page("Schulbank"),"#11823b"),
             ("kunden",           "👥", "Kunden",               "Kundenstamm und -history.",                 self.show_kunden_center,                     "#0b4a86"),
-            ("bestellung",       "🛒", "Bestellung",           "NMG-Artikel pro Apotheke bestellen.",       self.open_bestell_app,                       "#8b5a00"),
+            ("kasse",            "🛒", "Kasse",                "Verkauf an Apotheken + Wareneingang.",      self.open_kasse_app,                         "#8b5a00"),
             ("todo",             "✅", "ToDo",                 "Aufgaben und offene Punkte.",               self.show_todo_center,                        "#11823b"),
             ("mitarbeiter",      "👥", "Mitarbeiter",          "Zuständigkeiten und Datenpfade.",           self.show_mitarbeiter_center,                "#6b4fb3"),
             ("produktanalyse",   "📈", "Produktanalyse",       "Produktchancen erstellen.",                 self.market_opportunities,                   "#11823b"),
@@ -6600,7 +6601,7 @@ LIMIT 500
             ("\U0001f465", "Kunden", "Kundenstamm, Analysen, E-Mail-Versand.", self.show_kunden_center, "#0b4a86"),
             ("\U0001f464", "Mitarbeiter", "Mitarbeiterdaten, Profile, Vertretungen.", self.show_mitarbeiter_center, "#6b4fb3"),
             ("\u2705", "ToDo", "Aufgaben, offene Punkte und Notizen.", self.show_todo_center, "#11823b"),
-            ("\U0001f6d2", "Bestellungen", "NMG-Artikel pro Apotheke bestellen.", self.open_bestell_app, "#8b5a00"),
+            ("\U0001f6d2", "Kasse", "Verkauf an Apotheken + Wareneingang.", self.open_kasse_app, "#8b5a00"),
             ("\U0001f50d", _T("Vergleichs-Suche"), _T("PZN oder Artikelname schnell in allen Wissens-Tabellen finden."), self.open_vergleichssuche_window, "#0b6e6e"),
             # V1.1 SP9: Globale Suche als App-Kachel.
             ("\U0001f50d", "Globale Suche", "Kunden, Analysen und Artikel uebergreifend finden.", self.open_globale_suche_window, "#0b4a86"),
@@ -7122,13 +7123,13 @@ LIMIT 500
 
         self.status.set("Kunden-Center bereit.")
 
-    def open_bestell_app(self):
-        """Bestell-App als eigenes Toplevel-Fenster mit eigenem Taskleisten-Icon.
-        UI liegt in app/bestell_app.py (BestellPanel) - dieselbe Klasse nutzt die
-        eigenstaendige Bestell-.exe (start_bestell.py).
+    def open_kasse_app(self):
+        """Kasse-App (Verkauf + Wareneingang) als eigenes Toplevel-Fenster mit
+        eigenem Taskleisten-Icon. UI liegt in app/kasse_app.py (KassePanel) -
+        dieselbe Klasse nutzt die eigenstaendige Kasse-.exe (start_kasse.py).
         Singleton: zweiter Aufruf bringt das vorhandene Fenster nach vorn.
         """
-        existing = getattr(self, "_bestell_app_window", None)
+        existing = getattr(self, "_kasse_app_window", None)
         if existing is not None:
             try:
                 if existing.winfo_exists():
@@ -7139,35 +7140,27 @@ LIMIT 500
             except Exception:
                 pass
 
-        from .bestell_app import BestellPanel
+        from .kasse_app import KassePanel
 
         win = tk.Toplevel(self)
-        win.title("NMG Bestellung")
-        win.geometry("900x600")
-        win.minsize(760, 520)
+        win.title("NMG Kasse")
+        win.geometry("980x640")
+        win.minsize(820, 560)
         win.configure(bg="#ffffff")
         try:
-            win.iconbitmap(str(ASSETS_DIR / "bestell.ico"))
+            win.iconbitmap(str(ASSETS_DIR / "kasse.ico"))
         except Exception:
             pass
-        self._bestell_app_window = win
+        self._kasse_app_window = win
 
         def on_close():
-            self._bestell_app_window = None
+            self._kasse_app_window = None
             win.destroy()
         win.protocol("WM_DELETE_WINDOW", on_close)
 
-        BestellPanel(win, on_close=on_close).pack(fill="both", expand=True)
+        KassePanel(win, on_close=on_close).pack(fill="both", expand=True)
         win.lift()
         win.focus_force()
-
-    def show_bestell_center(self):
-        cols = ("id", "datum", "kundennummer", "kunde", "bestellnummer", "status", "quelle")
-        heads = {"id":"ID", "datum":"Datum", "kundennummer":"Kundennummer", "kunde":"Kunde", "bestellnummer":"Bestellnummer", "status":"Status", "quelle":"Quelle"}
-        fields = [("datum","Datum","entry"),("kundennummer","Kundennummer","entry"),("kunde","Kunde","entry"),("bestellnummer","Bestellnummer","entry"),("status","Status","entry"),("quelle","Quelle","entry"),("notizen","Notizen","text")]
-        insert = """INSERT INTO tbl_bestellungen_center(datum,kundennummer,kunde,bestellnummer,status,quelle,notizen,bearbeiter) VALUES (:datum,:kundennummer,:kunde,:bestellnummer,:status,:quelle,:notizen,:bearbeiter)"""
-        update = """UPDATE tbl_bestellungen_center SET datum=:datum,kundennummer=:kundennummer,kunde=:kunde,bestellnummer=:bestellnummer,status=:status,quelle=:quelle,notizen=:notizen,geaendert_am=CURRENT_TIMESTAMP,bearbeiter=:bearbeiter WHERE id=:id"""
-        self._show_center_table("Bestell-Center", "Vorbereitung für spätere Bestellhistorien und Auswertungen.", "tbl_bestellungen_center", cols, heads, fields, insert, update)
 
     def show_todo_center(self):
         cols = ("id", "titel", "bereich", "verantwortlich", "faellig_am", "status", "prioritaet")

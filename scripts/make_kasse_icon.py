@@ -1,15 +1,15 @@
-"""Erzeugt assets/bestell.ico (Einkaufswagen auf NMG-Blau) ohne Fremdbibliotheken.
+"""Erzeugt assets/kasse.ico (Einkaufswagen auf NMG-Blau) ohne Fremdbibliotheken.
 
 Reines Python: zeichnet je ein BGRA-Bitmap pro Groesse und packt sie als
 32-bpp-ICO. Wiederverwendbar - bei Designaenderung einfach neu ausfuehren:
-    python scripts/make_bestell_icon.py
+    python scripts/make_kasse_icon.py
 """
 from __future__ import annotations
 
 import struct
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parent.parent / "assets" / "bestell.ico"
+OUT = Path(__file__).resolve().parent.parent / "assets" / "kasse.ico"
 
 BLUE = (0x86, 0x4a, 0x0b, 255)   # #0b4a86 als BGRA
 WHITE = (255, 255, 255, 255)
@@ -107,14 +107,12 @@ def draw_cart(size):
 
 def ico_image(c: Canvas) -> bytes:
     s = c.s
-    # BITMAPINFOHEADER: Hoehe = 2*s (Farbe + Maske)
     hdr = struct.pack("<IiiHHIIiiII", 40, s, s * 2, 1, 32, 0, 0, 0, 0, 0, 0)
     xor = bytearray()
     for y in range(s - 1, -1, -1):       # bottom-up
         for x in range(s):
             b, g, r, a = c.px[y][x]
             xor += bytes((b, g, r, a))
-    # AND-Maske (1bpp, alle 0 -> Alpha steuert Transparenz), Zeilen auf 32bit
     row_bytes = ((s + 31) // 32) * 4
     andmask = bytes(row_bytes * s)
     return hdr + bytes(xor) + andmask

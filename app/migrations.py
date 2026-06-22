@@ -125,14 +125,57 @@ def run_migrations(db_path: Path = DB_PATH) -> list[str]:
                 menge INTEGER DEFAULT 1,
                 rabatt_prozent REAL,
                 rabatt_quelle TEXT,
+                charge TEXT,
+                verfall TEXT,
                 FOREIGN KEY(bestell_id) REFERENCES tbl_bestellungen(id) ON DELETE CASCADE
             )"""
         )
+        # Charge/Verfall sind vorbereitet (Auswahl der konkreten Charge bei
+        # mehreren Bestaenden folgt, sobald eine Lagerbestand-Quelle existiert).
+        # ALTER-Guard fuer DBs, die die Tabelle schon ohne diese Spalten haben.
+        if _table_exists(con, "tbl_bestellpositionen"):
+            pcols = _columns(con, "tbl_bestellpositionen")
+            if "charge" not in pcols:
+                con.execute("ALTER TABLE tbl_bestellpositionen ADD COLUMN charge TEXT")
+            if "verfall" not in pcols:
+                con.execute("ALTER TABLE tbl_bestellpositionen ADD COLUMN verfall TEXT")
         con.execute("CREATE INDEX IF NOT EXISTS idx_bestellungen_datum ON tbl_bestellungen(datum)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_bestellungen_kundennummer ON tbl_bestellungen(kundennummer)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_bestellpositionen_bestell ON tbl_bestellpositionen(bestell_id)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_bestellpositionen_pzn ON tbl_bestellpositionen(pzn)")
         actions.append("tbl_bestellungen + tbl_bestellpositionen sichergestellt")
+
+        # Kasse-App: Wareneingang -> Lagerbestand. Wareneingang bucht NMG-Artikel
+        # mit Charge/Verfall/Menge ins Lager; der Verkauf (tbl_bestellungen) zieht
+        # spaeter daraus ab. Lagerbestand: eine Zeile pro PZN x Charge x Verfall.
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_wareneingang(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                datum TEXT, lieferant TEXT, lieferschein TEXT,
+                bearbeiter TEXT, notizen TEXT,
+                erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_wareneingang_positionen(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                we_id INTEGER NOT NULL,
+                pzn TEXT, artikelname TEXT, charge TEXT, verfall TEXT,
+                menge INTEGER DEFAULT 0, ek REAL,
+                FOREIGN KEY(we_id) REFERENCES tbl_wareneingang(id) ON DELETE CASCADE
+            )"""
+        )
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_lagerbestand(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pzn TEXT, artikelname TEXT, charge TEXT, verfall TEXT,
+                menge INTEGER DEFAULT 0, aktualisiert_am TEXT,
+                UNIQUE(pzn, charge, verfall)
+            )"""
+        )
+        con.execute("CREATE INDEX IF NOT EXISTS idx_wareneingang_pos_we ON tbl_wareneingang_positionen(we_id)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_lagerbestand_pzn ON tbl_lagerbestand(pzn)")
+        actions.append("tbl_wareneingang(_positionen) + tbl_lagerbestand sichergestellt")
 
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('db_schema_version', ?)", (DB_SCHEMA_VERSION,))
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('last_migration_at', ?)", (datetime.now().isoformat(timespec='seconds'),))

@@ -1,8 +1,8 @@
-"""Eigenstaendiger Start der NMG Bestell-App.
+"""Eigenstaendiger Start der NMG Kasse-App (Verkauf + Wareneingang).
 
-Laeuft als eigener Prozess mit eigenem Taskleisten-Icon, teilt sich aber die
-Datenbank mit NMGone (siehe app/config.py -> ProgramData/NMGone). Wird als
-zweite .exe gepackt (NMGone_Bestellung) und bekommt eine eigene Verknuepfung.
+Eigener Prozess mit eigenem Taskleisten-Icon, teilt sich die Datenbank mit
+NMGone (app/config.py -> ProgramData/NMGone). Wird als zweite .exe gepackt
+(NMGone_Kasse) und bekommt eine eigene Verknuepfung.
 """
 import os
 import sys
@@ -17,15 +17,14 @@ def main():
     if os.name == "nt":
         try:
             import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("NMG.Bestellung")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("NMG.Kasse")
         except Exception:
             pass
 
     import tkinter as tk
     from app.config import ASSETS_DIR
-    from app.bestell_app import BestellPanel
+    from app.kasse_app import KassePanel
 
-    # Schema sicherstellen (DB wird beim Import von app.config angelegt/geseedet).
     try:
         from app.migrations import run_migrations
         run_migrations()
@@ -33,16 +32,16 @@ def main():
         pass
 
     root = tk.Tk()
-    root.title("NMG Bestellung")
-    root.geometry("900x600")
-    root.minsize(760, 520)
+    root.title("NMG Kasse")
+    root.geometry("980x640")
+    root.minsize(820, 560)
     root.configure(bg="#ffffff")
     try:
-        root.iconbitmap(str(ASSETS_DIR / "bestell.ico"))
+        root.iconbitmap(str(ASSETS_DIR / "kasse.ico"))
     except Exception:
         pass
 
-    BestellPanel(root, on_close=root.destroy).pack(fill="both", expand=True)
+    KassePanel(root, on_close=root.destroy).pack(fill="both", expand=True)
     root.mainloop()
 
 
