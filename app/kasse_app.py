@@ -45,17 +45,22 @@ def _pos_netto(p):
 
 
 def _next_liefertermin(now=None):
-    """Liefertermin-Vorschlag: vor 15 Uhr -> naechster Werktag, ab 15 Uhr ->
-    uebernaechster Werktag. Wochenenden werden uebersprungen
-    (Fr vor 15 -> Mo, Fr ab 15 -> Di)."""
+    """Liefertermin-Vorschlag: vor 15 Uhr -> naechster Liefertag, ab 15 Uhr ->
+    uebernaechster. Sonntage werden uebersprungen. Samstag ist nur dann ein
+    Liefertag, wenn Freitag vor 15 Uhr gebucht wurde (-> Samstag); sonst zaehlt
+    nur Mo-Fr (Fr ab 15 -> Di)."""
     from datetime import datetime as _dt, timedelta
     now = now or _dt.now()
-    schritte = 1 if now.hour < 15 else 2
+    vor15 = now.hour < 15
+    # Sonderfall: Freitag vor 15 Uhr -> Samstag-Lieferung.
+    if now.weekday() == 4 and vor15:
+        return (now + timedelta(days=1)).strftime("%d.%m.%Y")
+    schritte = 1 if vor15 else 2
     d = now
     gezaehlt = 0
     while gezaehlt < schritte:
         d = d + timedelta(days=1)
-        if d.weekday() < 5:  # Mo-Fr
+        if d.weekday() < 5:  # Mo-Fr (Samstag nur im Sonderfall oben)
             gezaehlt += 1
     return d.strftime("%d.%m.%Y")
 
