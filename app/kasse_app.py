@@ -1153,8 +1153,8 @@ class KassePanel(tk.Frame):
         def uebernehmen():
             # In den Verkauf laden (NICHT direkt verkaufen) - Charge/Bestand wird
             # dort gewaehlt, weitere Artikel koennen mitverkauft werden.
-            self._vb_in_verkauf(pid, _menge(), lz_var.get(), termin_var.get().strip())
-            win.destroy()
+            if self._vb_in_verkauf(pid, _menge(), lz_var.get(), termin_var.get().strip()):
+                win.destroy()
 
         def stornieren():
             with self._conn() as con:
@@ -1175,7 +1175,8 @@ class KassePanel(tk.Frame):
 
     def _vb_in_verkauf(self, pid, menge, lieferzeit, termin):
         """Laedt eine Vorbestellung als Position in den Verkauf-Reiter. Das Original
-        wird erst beim Speichern des Verkaufs entfernt (_vb_source)."""
+        wird erst beim Speichern des Verkaufs entfernt (_vb_source).
+        Liefert True, wenn uebernommen; False bei Abbruch (z.B. anderer Kunde)."""
         with self._conn() as con:
             row = con.execute(
                 "SELECT p.pzn, p.artikelname, p.df, p.pck, p.apu, p.rabatt_prozent, p.rabatt_quelle, "
@@ -1183,8 +1184,18 @@ class KassePanel(tk.Frame):
                 "FROM tbl_bestellpositionen p JOIN tbl_bestellungen b ON b.id=p.bestell_id "
                 "WHERE p.id=?", (pid,)).fetchone()
         if not row:
-            return
+            return False
         pzn, artikel, df, pck, apu, rabatt, rquelle, knr, apotheke = row
+        # Konflikt: im Verkauf liegt schon ein ANDERER Kunde.
+        if (self.vk_kunde and self.vk_kunde.get("kundennummer") != knr) or \
+           (self.vk_positions and not self.vk_kunde):
+            messagebox.showwarning(
+                "Unterschiedlicher Kunde im Verkauf",
+                f"Im Verkauf liegt bereits ein anderer Kunde "
+                f"({(self.vk_kunde or {}).get('kundenname', 'unbekannt')}).\n\n"
+                "Bitte den laufenden Auftrag erst löschen oder abschließen und dann "
+                "die Vorbestellung holen.", parent=self.winfo_toplevel())
+            return False
         # Kunde setzen.
         det = self._kunde_details(knr)
         self.vk_kunde = {
@@ -1207,6 +1218,7 @@ class KassePanel(tk.Frame):
         messagebox.showinfo("Vorbestellung",
                             "In den Verkauf übernommen. Charge/Bestand wählen, ggf. weitere Artikel "
                             "hinzufügen, dann „Verkauf speichern“.", parent=self.winfo_toplevel())
+        return True
 
     # =============================================================== Verkaeufe
     def _build_verkaeufe(self, parent):
