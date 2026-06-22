@@ -50,9 +50,11 @@ def _load(db_path, bestell_id):
         keys = ("id", "datum", "kundennummer", "apotheke", "bestellart", "lieferzeit", "liefertermin")
         header = dict(zip(keys, h))
         positions = [
-            dict(zip(("pzn", "artikelname", "df", "pck", "apu", "menge", "rabatt", "charge", "verfall"), r))
+            dict(zip(("pzn", "artikelname", "df", "pck", "apu", "menge", "rabatt", "charge",
+                      "verfall", "bestellart", "lieferzeit", "liefertermin"), r))
             for r in con.execute(
-                "SELECT pzn, artikelname, df, pck, apu, menge, rabatt_prozent, charge, verfall "
+                "SELECT pzn, artikelname, df, pck, apu, menge, rabatt_prozent, charge, verfall, "
+                "COALESCE(bestellart,'Bestellung'), COALESCE(lieferzeit,''), COALESCE(liefertermin,'') "
                 "FROM tbl_bestellpositionen WHERE bestell_id=?", (bestell_id,))
         ]
         kunde = {}
@@ -86,11 +88,15 @@ def render(db_path=DB_PATH, bestell_id=None) -> Path:
         if apu is not None:
             summe = apu * (p["menge"] or 0) * (1 - rab / 100.0)
             gesamt += summe
+        liefer = " · ".join(x for x in [p.get("bestellart") or "", p.get("lieferzeit") or "",
+                                        p.get("liefertermin") or ""] if x)
         rows.append(
-            "<tr><td>{pos}</td><td>{pzn}</td><td>{art}</td><td class='r'>{menge}</td>"
-            "<td class='r'>{apu}</td><td class='r'>{rab}</td><td class='r'>{summe}</td></tr>".format(
+            "<tr><td>{pos}</td><td>{pzn}</td><td>{art}</td><td>{liefer}</td>"
+            "<td class='r'>{menge}</td><td class='r'>{apu}</td><td class='r'>{rab}</td>"
+            "<td class='r'>{summe}</td></tr>".format(
                 pos=i, pzn=_html.escape(str(p["pzn"] or "")),
                 art=_html.escape(str(p["artikelname"] or "")),
+                liefer=_html.escape(liefer),
                 menge=p["menge"] or 0,
                 apu=_eur(apu), rab=f"{rab:.0f}", summe=_eur(summe)))
 

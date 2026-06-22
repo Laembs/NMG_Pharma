@@ -75,12 +75,16 @@ def ensure_kasse_tables(db_path=DB_PATH):
                 pzn TEXT, artikelname TEXT, df TEXT, pck TEXT, apu REAL,
                 menge INTEGER DEFAULT 1, rabatt_prozent REAL, rabatt_quelle TEXT,
                 charge TEXT, verfall TEXT,
+                bestellart TEXT DEFAULT 'Bestellung', lieferzeit TEXT, liefertermin TEXT,
                 FOREIGN KEY(bestell_id) REFERENCES tbl_bestellungen(id) ON DELETE CASCADE
             )"""
         )
-        for col in ("charge", "verfall"):
-            if col not in {r[1] for r in con.execute("PRAGMA table_info(tbl_bestellpositionen)")}:
-                con.execute(f"ALTER TABLE tbl_bestellpositionen ADD COLUMN {col} TEXT")
+        _have = {r[1] for r in con.execute("PRAGMA table_info(tbl_bestellpositionen)")}
+        for col, ddl in (("charge", "charge TEXT"), ("verfall", "verfall TEXT"),
+                         ("bestellart", "bestellart TEXT DEFAULT 'Bestellung'"),
+                         ("lieferzeit", "lieferzeit TEXT"), ("liefertermin", "liefertermin TEXT")):
+            if col not in _have:
+                con.execute(f"ALTER TABLE tbl_bestellpositionen ADD COLUMN {ddl}")
         con.execute(
             """CREATE TABLE IF NOT EXISTS tbl_wareneingang(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -283,14 +287,16 @@ class KassePanel(tk.Frame):
             for p in positions:
                 con.execute(
                     "INSERT INTO tbl_bestellpositionen(bestell_id,pzn,artikelname,df,pck,"
-                    "apu,menge,rabatt_prozent,rabatt_quelle,charge,verfall) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    "apu,menge,rabatt_prozent,rabatt_quelle,charge,verfall,"
+                    "bestellart,lieferzeit,liefertermin) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (bid, p["pzn"], p["artikelname"], p["df"], p["pck"], p["apu"],
-                     p["menge"], p["rabatt"], p["rabatt_quelle"], p["charge"], p["verfall"]),
+                     p["menge"], p["rabatt"], p["rabatt_quelle"], p["charge"], p["verfall"],
+                     p.get("bestellart", "Bestellung"), p.get("lieferzeit", ""), p.get("liefertermin", "")),
                 )
-                # Lager abbuchen, wenn eine konkrete Charge gewaehlt wurde (locker:
-                # nie unter 0, keine Sperre).
-                if p["charge"] or p["verfall"]:
+                # Lager NUR fuer echte Bestellungen abbuchen (Vorbestellung/abgesagt
+                # ziehen noch nichts ab). Locker: nie unter 0, keine Sperre.
+                if p.get("bestellart", "Bestellung") == "Bestellung" and (p["charge"] or p["verfall"]):
                     con.execute(
                         "UPDATE tbl_lagerbestand SET menge=MAX(0, menge - ?), aktualisiert_am=? "
                         "WHERE pzn=? AND COALESCE(charge,'')=? AND COALESCE(verfall,'')=?",
@@ -340,6 +346,7 @@ class KassePanel(tk.Frame):
         nav.grid(row=2, column=0, sticky="new", padx=8)
         self._nav_buttons = {}
         for key, text, icon in (("verkauf", "Verkauf", "🛒"),
+                                 ("vorbestellungen", "Vorbestellungen", "🕓"),
                                  ("wareneingang", "Wareneingang", "📦")):
             b = tk.Button(nav, text=f"  {icon}   {text}", anchor="w", relief="flat",
                           bg=BG, fg="#11304d", font=("Arial", 11), bd=0,
@@ -377,6 +384,7 @@ class KassePanel(tk.Frame):
 
         self._views = {}
         for key, builder in (("verkauf", self._build_verkauf),
+                             ("vorbestellungen", self._build_vorbestellungen),
                              ("wareneingang", self._build_wareneingang)):
             frame = tk.Frame(page, bg=BG)
             frame.grid(row=0, column=0, sticky="nsew")
@@ -388,7 +396,10 @@ class KassePanel(tk.Frame):
     def _show_view(self, key):
         self._views[key].tkraise()
         self._view_title.config(text={"verkauf": "Verkauf",
+                                      "vorbestellungen": "Vorbestellungen",
                                       "wareneingang": "Wareneingang"}.get(key, key))
+        if key == "vorbestellungen":
+            self._refresh_vorbestellungen()
         for k, b in self._nav_buttons.items():
             if k == key:
                 b.config(bg=NAV_SEL, fg=ACCENT, font=("Arial", 11, "bold"))
@@ -418,41 +429,31 @@ class KassePanel(tk.Frame):
 
     # ================================================================= Verkauf
     def _build_verkauf(self, parent):
-        kopf = tk.LabelFrame(parent, text="Kunde & Lieferung", bg=BG, fg=ACCENT,
+        kopf = tk.LabelFrame(parent, text="Kunde", bg=BG, fg=ACCENT,
                              font=("Arial", 10, "bold"), padx=12, pady=8)
         kopf.pack(fill="x", padx=8, pady=(10, 6))
 
-        krow = tk.Frame(kopf, bg=BG)
-        krow.pack(fill="x")
-        khead = tk.Frame(krow, bg=BG)
+        khead = tk.Frame(kopf, bg=BG)
         khead.pack(fill="x")
         tk.Label(khead, text="Kunde suchen:", bg=BG, font=("Arial", 10, "bold")).pack(side="left")
         tk.Button(khead, text="📥 Kundenliste importieren", command=self._import_kunden,
                   font=("Arial", 8), padx=6, pady=1).pack(side="right")
         self.vk_kunde_search = SearchBox(
-            krow,
-            fetch=lambda t: [(f"{knr or '—'}  ·  {name}  ·  {plz} {ort}", (knr, name))
+            kopf,
+            fetch=lambda t: [(f"{knr or '—'}  ·  {name}  ·  {plz} {ort}", (knr, name, plz, ort))
                              for knr, name, plz, ort in self._search_kunden(t)],
             on_select=self._vk_pick_kunde, height=5,
         )
-        self.vk_kunde_search.pack(fill="x", pady=(2, 4))
-        self.vk_kunde_label = tk.Label(kopf, text="Kein Kunde gewählt.", bg=BG,
-                                       fg="#999", font=("Arial", 9, "italic"))
-        self.vk_kunde_label.pack(anchor="w")
+        self.vk_kunde_search.pack(fill="x", pady=(2, 6))
 
-        opt = tk.Frame(kopf, bg=BG)
-        opt.pack(fill="x", pady=(6, 0))
-        tk.Label(opt, text="Bestellart:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
-        self.vk_art_var = tk.StringVar(value="Bestellung")
-        ttk.Combobox(opt, textvariable=self.vk_art_var, width=13, state="readonly",
-                     values=("Bestellung", "Vorbestellung", "abgesagt")).pack(side="left", padx=(4, 14))
-        tk.Label(opt, text="Liefern:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
-        self.vk_lieferzeit_var = tk.StringVar(value="10 Uhr")
-        ttk.Combobox(opt, textvariable=self.vk_lieferzeit_var, width=8,
-                     values=("10 Uhr", "12 Uhr", "Frei")).pack(side="left", padx=(4, 14))
-        tk.Label(opt, text="Termin:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
-        self.vk_termin_var = tk.StringVar()
-        tk.Entry(opt, textvariable=self.vk_termin_var, width=12).pack(side="left", padx=(4, 0))
+        # Kundenkarte: alle relevanten Daten, sobald ein Kunde gewaehlt ist.
+        self.vk_kunde_card = tk.Frame(kopf, bg="#f2f6fb", highlightbackground="#dde7f1",
+                                      highlightthickness=1)
+        self.vk_kunde_card.pack(fill="x")
+        self.vk_kunde_card_label = tk.Label(self.vk_kunde_card, text="Kein Kunde gewählt.",
+                                            bg="#f2f6fb", fg="#888", justify="left", anchor="w",
+                                            font=("Arial", 9, "italic"))
+        self.vk_kunde_card_label.pack(fill="x", padx=10, pady=8)
 
         # Artikel hinzufuegen
         addf = tk.LabelFrame(parent, text="Artikel hinzufügen (nur NMG)", bg=BG, fg=ACCENT,
@@ -476,15 +477,29 @@ class KassePanel(tk.Frame):
         tk.Label(line2, text="Charge/Bestand:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
         self.vk_charge_var = tk.StringVar()
         self.vk_charge_cmb = ttk.Combobox(line2, textvariable=self.vk_charge_var,
-                                          width=34, state="readonly")
+                                          width=30, state="readonly")
         self.vk_charge_cmb.pack(side="left", padx=(4, 12))
         tk.Label(line2, text="Rabatt %:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
         self.vk_rabatt_var = tk.StringVar()
-        tk.Entry(line2, textvariable=self.vk_rabatt_var, width=7).pack(side="left", padx=(4, 12))
+        tk.Entry(line2, textvariable=self.vk_rabatt_var, width=6).pack(side="left", padx=(4, 12))
         tk.Label(line2, text="Menge:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
         self.vk_menge_var = tk.StringVar(value="1")
-        tk.Entry(line2, textvariable=self.vk_menge_var, width=6).pack(side="left", padx=(4, 12))
-        tk.Button(line2, text="+ Position", command=self._vk_add_position,
+        tk.Entry(line2, textvariable=self.vk_menge_var, width=5).pack(side="left", padx=(4, 12))
+
+        # Liefervorgabe PRO Position (je Artikel eigene Vorgabe moeglich).
+        line3 = tk.Frame(addf, bg=BG)
+        line3.pack(fill="x", pady=(6, 0))
+        tk.Label(line3, text="Liefervorgabe:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        self.vk_pos_art_var = tk.StringVar(value="Bestellung")
+        ttk.Combobox(line3, textvariable=self.vk_pos_art_var, width=13, state="readonly",
+                     values=("Bestellung", "Vorbestellung", "abgesagt")).pack(side="left", padx=(4, 8))
+        self.vk_pos_lieferzeit_var = tk.StringVar(value="10 Uhr")
+        ttk.Combobox(line3, textvariable=self.vk_pos_lieferzeit_var, width=8,
+                     values=("10 Uhr", "12 Uhr", "Frei")).pack(side="left", padx=(0, 8))
+        tk.Label(line3, text="Termin:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        self.vk_pos_termin_var = tk.StringVar()
+        tk.Entry(line3, textvariable=self.vk_pos_termin_var, width=11).pack(side="left", padx=(4, 12))
+        tk.Button(line3, text="+ Position", command=self._vk_add_position,
                   bg="#11823b", fg="white", font=("Arial", 9, "bold"),
                   padx=10, pady=2).pack(side="left")
 
@@ -492,15 +507,22 @@ class KassePanel(tk.Frame):
         pos = tk.LabelFrame(parent, text="Positionen", bg=BG, fg=ACCENT,
                             font=("Arial", 10, "bold"), padx=12, pady=8)
         pos.pack(fill="both", expand=True, padx=8, pady=(0, 6))
-        pcols = ("pzn", "artikel", "df", "pck", "apu", "menge", "rabatt", "quelle", "charge", "verfall")
+        pcols = ("pzn", "artikel", "df", "pck", "apu", "menge", "rabatt", "charge", "verfall", "liefer")
         ph = {"pzn": "PZN", "artikel": "Artikel", "df": "DF", "pck": "PCK", "apu": "APU",
-              "menge": "Menge", "rabatt": "Rab%", "quelle": "Quelle", "charge": "Charge", "verfall": "Verfall"}
+              "menge": "Menge", "rabatt": "Rab%", "charge": "Charge", "verfall": "Verfall",
+              "liefer": "Liefervorgabe"}
         tf = tk.Frame(pos, bg=BG)
         tf.pack(fill="both", expand=True)
         tree = ttk.Treeview(tf, columns=pcols, show="headings", height=6)
         for c in pcols:
             tree.heading(c, text=ph[c])
-            tree.column(c, width=190 if c == "artikel" else 58, anchor="w")
+            if c == "artikel":
+                w = 170
+            elif c == "liefer":
+                w = 150
+            else:
+                w = 54
+            tree.column(c, width=w, anchor="w")
         tree.pack(side="left", fill="both", expand=True)
         sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
         sb.pack(side="right", fill="y")
@@ -520,17 +542,56 @@ class KassePanel(tk.Frame):
                                         fg=ACCENT, font=("Arial", 13, "bold"))
         self._vk_total_label.pack(side="right", padx=(0, 18))
 
+    def _kunde_details(self, knr):
+        with self._conn() as con:
+            if not knr or not _table_exists(con, "tbl_kunden_center"):
+                return {}
+            have = {r[1] for r in con.execute("PRAGMA table_info(tbl_kunden_center)")}
+            want = [c for c in ("kundenname", "plz", "ort", "strasse", "inhaber",
+                                "telefon", "email") if c in have]
+            if not want:
+                return {}
+            row = con.execute(
+                f"SELECT {','.join(want)} FROM tbl_kunden_center WHERE kundennummer=? LIMIT 1",
+                (knr,)).fetchone()
+            return dict(zip(want, row)) if row else {}
+
     def _vk_pick_kunde(self, payload):
-        knr, name = payload
-        self.vk_kunde = (knr, name)
-        self.vk_kunde_label.config(
-            text=f"Gewählt: {name}  ({knr or 'ohne Nr.'})", fg=ACCENT)
+        knr, name, plz, ort = payload
+        det = self._kunde_details(knr)
+        self.vk_kunde = {
+            "kundennummer": knr, "kundenname": det.get("kundenname") or name,
+            "plz": det.get("plz") or plz, "ort": det.get("ort") or ort,
+            "strasse": det.get("strasse", ""), "inhaber": det.get("inhaber", ""),
+            "telefon": det.get("telefon", ""), "email": det.get("email", ""),
+        }
+        self._render_kunde_card(self.vk_kunde)
+
+    def _render_kunde_card(self, k):
+        if not k:
+            self.vk_kunde_card_label.config(text="Kein Kunde gewählt.", fg="#888",
+                                            font=("Arial", 9, "italic"))
+            return
+        titel = k.get("kundenname") or k.get("kundennummer") or "—"
+        z2 = " · ".join(x for x in [
+            f"Nr. {k['kundennummer']}" if k.get("kundennummer") else "",
+            f"Inhaber: {k['inhaber']}" if k.get("inhaber") else ""] if x)
+        adr = " · ".join(x for x in [
+            k.get("strasse", ""), f"{k.get('plz', '')} {k.get('ort', '')}".strip()] if x and x.strip())
+        kontakt = " · ".join(x for x in [
+            f"Tel. {k['telefon']}" if k.get("telefon") else "",
+            k.get("email", "")] if x)
+        txt = titel
+        for z in (z2, adr, kontakt):
+            if z:
+                txt += "\n" + z
+        self.vk_kunde_card_label.config(text=txt, fg="#11304d", font=("Arial", 9))
 
     def _vk_pick_artikel(self, pzn):
         det = self._artikel_details(pzn)
         if not det:
             return
-        knr = self.vk_kunde[0] if self.vk_kunde else None
+        knr = self.vk_kunde["kundennummer"] if self.vk_kunde else None
         prozent, quelle = self._resolve_rabatt(knr, pzn)
         det["rabatt"] = prozent
         det["rabatt_quelle"] = quelle
@@ -549,6 +610,20 @@ class KassePanel(tk.Frame):
         self.vk_charge_cmb.config(values=labels)
         self.vk_charge_cmb.current(1 if chargen else 0)
         self.vk_menge_var.set("1")
+
+    @staticmethod
+    def _liefer_text(p):
+        teile = [p.get("bestellart", "Bestellung")]
+        if p.get("lieferzeit"):
+            teile.append(p["lieferzeit"])
+        if p.get("liefertermin"):
+            teile.append(p["liefertermin"])
+        return " · ".join(teile)
+
+    def _vk_row_values(self, p):
+        return (p["pzn"], p["artikelname"], p["df"], p["pck"],
+                p["apu"] if p["apu"] is not None else "", p["menge"],
+                f"{p['rabatt']:.0f}", p["charge"], p["verfall"], self._liefer_text(p))
 
     def _vk_add_position(self, *_):
         if not self.vk_cur:
@@ -574,13 +649,12 @@ class KassePanel(tk.Frame):
             "df": self.vk_cur["df"], "pck": self.vk_cur["pck"], "apu": self.vk_cur["apu"],
             "menge": menge, "rabatt": rabatt, "rabatt_quelle": self.vk_cur["rabatt_quelle"],
             "charge": charge, "verfall": verfall,
+            "bestellart": self.vk_pos_art_var.get(),
+            "lieferzeit": self.vk_pos_lieferzeit_var.get(),
+            "liefertermin": self.vk_pos_termin_var.get().strip(),
         }
         self.vk_positions.append(p)
-        self.vk_pos_tree.insert(
-            "", "end",
-            values=(p["pzn"], p["artikelname"], p["df"], p["pck"],
-                    p["apu"] if p["apu"] is not None else "", p["menge"],
-                    f"{rabatt:.0f}", p["rabatt_quelle"], p["charge"], p["verfall"]))
+        self.vk_pos_tree.insert("", "end", values=self._vk_row_values(p))
         # Eingabe zuruecksetzen
         self.vk_cur = None
         self.vk_artikel_search.clear()
@@ -654,10 +728,23 @@ class KassePanel(tk.Frame):
             rowmap[iid] = (charge or "", verfall or "")
 
         mrow = tk.Frame(win, bg=BG)
-        mrow.pack(fill="x", padx=18, pady=(0, 8))
+        mrow.pack(fill="x", padx=18, pady=(0, 6))
         tk.Label(mrow, text="Menge:", font=("Arial", 9, "bold"), bg=BG).pack(side="left")
         menge_var = tk.StringVar(value=str(p["menge"]))
         tk.Entry(mrow, textvariable=menge_var, width=6).pack(side="left", padx=(6, 0))
+
+        lrow = tk.Frame(win, bg=BG)
+        lrow.pack(fill="x", padx=18, pady=(0, 8))
+        tk.Label(lrow, text="Liefervorgabe:", font=("Arial", 9, "bold"), bg=BG).pack(side="left")
+        art_var = tk.StringVar(value=p.get("bestellart", "Bestellung"))
+        ttk.Combobox(lrow, textvariable=art_var, width=13, state="readonly",
+                     values=("Bestellung", "Vorbestellung", "abgesagt")).pack(side="left", padx=(4, 8))
+        lz_var = tk.StringVar(value=p.get("lieferzeit", "") or "10 Uhr")
+        ttk.Combobox(lrow, textvariable=lz_var, width=8,
+                     values=("10 Uhr", "12 Uhr", "Frei")).pack(side="left", padx=(0, 8))
+        tk.Label(lrow, text="Termin:", font=("Arial", 9, "bold"), bg=BG).pack(side="left")
+        termin_var = tk.StringVar(value=p.get("liefertermin", ""))
+        tk.Entry(lrow, textvariable=termin_var, width=11).pack(side="left", padx=(4, 0))
 
         def uebernehmen(_e=None):
             sel = tree.selection()
@@ -669,10 +756,10 @@ class KassePanel(tk.Frame):
                     p["menge"] = m
             except ValueError:
                 pass
-            self.vk_pos_tree.item(item, values=(
-                p["pzn"], p["artikelname"], p["df"], p["pck"],
-                p["apu"] if p["apu"] is not None else "", p["menge"],
-                f"{p['rabatt']:.0f}", p["rabatt_quelle"], p["charge"], p["verfall"]))
+            p["bestellart"] = art_var.get()
+            p["lieferzeit"] = lz_var.get()
+            p["liefertermin"] = termin_var.get().strip()
+            self.vk_pos_tree.item(item, values=self._vk_row_values(p))
             self._vk_update_total()
             win.destroy()
 
@@ -693,27 +780,34 @@ class KassePanel(tk.Frame):
         if not self.vk_positions:
             messagebox.showwarning("Verkauf", "Keine Positionen erfasst.", parent=top)
             return
-        lieferzeit = self.vk_lieferzeit_var.get()
+        # Kopf-Liefervorgabe aus den Positionen ableiten (einheitlich oder "gemischt").
+        arten = {p.get("bestellart", "Bestellung") for p in self.vk_positions}
+        zeiten = {p.get("lieferzeit", "") for p in self.vk_positions}
+        termine = {p.get("liefertermin", "") for p in self.vk_positions}
         header = {
             "datum": datetime.now().strftime("%Y-%m-%d"),
-            "kundennummer": self.vk_kunde[0], "apotheke": self.vk_kunde[1],
-            "bestellart": self.vk_art_var.get(), "lieferzeit": lieferzeit,
-            "liefertermin": self.vk_termin_var.get().strip(),
+            "kundennummer": self.vk_kunde["kundennummer"], "apotheke": self.vk_kunde["kundenname"],
+            "bestellart": next(iter(arten)) if len(arten) == 1 else "gemischt",
+            "lieferzeit": next(iter(zeiten)) if len(zeiten) == 1 else "",
+            "liefertermin": next(iter(termine)) if len(termine) == 1 else "",
         }
         bid = self._save_verkauf(header, self.vk_positions)
         anzahl = len(self.vk_positions)
+        vorbestellungen = sum(1 for p in self.vk_positions if p.get("bestellart") == "Vorbestellung")
         # Reset
         self.vk_positions = []
         self.vk_pos_tree.delete(*self.vk_pos_tree.get_children())
         self._vk_update_total()
         self.vk_kunde = None
         self.vk_kunde_search.clear()
-        self.vk_kunde_label.config(text="Kein Kunde gewählt.", fg="#999")
+        self._render_kunde_card(None)
         self._refresh_lager()
-        self._auftrag_dialog(bid, anzahl)
+        if hasattr(self, "vb_tree"):
+            self._refresh_vorbestellungen()
+        self._auftrag_dialog(bid, anzahl, vorbestellungen)
 
     # ==================================================== Auftragsbestaetigung
-    def _auftrag_dialog(self, bestell_id, anzahl):
+    def _auftrag_dialog(self, bestell_id, anzahl, vorbestellungen=0):
         top = self.winfo_toplevel()
         win = tk.Toplevel(top)
         win.title("Auftragsbestätigung")
@@ -722,8 +816,12 @@ class KassePanel(tk.Frame):
         win.resizable(False, False)
         tk.Label(win, text=f"✓ Verkauf #{bestell_id} gespeichert",
                  font=("Arial", 12, "bold"), fg="#11823b", bg=BG).pack(padx=20, pady=(16, 2))
-        tk.Label(win, text=f"{anzahl} Position(en) · Lagerbestand abgebucht.",
-                 font=("Arial", 9), fg="#666", bg=BG).pack(padx=20, pady=(0, 12))
+        info = f"{anzahl} Position(en) · Lagerbestand abgebucht."
+        if vorbestellungen:
+            info += (f"\n{vorbestellungen} davon Vorbestellung(en) – noch nicht abgebucht, "
+                     "im Reiter „Vorbestellungen“ bestätigen, wenn Ware da ist.")
+        tk.Label(win, text=info, font=("Arial", 9), fg="#666", bg=BG,
+                 justify="left").pack(padx=20, pady=(0, 12))
 
         btns = tk.Frame(win, bg=BG)
         btns.pack(padx=20, pady=(0, 8))
@@ -768,6 +866,165 @@ class KassePanel(tk.Frame):
         except Exception as e:
             messagebox.showerror("Vorlage", f"Vorlage konnte nicht geöffnet werden:\n{e}",
                                  parent=self.winfo_toplevel())
+
+    # ========================================================== Vorbestellungen
+    def _build_vorbestellungen(self, parent):
+        bar = tk.Frame(parent, bg=BG)
+        bar.pack(fill="x", padx=8, pady=(10, 4))
+        self.vb_info = tk.Label(bar, text="", bg=BG, fg=ACCENT, font=("Arial", 11, "bold"))
+        self.vb_info.pack(side="left")
+        tk.Button(bar, text="🔄 Aktualisieren", command=self._refresh_vorbestellungen,
+                  font=("Arial", 9), padx=8, pady=2).pack(side="right")
+        tk.Label(parent, text="Doppelklick auf eine Vorbestellung: bearbeiten, als Verkauf "
+                              "bestätigen (wenn Ware da ist) oder stornieren.",
+                 bg=BG, fg="#666", font=("Arial", 9)).pack(anchor="w", padx=8, pady=(0, 4))
+
+        tf = tk.Frame(parent, bg=BG)
+        tf.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        cols = ("datum", "kunde", "pzn", "artikel", "menge", "lieferzeit", "termin")
+        heads = {"datum": "Datum", "kunde": "Kunde", "pzn": "PZN", "artikel": "Artikel",
+                 "menge": "Menge", "lieferzeit": "Lieferzeit", "termin": "Termin"}
+        tree = ttk.Treeview(tf, columns=cols, show="headings")
+        for c in cols:
+            tree.heading(c, text=heads[c])
+            tree.column(c, width=210 if c == "artikel" else (150 if c == "kunde" else 80), anchor="w")
+        tree.pack(side="left", fill="both", expand=True)
+        sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
+        sb.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=sb.set)
+        tree.bind("<Double-1>", self._vorbestellung_dialog)
+        self.vb_tree = tree
+        self._vb_rowmap = {}
+
+    def _refresh_vorbestellungen(self):
+        if not hasattr(self, "vb_tree"):
+            return
+        self.vb_tree.delete(*self.vb_tree.get_children())
+        self._vb_rowmap = {}
+        with self._conn() as con:
+            rows = con.execute(
+                "SELECT p.id, b.datum, COALESCE(b.apotheke,''), p.pzn, p.artikelname, p.menge, "
+                "COALESCE(p.lieferzeit,''), COALESCE(p.liefertermin,'') "
+                "FROM tbl_bestellpositionen p JOIN tbl_bestellungen b ON b.id = p.bestell_id "
+                "WHERE p.bestellart = 'Vorbestellung' ORDER BY p.liefertermin, b.datum"
+            ).fetchall()
+        for r in rows:
+            iid = self.vb_tree.insert("", "end", values=r[1:])
+            self._vb_rowmap[iid] = r[0]
+        self.vb_info.config(text=f"{len(rows)} offene Vorbestellung(en)")
+
+    def _vorbestellung_dialog(self, _e=None):
+        sel = self.vb_tree.selection()
+        if not sel:
+            return
+        pid = self._vb_rowmap.get(sel[0])
+        if not pid:
+            return
+        with self._conn() as con:
+            row = con.execute(
+                "SELECT p.pzn, p.artikelname, p.df, p.pck, p.apu, p.menge, p.charge, p.verfall, "
+                "COALESCE(p.lieferzeit,''), COALESCE(p.liefertermin,''), COALESCE(b.apotheke,'') "
+                "FROM tbl_bestellpositionen p JOIN tbl_bestellungen b ON b.id = p.bestell_id "
+                "WHERE p.id=?", (pid,)).fetchone()
+        if not row:
+            return
+        pzn, artikel, df, pck, apu, menge, charge, verfall, lieferzeit, termin, apotheke = row
+
+        top = self.winfo_toplevel()
+        win = tk.Toplevel(top)
+        win.title("Vorbestellung")
+        win.configure(bg=BG)
+        win.transient(top)
+        win.resizable(False, False)
+        tk.Label(win, text=artikel or pzn, font=("Arial", 13, "bold"), fg=ACCENT,
+                 bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
+        tk.Label(win, text=f"PZN {pzn}  ·  DF {df or '—'}  ·  PCK {pck or '—'}  ·  APU {_eur(apu)}",
+                 font=("Arial", 9), fg="#555", bg=BG).pack(padx=18, anchor="w")
+        tk.Label(win, text=f"Kunde: {apotheke or '—'}", font=("Arial", 9), fg="#555",
+                 bg=BG).pack(padx=18, pady=(0, 8), anchor="w")
+
+        erow = tk.Frame(win, bg=BG)
+        erow.pack(fill="x", padx=18, pady=(0, 6))
+        tk.Label(erow, text="Menge:", font=("Arial", 9, "bold"), bg=BG).pack(side="left")
+        menge_var = tk.StringVar(value=str(menge))
+        tk.Entry(erow, textvariable=menge_var, width=6).pack(side="left", padx=(4, 12))
+        lz_var = tk.StringVar(value=lieferzeit or "10 Uhr")
+        ttk.Combobox(erow, textvariable=lz_var, width=8,
+                     values=("10 Uhr", "12 Uhr", "Frei")).pack(side="left", padx=(0, 8))
+        tk.Label(erow, text="Termin:", font=("Arial", 9, "bold"), bg=BG).pack(side="left")
+        termin_var = tk.StringVar(value=termin)
+        tk.Entry(erow, textvariable=termin_var, width=11).pack(side="left", padx=(4, 0))
+
+        tk.Label(win, text="Charge wählen (für Bestätigung – Doppelklick = übernehmen):",
+                 font=("Arial", 9, "bold"), bg=BG).pack(padx=18, anchor="w")
+        tf = tk.Frame(win, bg=BG)
+        tf.pack(fill="both", padx=18, pady=(4, 8))
+        ctree = ttk.Treeview(tf, columns=("charge", "verfall", "bestand"), show="headings",
+                             height=5, selectmode="browse")
+        for c, t, w in (("charge", "Charge", 150), ("verfall", "Verfall", 120), ("bestand", "Bestand", 80)):
+            ctree.heading(c, text=t)
+            ctree.column(c, width=w, anchor="w")
+        ctree.pack(side="left", fill="both", expand=True)
+        rowmap = {}
+        f0 = ctree.insert("", "end", values=("(ohne Charge)", "", ""))
+        rowmap[f0] = ("", "")
+        for ch, vf, m in self._lager_chargen(pzn):
+            iid = ctree.insert("", "end", values=(ch or "—", vf or "—", m))
+            rowmap[iid] = (ch or "", vf or "")
+
+        def _menge():
+            try:
+                v = int(menge_var.get().strip())
+                return v if v > 0 else menge
+            except ValueError:
+                return menge
+
+        def speichern():
+            with self._conn() as con:
+                con.execute("UPDATE tbl_bestellpositionen SET menge=?, lieferzeit=?, liefertermin=? WHERE id=?",
+                            (_menge(), lz_var.get(), termin_var.get().strip(), pid))
+                con.commit()
+            self._refresh_vorbestellungen()
+            win.destroy()
+
+        def bestaetigen():
+            sel2 = ctree.selection()
+            ch, vf = rowmap.get(sel2[0], (charge or "", verfall or "")) if sel2 else (charge or "", verfall or "")
+            m = _menge()
+            jetzt = datetime.now().isoformat(timespec="seconds")
+            with self._conn() as con:
+                con.execute(
+                    "UPDATE tbl_bestellpositionen SET bestellart='Bestellung', menge=?, lieferzeit=?, "
+                    "liefertermin=?, charge=?, verfall=? WHERE id=?",
+                    (m, lz_var.get(), termin_var.get().strip(), ch, vf, pid))
+                if ch or vf:
+                    con.execute(
+                        "UPDATE tbl_lagerbestand SET menge=MAX(0, menge - ?), aktualisiert_am=? "
+                        "WHERE pzn=? AND COALESCE(charge,'')=? AND COALESCE(verfall,'')=?",
+                        (m, jetzt, pzn, ch, vf))
+                con.commit()
+            self._refresh_vorbestellungen()
+            self._refresh_lager()
+            win.destroy()
+            messagebox.showinfo("Vorbestellung", "Als Verkauf bestätigt – Lagerbestand abgebucht.",
+                                parent=top)
+
+        def stornieren():
+            with self._conn() as con:
+                con.execute("UPDATE tbl_bestellpositionen SET bestellart='abgesagt' WHERE id=?", (pid,))
+                con.commit()
+            self._refresh_vorbestellungen()
+            win.destroy()
+
+        btns = tk.Frame(win, bg=BG)
+        btns.pack(fill="x", padx=18, pady=(0, 14))
+        tk.Button(btns, text="✓ Als Verkauf bestätigen", command=bestaetigen, bg="#11823b",
+                  fg="white", font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="left")
+        tk.Button(btns, text="Speichern", command=speichern, bg=ACCENT, fg="white",
+                  font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="left", padx=(8, 0))
+        tk.Button(btns, text="Stornieren", command=stornieren, padx=12, pady=4).pack(side="right")
+        win.lift()
+        win.focus_force()
 
     # ============================================================ Wareneingang
     def _build_wareneingang(self, parent):

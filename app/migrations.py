@@ -127,22 +127,27 @@ def run_migrations(db_path: Path = DB_PATH) -> list[str]:
                 rabatt_quelle TEXT,
                 charge TEXT,
                 verfall TEXT,
+                bestellart TEXT DEFAULT 'Bestellung',
+                lieferzeit TEXT,
+                liefertermin TEXT,
                 FOREIGN KEY(bestell_id) REFERENCES tbl_bestellungen(id) ON DELETE CASCADE
             )"""
         )
-        # Charge/Verfall sind vorbereitet (Auswahl der konkreten Charge bei
-        # mehreren Bestaenden folgt, sobald eine Lagerbestand-Quelle existiert).
-        # ALTER-Guard fuer DBs, die die Tabelle schon ohne diese Spalten haben.
+        # Charge/Verfall + Liefervorgabe PRO Position: jede Position kann eine
+        # eigene Bestellart (Bestellung/Vorbestellung/abgesagt) + Lieferzeit/-termin
+        # haben. ALTER-Guard fuer DBs ohne diese Spalten.
         if _table_exists(con, "tbl_bestellpositionen"):
             pcols = _columns(con, "tbl_bestellpositionen")
-            if "charge" not in pcols:
-                con.execute("ALTER TABLE tbl_bestellpositionen ADD COLUMN charge TEXT")
-            if "verfall" not in pcols:
-                con.execute("ALTER TABLE tbl_bestellpositionen ADD COLUMN verfall TEXT")
+            for col, ddl in (("charge", "charge TEXT"), ("verfall", "verfall TEXT"),
+                             ("bestellart", "bestellart TEXT DEFAULT 'Bestellung'"),
+                             ("lieferzeit", "lieferzeit TEXT"), ("liefertermin", "liefertermin TEXT")):
+                if col not in pcols:
+                    con.execute(f"ALTER TABLE tbl_bestellpositionen ADD COLUMN {ddl}")
         con.execute("CREATE INDEX IF NOT EXISTS idx_bestellungen_datum ON tbl_bestellungen(datum)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_bestellungen_kundennummer ON tbl_bestellungen(kundennummer)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_bestellpositionen_bestell ON tbl_bestellpositionen(bestell_id)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_bestellpositionen_pzn ON tbl_bestellpositionen(pzn)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_bestellpositionen_bestellart ON tbl_bestellpositionen(bestellart)")
         actions.append("tbl_bestellungen + tbl_bestellpositionen sichergestellt")
 
         # Kasse-App: Wareneingang -> Lagerbestand. Wareneingang bucht NMG-Artikel
