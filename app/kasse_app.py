@@ -797,7 +797,9 @@ class KassePanel(tk.Frame):
         self._vk_update_total()
 
     def _vk_update_total(self):
-        gesamt = sum(_pos_netto(p) for p in self.vk_positions)
+        # Nur echte Bestellungen zaehlen; Vorbestellungen/abgesagte nicht.
+        gesamt = sum(_pos_netto(p) for p in self.vk_positions
+                     if p.get("bestellart", "Bestellung") == "Bestellung")
         self._vk_total_label.config(text=f"Gesamt (netto): {_eur(gesamt)}")
 
     def _vk_edit_position(self, _e=None):
