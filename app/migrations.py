@@ -94,6 +94,46 @@ def run_migrations(db_path: Path = DB_PATH) -> list[str]:
         con.execute("CREATE INDEX IF NOT EXISTS idx_nmg_rabatte_historie_snapshot ON tbl_nmg_rabatte_historie(snapshot_id)")
         actions.append("tbl_nmg_rabatte_snapshots + tbl_nmg_rabatte_historie sichergestellt")
 
+        # Bestell-App: Bestellungen als Kopf + Positionen. Kopf = ein Kunde mit
+        # Liefertermin/Bestellart, Positionen = mehrere NMG-Artikelzeilen mit
+        # Menge + aufgeloestem Rabatt (PK-Kondition -> NMG -> manuell).
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_bestellungen(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                datum TEXT,
+                kundennummer TEXT,
+                apotheke TEXT,
+                bestellart TEXT DEFAULT 'Bestellung',
+                lieferzeit TEXT,
+                liefertermin TEXT,
+                status TEXT DEFAULT 'offen',
+                notizen TEXT,
+                bearbeiter TEXT,
+                erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,
+                geaendert_am TEXT
+            )"""
+        )
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_bestellpositionen(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bestell_id INTEGER NOT NULL,
+                pzn TEXT,
+                artikelname TEXT,
+                df TEXT,
+                pck TEXT,
+                apu REAL,
+                menge INTEGER DEFAULT 1,
+                rabatt_prozent REAL,
+                rabatt_quelle TEXT,
+                FOREIGN KEY(bestell_id) REFERENCES tbl_bestellungen(id) ON DELETE CASCADE
+            )"""
+        )
+        con.execute("CREATE INDEX IF NOT EXISTS idx_bestellungen_datum ON tbl_bestellungen(datum)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_bestellungen_kundennummer ON tbl_bestellungen(kundennummer)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_bestellpositionen_bestell ON tbl_bestellpositionen(bestell_id)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_bestellpositionen_pzn ON tbl_bestellpositionen(pzn)")
+        actions.append("tbl_bestellungen + tbl_bestellpositionen sichergestellt")
+
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('db_schema_version', ?)", (DB_SCHEMA_VERSION,))
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('last_migration_at', ?)", (datetime.now().isoformat(timespec='seconds'),))
         con.commit()
