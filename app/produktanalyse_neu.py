@@ -208,7 +208,7 @@ def export_produktanalyse_neu(limit=500, min_apotheken=1, datenquelle="ALLE", au
     ws3 = wb.create_sheet("3 Hersteller Absatz")
     _write_rows(ws3, hersteller_absatz, include_exchange=False)
 
-    label = {"NMG": "PK", "PK": "PK", "ZF": "ZF", "ALLE": "PK_ZF"}.get((datenquelle or "ALLE").upper(), str(datenquelle or "ALLE"))
+    label = {"NMG": "PK", "PK": "PK", "ZF": "ZW", "ALLE": "PK_ZW"}.get((datenquelle or "ALLE").upper(), str(datenquelle or "ALLE"))
     suffix = f"_{int(auswertung_id)}" if auswertung_id else ""
     out = OUTPUT_DIR / f"Produktanalyse_{label}{suffix}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
     wb.save(out)

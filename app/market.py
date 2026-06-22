@@ -25,11 +25,12 @@ def _norm_source(datenquelle: str | None) -> str:
 
 
 def _source_label(dq: str) -> str:
+    # Anzeige-Labels: intern bleiben 'NMG'/'ZF', der Nutzer sieht 'PK'/'ZW'.
     if dq == "NMG":
         return "PK"
     if dq == "ZF":
-        return "ZF"
-    return "PK + ZF"
+        return "ZW"
+    return "PK + ZW"
 
 
 def export_marktanalyse_nicht_nmg(limit: int = 200, min_apotheken: int = 1, datenquelle: str = "ALLE", auswertung_id: int | None = None) -> Path:
@@ -787,18 +788,18 @@ def export_produktanalyse_neu(kundentyp: str = "PK", monate: int = 6) -> Path:
         raise ValueError(f"Unbekannter Kundentyp: {kundentyp}")
 
     # V1.1 SP12: Strukturierter Ablage-Pfad ausgaben/Produktanalyse/<Jahr>/Q<n>/
-    out = jahr_quartal_pfad(OUTPUT_DIR, "Produktanalyse") / f"Produktanalyse_{label.replace('+', '_und_')}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+    out = jahr_quartal_pfad(OUTPUT_DIR, "Produktanalyse") / f"Produktanalyse_{label.replace('ZF', 'ZW').replace('+', '_und_')}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
 
     wb = Workbook()
     # Default-Sheet entfernen, wir fuegen unsere selbst an.
     wb.remove(wb.active)
 
     with sqlite3.connect(DB_PATH) as con:
-        sheets_to_make: list[tuple[str, str]] = []  # (sheet_name, kundentyp_filter)
+        sheets_to_make: list[tuple[str, str]] = []  # (sheet_name (Anzeige), kundentyp_filter)
         if label == "PK+ZF":
-            sheets_to_make = [("PK", "PK"), ("ZF", "ZF"), ("PK+ZF", "PK+ZF")]
+            sheets_to_make = [("PK", "PK"), ("ZW", "ZF"), ("PK + ZW", "PK+ZF")]
         else:
-            sheets_to_make = [(label, label)]
+            sheets_to_make = [(label.replace("ZF", "ZW"), label)]
 
         for sheet_name, ktyp in sheets_to_make:
             aw, pos = _produktanalyse_basis_info(con, ktyp, monate)

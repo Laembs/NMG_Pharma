@@ -13,6 +13,9 @@ backups/
 # Ausnahme: das Uebersetzungs-Excel ist OK (keine Kundendaten,
 # Repo-Inhalt - SP11 i18n-Workflow)
 !translations/NMGone_Translations.xlsx
+# Ausnahme: offene PLZ->Ort-Referenz fuer die Kunden App (oeffentlicher
+# Geonames-Datensatz, keine Kundendaten) - muss in den Build
+!assets/plz_orte.csv
 
 # === Lokale Claude-Code-State-Files ===
 .claude/

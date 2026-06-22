@@ -221,6 +221,20 @@ def datetime_from_mtime(path: Path) -> str:
         return ""
 
 
+def _dq_label(dq) -> str:
+    """Anzeige-Label fuer eine gespeicherte datenquelle.
+
+    Intern bleiben die Werte 'NMG' (Altdaten) und 'ZF' (Zukunftswerk) erhalten;
+    fuer den Nutzer werden sie als 'PK' bzw. 'ZW' angezeigt.
+    """
+    val = (dq or "NMG")
+    if val == "NMG":
+        return "PK"
+    if val == "ZF":
+        return "ZW"
+    return str(val)
+
+
 class NMGApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -2019,7 +2033,7 @@ class NMGApp(tk.Tk):
         for label, value in (
             ("Alle", "ALLE"),
             ("PK", "NMG"),
-            ("ZF", "ZF"),
+            ("ZW", "ZF"),
             ("Importiert", "IMPORT"),
             ("Programm", "PROGRAMM"),
             ("Produktanalyse", "PA"),
@@ -2118,7 +2132,7 @@ LIMIT 500
                 _sa_show_produktanalyse_files(ft, f_apo, f_von, f_bis)
                 return
             for row in rows:
-                dq = "PK" if row["datenquelle"] == "NMG" else row["datenquelle"]
+                dq = _dq_label(row["datenquelle"])
                 apo = str(row["apotheke"] or "")
                 knr = str(row["kundennummer"] if "kundennummer" in row.keys() else "")
                 kname = str(row["kundenname"] if "kundenname" in row.keys() else "")
@@ -2367,8 +2381,8 @@ LIMIT 500
         choice = tk.StringVar(value="ALLE")
         cards = [
             ("PK-Daten", "Partnerkonditionskunden\nAuswertungen, Lernstände, PK-/NMG-Zuordnung", "NMG"),
-            ("ZF-Daten", "Zukunftswerk-Kundendaten\nMarkt- und Produktpotenzial ohne Lernstand", "ZF"),
-            ("PK + ZF", "Beide Datenwelten gemeinsam\nfür Gesamtmarkt und Produktchancen", "ALLE"),
+            ("ZW-Daten", "Zukunftswerk-Kundendaten\nMarkt- und Produktpotenzial ohne Lernstand", "ZF"),
+            ("PK + ZW", "Beide Datenwelten gemeinsam\nfür Gesamtmarkt und Produktchancen", "ALLE"),
         ]
 
         def select(val):
@@ -2406,11 +2420,11 @@ LIMIT 500
         return result["value"]
 
     def import_zf_data(self):
-        files = filedialog.askopenfilenames(title="ZF-Dateien auswählen", filetypes=SUPPORTED_DATA_FILETYPES)
+        files = filedialog.askopenfilenames(title="ZW-Dateien auswählen", filetypes=SUPPORTED_DATA_FILETYPES)
         if not files:
             return
-        name = simpledialog.askstring("ZF-Import", "Name/Kommentar für den ZF-Import:", initialvalue="ZF Daten") or "ZF Daten"
-        ok = messagebox.askyesno("ZF-Daten importieren", f"{len(files)} Datei(en) als ZF-Daten importieren?\n\nDiese Daten werden NICHT als PK-Lernstand übernommen.")
+        name = simpledialog.askstring("ZW-Import", "Name/Kommentar für den ZW-Import:", initialvalue="ZW Daten") or "ZW Daten"
+        ok = messagebox.askyesno("ZW-Daten importieren", f"{len(files)} Datei(en) als ZW-Daten importieren?\n\nDiese Daten werden NICHT als PK-Lernstand übernommen.")
         if not ok:
             return
         def _do_zf_import():
@@ -2428,14 +2442,14 @@ LIMIT 500
 
         imported, rows, errors = self._run_busy(
             _do_zf_import,
-            title="ZF-Daten importieren",
+            title="ZW-Daten importieren",
             subtitle=f"Importiere {len(files)} Datei(en) ...",
         )
-        msg = f"ZF-Import fertig.\nAusgewählte Dateien: {len(files)}\nErfolgreich importiert: {imported}\nPositionen: {rows}"
+        msg = f"ZW-Import fertig.\nAusgewählte Dateien: {len(files)}\nErfolgreich importiert: {imported}\nPositionen: {rows}"
         if errors:
             msg += "\n\nFehler:\n" + "\n".join(errors[:10])
         self.status.set(msg)
-        messagebox.showinfo("ZF-Import", msg)
+        messagebox.showinfo("ZW-Import", msg)
 
     # SP7: market_analysis (Marktanalyse) komplett entfernt - "Produktanalyse"
     # deckt fachlich alles ab, was wir brauchen.
@@ -2472,8 +2486,8 @@ LIMIT 500
         btn_frame.pack()
         for label, val, color in [
             ("📊 PK", "PK", "#0b4a86"),
-            ("📊 ZF", "ZF", "#3867b7"),
-            ("📊 PK + ZF", "PK+ZF", "#11823b"),
+            ("📊 ZW", "ZF", "#3867b7"),
+            ("📊 PK + ZW", "PK+ZF", "#11823b"),
         ]:
             tk.Button(btn_frame, text=label, command=lambda v=val: pick(v),
                       bg=color, fg="white", relief="flat",
@@ -4188,7 +4202,7 @@ LIMIT 500
         """Alle verfügbaren Kacheln für das Dashboard (Schnellzugriff + Info-Widgets)."""
         return [
             # --- Schnellzugriff ---
-            ("neue_auswertung",  "📊", "Neue Auswertung",      "PK-/ZF-Auswertung starten.",               self.show_neue_auswertung_page,              "#0b4a86"),
+            ("neue_auswertung",  "📊", "Neue Auswertung",      "PK-/ZW-Auswertung starten.",               self.show_neue_auswertung_page,              "#0b4a86"),
             ("gespeicherte",     "📁", "Ges. Analysen",        "Vorhandene Analysen öffnen.",               self.open_saved_analyses,                    "#3867b7"),
             ("schulbank",        "🎓", "Schulbank",            "Lernvorschläge bearbeiten.",                lambda: self.show_schulbank_page("Schulbank"),"#11823b"),
             ("kunden",           "👥", "Kunden App",           "Kundenstamm und -history.",                 self.show_kunden_center,                     "#0b4a86"),
@@ -4309,7 +4323,7 @@ LIMIT 500
                 rows = self._get_saved_analysis_rows(limit=4)
                 if rows:
                     for r in rows:
-                        dq = "PK" if (r["datenquelle"] or "NMG") == "NMG" else r["datenquelle"]
+                        dq = _dq_label(r["datenquelle"])
                         datum_str = str(r["datum"] or "")[:10]
                         name = str(r["apotheke"] or "–")[:28]
                         tk.Label(ana_box, text=f"[{dq}] {datum_str} – {name}", font=("Arial", 8), fg="#333", bg="#fafafa").pack(anchor="w", padx=8)
@@ -4533,7 +4547,7 @@ LIMIT 500
                 for r in rows:
                     search_str = f"{r['apotheke'] or ''} {r['kundennummer'] or ''}".lower()
                     if not q or q in search_str:
-                        dq = "PK" if r["datenquelle"] == "NMG" else r["datenquelle"]
+                        dq = _dq_label(r["datenquelle"])
                         iid = a_tree.insert("", "end", values=(
                             str(r["datum"] or "")[:10], str(r["apotheke"] or ""),
                             str(r["kundennummer"] or ""), dq, r["nmg_treffer"] or 0
@@ -4656,7 +4670,7 @@ LIMIT 500
                 con.row_factory = sqlite3.Row
 
                 # --- Kunden (PK + ZF zusammen) ---
-                for tbl, typlabel in (("tbl_pk_kunden", "PK"), ("tbl_zf_kunden", "ZF")):
+                for tbl, typlabel in (("tbl_pk_kunden", "PK"), ("tbl_zf_kunden", "ZW")):
                     try:
                         rows = con.execute(f"""
                             SELECT kundennummer, kundenname, apotheke, status
@@ -4708,7 +4722,7 @@ LIMIT 500
                         if r["datum"]:
                             details.append(str(r["datum"])[:10])
                         if r["datenquelle"]:
-                            details.append("PK" if r["datenquelle"] == "NMG" else r["datenquelle"])
+                            details.append(_dq_label(r["datenquelle"]))
                         if r["anzahl_positionen"]:
                             details.append(f"{r['anzahl_positionen']} Pos.")
                         out.append({
@@ -6142,9 +6156,19 @@ LIMIT 500
                 ("plz", "TEXT"), ("ort", "TEXT"), ("strasse", "TEXT"),
                 ("inhaber", "TEXT"), ("ansprechpartner2", "TEXT"),
                 ("kundentyp", "TEXT"), ("ansprechpartner", "TEXT"),
+                # Kunden-App-Erweiterung (Spec 2026-06-22)
+                ("msk_kundennummer", "TEXT"), ("hausnummer", "TEXT"),
+                ("inhaber_titel", "TEXT"), ("inhaber_anrede", "TEXT"),
+                ("inhaber_vorname", "TEXT"), ("inhaber_zuname", "TEXT"),
+                ("besteller_name", "TEXT"), ("besteller_durchwahl", "TEXT"),
+                ("besteller_email", "TEXT"), ("rechnungsemail", "TEXT"),
+                ("rechnungsart", "TEXT"), ("quartalsverguetung", "TEXT"),
             ]:
                 if col not in existing:
                     con.execute(f"ALTER TABLE tbl_kunden_center ADD COLUMN {col} {typedef}")
+            # Kunden-Typ vereinheitlichen: altes 'ZF' -> 'ZW' (nur dieses Feld;
+            # die Analyse-Datenquelle 'ZF' bleibt unveraendert).
+            con.execute("UPDATE tbl_kunden_center SET kundentyp='ZW' WHERE kundentyp='ZF'")
             con.commit()
 
     def _kunden_detail_dialog(self, kunden_row=None):
@@ -6172,56 +6196,264 @@ LIMIT 500
 
         tk.Label(win, text=title, font=("Arial", 16, "bold"), fg="#0b4a86", bg="#f5f7fb").grid(row=0, column=0, columnspan=2, sticky="w", padx=22, pady=(16, 8))
 
-        # ── Linke Spalte: Stammdaten ──────────────────────────────────────────
-        left = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
-        left.grid(row=1, column=0, sticky="nsew", padx=(22, 8), pady=(0, 12))
+        # ── Linke Spalte: scrollbares Stammdaten-Formular ─────────────────────
+        left_outer = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        left_outer.grid(row=1, column=0, sticky="nsew", padx=(22, 8), pady=(0, 12))
+        left_outer.rowconfigure(0, weight=1)
+        left_outer.columnconfigure(0, weight=1)
+        _lcanvas = tk.Canvas(left_outer, bg="#ffffff", highlightthickness=0)
+        _lcanvas.grid(row=0, column=0, sticky="nsew")
+        _lsb = tk.Scrollbar(left_outer, orient="vertical", command=_lcanvas.yview)
+        _lsb.grid(row=0, column=1, sticky="ns")
+        _lcanvas.configure(yscrollcommand=_lsb.set)
+        left = tk.Frame(_lcanvas, bg="#ffffff")
+        _lwin = _lcanvas.create_window((0, 0), window=left, anchor="nw")
         left.columnconfigure(1, weight=1)
-
-        tk.Label(left, text="Stammdaten", font=("Arial", 12, "bold"), fg="#0b4a86", bg="#ffffff").grid(row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(12, 6))
+        left.bind("<Configure>", lambda e: _lcanvas.configure(scrollregion=_lcanvas.bbox("all")))
+        _lcanvas.bind("<Configure>", lambda e: _lcanvas.itemconfigure(_lwin, width=e.width))
+        _lcanvas.bind("<Enter>", lambda e: _lcanvas.bind_all(
+            "<MouseWheel>", lambda ev: _lcanvas.yview_scroll(int(-1 * (ev.delta / 120)), "units")))
+        _lcanvas.bind("<Leave>", lambda e: _lcanvas.unbind_all("<MouseWheel>"))
+        win.bind("<Destroy>", lambda e: _lcanvas.unbind_all("<MouseWheel>"), add="+")
 
         initial = dict(kunden_row) if kunden_row else {}
-        fields_def = [
-            ("kundennummer", "Kundennummer *"),
-            ("kundenname",   "Apothekenname *"),
-            ("plz",          "PLZ *"),
-            ("ort",          "Ort"),
-            ("strasse",      "Straße"),
-            ("kundentyp",    "Typ (PK/ZF)"),
-            ("inhaber",      "Inhaber"),
-            ("ansprechpartner", "Ansprechpartner"),
-            ("ansprechpartner2","Ansprechpartner 2"),
-            ("telefon",      "Telefon"),
-            ("email",        "E-Mail"),
-            ("status",       "Status (aktiv/inaktiv)"),
-        ]
         vars_ = {}
-        for r, (key, label) in enumerate(fields_def, start=1):
-            is_req = label.endswith("*")
-            fg = "#c00" if is_req else "#0b4a86"
-            tk.Label(left, text=label, bg="#ffffff", fg=fg, font=("Arial", 10, "bold")).grid(row=r, column=0, sticky="w", padx=14, pady=5)
+        _row = [0]
+
+        def _section(text, pady_top=14):
+            tk.Label(left, text=text, font=("Arial", 12, "bold"), fg="#0b4a86",
+                     bg="#ffffff").grid(row=_row[0], column=0, columnspan=2, sticky="w",
+                                        padx=14, pady=(pady_top, 4))
+            _row[0] += 1
+
+        def _field(key, label, required=False, readonly=False):
+            fg = "#c00" if required else "#0b4a86"
+            tk.Label(left, text=label, bg="#ffffff", fg=fg,
+                     font=("Arial", 10, "bold")).grid(row=_row[0], column=0, sticky="w", padx=14, pady=4)
             var = tk.StringVar(value=str(initial.get(key, "") or ""))
-            if key == "status" and not initial.get("status"):
-                var.set("aktiv")
             vars_[key] = var
-            tk.Entry(left, textvariable=var).grid(row=r, column=1, sticky="ew", padx=14, pady=5)
+            tk.Entry(left, textvariable=var,
+                     state=("readonly" if readonly else "normal")).grid(
+                row=_row[0], column=1, sticky="ew", padx=14, pady=4)
+            _row[0] += 1
+            return var
+
+        def _combo(key, label, values, default=""):
+            tk.Label(left, text=label, bg="#ffffff", fg="#0b4a86",
+                     font=("Arial", 10, "bold")).grid(row=_row[0], column=0, sticky="w", padx=14, pady=4)
+            var = tk.StringVar(value=(str(initial.get(key, "") or "") or default))
+            vars_[key] = var
+            ttk.Combobox(left, textvariable=var, values=values,
+                         state="readonly").grid(row=_row[0], column=1, sticky="ew", padx=14, pady=4)
+            _row[0] += 1
+            return var
+
+        # Kunde
+        _section("Kunde", pady_top=12)
+        _field("kundennummer", "Kundennummer *", required=True)
+        msk_var = _field("msk_kundennummer", "MSK-Kundennummer", readonly=True)
+
+        def _sync_msk(*_a):
+            knr = vars_["kundennummer"].get().strip()
+            msk_var.set(("216" + knr) if knr else "")
+        vars_["kundennummer"].trace_add("write", _sync_msk)
+        _sync_msk()
+        _field("kundenname", "Apothekenname *", required=True)
+        _combo("kundentyp", "Typ (PK / ZW)", ["PK", "ZW"], default="PK")
+
+        # Adresse
+        _section("Adresse")
+        _field("strasse", "Straße")
+        _field("hausnummer", "Hausnummer")
+        tk.Label(left, text="PLZ *", bg="#ffffff", fg="#c00",
+                 font=("Arial", 10, "bold")).grid(row=_row[0], column=0, sticky="w", padx=14, pady=4)
+        _plz_box = tk.Frame(left, bg="#ffffff")
+        _plz_box.grid(row=_row[0], column=1, sticky="ew", padx=14, pady=4)
+        plz_var = tk.StringVar(value=str(initial.get("plz", "") or ""))
+        vars_["plz"] = plz_var
+        tk.Entry(_plz_box, textvariable=plz_var, width=12).pack(side="left")
+        _plz_status = tk.Label(_plz_box, text="", bg="#ffffff", font=("Arial", 9))
+        _plz_status.pack(side="left", padx=(8, 0))
+        _row[0] += 1
+        _field("ort", "Ort")
+
+        def _check_plz(*_a):
+            try:
+                from .plz_lookup import is_valid_plz, lookup_ort
+            except Exception:
+                return
+            p = plz_var.get().strip()
+            if not p:
+                _plz_status.config(text="", fg="#555")
+                return
+            if is_valid_plz(p):
+                _plz_status.config(text="✓ gültig", fg="#127a2e")
+                ort = lookup_ort(p)
+                cur = vars_["ort"].get().strip()
+                if ort and (not cur or cur == _check_plz.last):
+                    vars_["ort"].set(ort)
+                    _check_plz.last = ort
+            else:
+                _plz_status.config(text="✗ nicht gefunden", fg="#c00")
+        _check_plz.last = ""
+        try:
+            from .plz_lookup import lookup_ort as _lo0
+            _ip = str(initial.get("plz", "") or "").strip()
+            if _ip and _lo0(_ip) and _lo0(_ip) == str(initial.get("ort", "") or "").strip():
+                _check_plz.last = _lo0(_ip)
+        except Exception:
+            pass
+        plz_var.trace_add("write", _check_plz)
+        _check_plz()
+
+        # Inhaber
+        _section("Inhaber")
+        _field("inhaber_titel", "Titel")
+        _combo("inhaber_anrede", "Anrede", ["", "Frau", "Herr", "Divers"])
+        _field("inhaber_vorname", "Vorname")
+        _field("inhaber_zuname", "Zuname")
+
+        # Kontakt
+        _section("Kontakt")
+        _field("telefon", "Telefon")
+        _field("email", "E-Mail")
+        _field("rechnungsemail", "Rechnungs-E-Mail")
+
+        # Verantwortlicher Besteller (Rückfragen)
+        _section("Verantwortlicher Besteller (Rückfragen)")
+        _field("besteller_name", "Name (leer = Inhaber)")
+        _field("besteller_durchwahl", "Telefondurchwahl")
+        _field("besteller_email", "E-Mail")
+
+        # Abrechnung
+        _section("Abrechnung")
+        _combo("rechnungsart", "Rechnungsart",
+               ["Sofortige Rechnung", "Monatlich", "Quartalsrechnung"],
+               default="Sofortige Rechnung")
+        _field("quartalsverguetung", "Quartalsvergütung Partnerprogramm")
+        _combo("status", "Status", ["aktiv", "inaktiv"], default="aktiv")
 
         # Notizen
-        notiz_row = len(fields_def) + 1
-        tk.Label(left, text="Notizen", bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=notiz_row, column=0, sticky="nw", padx=14, pady=5)
+        _section("Notizen")
         notiz_txt = tk.Text(left, height=4, wrap="word")
         notiz_txt.insert("1.0", str(initial.get("notizen", "") or ""))
-        notiz_txt.grid(row=notiz_row, column=1, sticky="ew", padx=14, pady=5)
+        notiz_txt.grid(row=_row[0], column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 12))
+        _row[0] += 1
 
-        # ── Rechte Spalte: Analysen ───────────────────────────────────────────
+        # ── Rechte Spalte: Artikel-Rabatte + Analysen ─────────────────────────
         right = tk.Frame(win, bg="#fafbff", highlightbackground="#d8e2ee", highlightthickness=1)
         right.grid(row=1, column=1, sticky="nsew", padx=(0, 22), pady=(0, 12))
         right.columnconfigure(0, weight=1)
         right.rowconfigure(1, weight=1)
+        right.rowconfigure(4, weight=1)
 
-        tk.Label(right, text="Analysen zu diesem Kunden", font=("Arial", 12, "bold"), fg="#0b4a86", bg="#fafbff").grid(row=0, column=0, sticky="w", padx=14, pady=(12, 6))
+        # --- Spezielle Artikel-Rabatte (schreiben in tbl_pk_konditionen) ---
+        tk.Label(right, text="Spezielle Artikel-Rabatte", font=("Arial", 12, "bold"),
+                 fg="#0b4a86", bg="#fafbff").grid(row=0, column=0, sticky="w", padx=14, pady=(12, 6))
+        rab_frame = tk.Frame(right, bg="#fafbff")
+        rab_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 4))
+        rab_frame.columnconfigure(0, weight=1)
+        rab_frame.rowconfigure(0, weight=1)
+        rab_tree = ttk.Treeview(rab_frame, columns=("pzn", "artikel", "rabatt"),
+                                show="headings", selectmode="browse", height=6)
+        for col, head, w in [("pzn", "PZN", 80), ("artikel", "Artikel", 180), ("rabatt", "Rabatt %", 70)]:
+            rab_tree.heading(col, text=head)
+            rab_tree.column(col, width=w, anchor=("e" if col == "rabatt" else "w"))
+        rab_tree.grid(row=0, column=0, sticky="nsew")
+        rab_sb = tk.Scrollbar(rab_frame, orient="vertical", command=rab_tree.yview)
+        rab_sb.grid(row=0, column=1, sticky="ns")
+        rab_tree.configure(yscrollcommand=rab_sb.set)
+
+        nmg_artikel = []
+        try:
+            with sqlite3.connect(DB_PATH) as con:
+                nmg_artikel = con.execute(
+                    "SELECT pzn, artikelname FROM tbl_nmg_stamm ORDER BY artikelname").fetchall()
+        except Exception:
+            nmg_artikel = []
+        nmg_by_pzn = {str(p): (a or "") for p, a in nmg_artikel}
+
+        def _rab_load():
+            for it in rab_tree.get_children():
+                rab_tree.delete(it)
+            knr = vars_["kundennummer"].get().strip()
+            if not knr:
+                return
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                                       "AND name='tbl_pk_konditionen'").fetchone():
+                        return
+                    for pzn, rab in con.execute(
+                            "SELECT pzn, rabatt_prozent FROM tbl_pk_konditionen "
+                            "WHERE kundennummer=? ORDER BY pzn", (knr,)).fetchall():
+                        art = nmg_by_pzn.get(str(pzn), "")
+                        rab_tree.insert("", "end",
+                                        values=(pzn, art, f"{rab:g}" if rab is not None else ""))
+            except Exception:
+                pass
+        _rab_load()
+
+        def _rab_add():
+            if not vars_["kundennummer"].get().strip():
+                messagebox.showinfo(title, "Bitte zuerst die Kundennummer eingeben.")
+                return
+            if not nmg_artikel:
+                messagebox.showinfo(title, "Keine NMG-Artikel verfügbar.")
+                return
+            dlg = tk.Toplevel(win)
+            dlg.title("Artikel-Rabatt hinzufügen")
+            dlg.configure(bg="#f5f7fb")
+            dlg.transient(win)
+            dlg.grab_set()
+            tk.Label(dlg, text="Artikel", bg="#f5f7fb", fg="#0b4a86",
+                     font=("Arial", 10, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(12, 4))
+            disp = [f"{a}  ({p})" for p, a in nmg_artikel]
+            art_var = tk.StringVar()
+            cb = ttk.Combobox(dlg, textvariable=art_var, values=disp, width=44, state="readonly")
+            cb.grid(row=0, column=1, padx=12, pady=(12, 4))
+            tk.Label(dlg, text="Rabatt %", bg="#f5f7fb", fg="#0b4a86",
+                     font=("Arial", 10, "bold")).grid(row=1, column=0, sticky="w", padx=12, pady=4)
+            rab_var = tk.StringVar()
+            tk.Entry(dlg, textvariable=rab_var, width=10).grid(row=1, column=1, sticky="w", padx=12, pady=4)
+
+            def _ok():
+                idx = cb.current()
+                if idx < 0:
+                    messagebox.showinfo(title, "Bitte einen Artikel wählen.")
+                    return
+                pzn = str(nmg_artikel[idx][0])
+                art = nmg_artikel[idx][1] or ""
+                try:
+                    rab = float(rab_var.get().strip().replace(",", "."))
+                except ValueError:
+                    messagebox.showinfo(title, "Rabatt muss eine Zahl sein.")
+                    return
+                for it in rab_tree.get_children():
+                    if str(rab_tree.set(it, "pzn")) == pzn:
+                        rab_tree.set(it, "rabatt", f"{rab:g}")
+                        dlg.destroy()
+                        return
+                rab_tree.insert("", "end", values=(pzn, art, f"{rab:g}"))
+                dlg.destroy()
+            tk.Button(dlg, text="Übernehmen", command=_ok, bg="#0b4a86", fg="white",
+                      relief="flat", padx=14, pady=6).grid(row=2, column=1, sticky="e", padx=12, pady=12)
+
+        def _rab_del():
+            for it in rab_tree.selection():
+                rab_tree.delete(it)
+
+        rab_btns = tk.Frame(right, bg="#fafbff")
+        rab_btns.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
+        tk.Button(rab_btns, text="➕ Rabatt", command=_rab_add, bg="#3867b7", fg="white",
+                  relief="flat", padx=12, pady=6).pack(side="left")
+        tk.Button(rab_btns, text="➖ Entfernen", command=_rab_del, padx=10, pady=6).pack(side="left", padx=(8, 0))
+
+        # --- Analysen ---
+        tk.Label(right, text="Analysen zu diesem Kunden", font=("Arial", 12, "bold"), fg="#0b4a86", bg="#fafbff").grid(row=3, column=0, sticky="w", padx=14, pady=(8, 6))
 
         ana_frame = tk.Frame(right, bg="#fafbff")
-        ana_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        ana_frame.grid(row=4, column=0, sticky="nsew", padx=8, pady=(0, 8))
         ana_frame.columnconfigure(0, weight=1)
         ana_frame.rowconfigure(0, weight=1)
 
@@ -6252,7 +6484,7 @@ LIMIT 500
                         WHERE (kundennummer=? AND kundennummer<>'')\nOR (kundenname=? AND kundenname<>'')
                         ORDER BY datetime(datum) DESC LIMIT 30\n""", (knr, kname)).fetchall()
                 for row in rows:
-                    dq = "PK" if (row["datenquelle"] or "NMG") == "NMG" else row["datenquelle"]
+                    dq = _dq_label(row["datenquelle"])
                     datum = str(row["datum"] or "")[:10]
                     iid = ana_tree.insert("", "end", values=(datum, dq, row["apotheke"] or "", row["nmg_treffer"] or 0))
                     ana_rows[iid] = dict(row)
@@ -6308,7 +6540,7 @@ LIMIT 500
                 messagebox.showerror(title, f"Outlook konnte nicht geöffnet werden:\n{exc}")
 
         btn_ana_row = tk.Frame(right, bg="#fafbff")
-        btn_ana_row.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
+        btn_ana_row.grid(row=5, column=0, sticky="ew", padx=8, pady=(0, 8))
         tk.Button(btn_ana_row, text="📧 Analyse per E-Mail senden", command=send_email_analyse,
                   bg="#3867b7", fg="white", relief="flat", padx=12, pady=6).pack(side="left")
         tk.Button(btn_ana_row, text="🔄 Aktualisieren", command=load_analysen, padx=10, pady=6).pack(side="left", padx=(8, 0))
@@ -6332,27 +6564,62 @@ LIMIT 500
             if not plz:
                 messagebox.showinfo(title, "PLZ ist ein Pflichtfeld.")
                 return
+            try:
+                from .plz_lookup import is_valid_plz
+                if not is_valid_plz(plz) and not messagebox.askyesno(
+                        title, f"Die PLZ {plz} wurde nicht gefunden.\nTrotzdem speichern?"):
+                    return
+            except Exception:
+                pass
+            from datetime import datetime as _dt
             data = {k: v.get().strip() for k, v in vars_.items()}
+            data["msk_kundennummer"] = ("216" + knr) if knr else ""
+            _teile = [data.get("inhaber_titel", ""), data.get("inhaber_anrede", ""),
+                      data.get("inhaber_vorname", ""), data.get("inhaber_zuname", "")]
+            data["inhaber"] = " ".join(t for t in (x.strip() for x in _teile) if t)
             data["notizen"] = notiz_txt.get("1.0", "end").strip()
             data["bearbeiter"] = self.bearbeiter
+
+            cols = ["kundennummer", "msk_kundennummer", "kundenname", "kundentyp",
+                    "strasse", "hausnummer", "plz", "ort",
+                    "inhaber_titel", "inhaber_anrede", "inhaber_vorname", "inhaber_zuname", "inhaber",
+                    "telefon", "email", "rechnungsemail",
+                    "besteller_name", "besteller_durchwahl", "besteller_email",
+                    "rechnungsart", "quartalsverguetung", "status", "notizen", "bearbeiter"]
             with sqlite3.connect(DB_PATH) as con:
                 if is_new:
-                    con.execute("""
-                        INSERT INTO tbl_kunden_center(kundennummer,kundenname,plz,ort,strasse,kundentyp,
-                            inhaber,ansprechpartner,ansprechpartner2,telefon,email,status,notizen,bearbeiter)
-                        VALUES(:kundennummer,:kundenname,:plz,:ort,:strasse,:kundentyp,
-                            :inhaber,:ansprechpartner,:ansprechpartner2,:telefon,:email,:status,:notizen,:bearbeiter)
-                    """, data)
+                    con.execute(
+                        f"INSERT INTO tbl_kunden_center({','.join(cols)}) "
+                        f"VALUES({','.join(':' + c for c in cols)})", data)
                 else:
                     data["id"] = kunden_row["id"]
-                    con.execute("""
-                        UPDATE tbl_kunden_center SET kundennummer=:kundennummer,kundenname=:kundenname,
-                            plz=:plz,ort=:ort,strasse=:strasse,kundentyp=:kundentyp,
-                            inhaber=:inhaber,ansprechpartner=:ansprechpartner,
-                            ansprechpartner2=:ansprechpartner2,telefon=:telefon,email=:email,
-                            status=:status,notizen=:notizen,geaendert_am=CURRENT_TIMESTAMP,
-                            bearbeiter=:bearbeiter WHERE id=:id
-                    """, data)
+                    _sets = ",".join(f"{c}=:{c}" for c in cols)
+                    con.execute(
+                        f"UPDATE tbl_kunden_center SET {_sets},"
+                        f"geaendert_am=CURRENT_TIMESTAMP WHERE id=:id", data)
+                # Artikel-Rabatte: die Kunden App ist alleiniger Editor je Kunde,
+                # daher alle Konditionen dieses Kunden neu setzen.
+                con.execute("""CREATE TABLE IF NOT EXISTS tbl_pk_konditionen(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kundennummer TEXT, kundenname TEXT, pzn TEXT, rabatt_prozent REAL,
+                    gueltigkeit TEXT, quelle TEXT, importdatum TEXT,
+                    letzte_aktualisierung TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(kundennummer, pzn))""")
+                con.execute("DELETE FROM tbl_pk_konditionen WHERE kundennummer=?", (knr,))
+                _jetzt = _dt.now().isoformat(timespec="seconds")
+                for it in rab_tree.get_children():
+                    pzn = str(rab_tree.set(it, "pzn")).strip()
+                    _raw = str(rab_tree.set(it, "rabatt")).strip().replace(",", ".")
+                    if not pzn:
+                        continue
+                    try:
+                        rabv = float(_raw) if _raw else None
+                    except ValueError:
+                        rabv = None
+                    con.execute(
+                        "INSERT OR REPLACE INTO tbl_pk_konditionen"
+                        "(kundennummer,kundenname,pzn,rabatt_prozent,quelle,letzte_aktualisierung) "
+                        "VALUES(?,?,?,?,?,?)", (knr, kname, pzn, rabv, "Kunden App", _jetzt))
                 con.commit()
             try:
                 with sqlite3.connect(DB_PATH) as con:
@@ -7293,7 +7560,7 @@ LIMIT 500
                 beschreibung=(
                     "Neue Auswertung startet jetzt über eine Formularansicht mit Kundentyp "
                     "Partnerkondition/Zukunftswerk, gespeicherter letzter Auswahl, Kundennummer, "
-                    "Kundenname und Rohdaten-Dateiauswahl. Kundentabellen für PK und ZF sind vorbereitet."
+                    "Kundenname und Rohdaten-Dateiauswahl. Kundentabellen für PK und ZW sind vorbereitet."
                 ),
                 status="Erledigt",
                 prioritaet="Hoch"
@@ -7452,7 +7719,7 @@ LIMIT 500
 
         info = (
             "Hinweis: Der Kundentyp und die gewählte Auswertungsvorlage werden gespeichert und beim nächsten Öffnen wieder vorgeschlagen.\n"
-            "Die Kundendaten werden bereits in PK-/ZF-Kundentabellen vorbereitet."
+            "Die Kundendaten werden bereits in PK-/ZW-Kundentabellen vorbereitet."
         )
         tk.Label(body, text=info, justify="left", bg="#ffffff", fg="#333").grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 12))
 
@@ -7581,7 +7848,7 @@ LIMIT 500
             lb.configure(yscrollcommand=scroll.set)
 
             for row in rows:
-                dq = "PK" if row["datenquelle"] == "NMG" else row["datenquelle"]
+                dq = _dq_label(row["datenquelle"])
                 datum = str(row["datum"] or "")[:19]
                 name = str(row["apotheke"] or "")[:38]
                 lb.insert("end", f"{row['id']:>5} | {datum:<19} | {dq:<3} | {name:<38} | Pos: {row['anzahl_positionen'] or 0:>5}")
@@ -9038,7 +9305,7 @@ LIMIT 500
         row3 = tk.Frame(body, bg="#ffffff")
         row3.grid(row=4, column=0, columnspan=3, sticky="ew")
         row3.columnconfigure((0, 1, 2), weight=1)
-        self._tile(row3, 0, "📥", "Manuelle Analysen", "Manuelle PK-/ZF-Analysen importieren.", "Import", self.import_manuelle_analysen, "#11823b")
+        self._tile(row3, 0, "📥", "Manuelle Analysen", "Manuelle PK-/ZW-Analysen importieren.", "Import", self.import_manuelle_analysen, "#11823b")
 
     def _ask_manual_analysis_type(self):
         """Fragt gezielt, ob manuelle Analysen als PK oder ZF importiert werden sollen."""
@@ -9052,12 +9319,12 @@ LIMIT 500
         choice = tk.StringVar(value="PK")
 
         tk.Label(win, text="Analyseart auswählen", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(20, 6))
-        tk.Label(win, text="Sind die manuellen Analysen PK- oder ZF-Analysen?", bg="#f5f7fb", fg="#333").pack(anchor="w", padx=22, pady=(0, 14))
+        tk.Label(win, text="Sind die manuellen Analysen PK- oder ZW-Analysen?", bg="#f5f7fb", fg="#333").pack(anchor="w", padx=22, pady=(0, 14))
 
         box = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
         box.pack(fill="x", padx=22, pady=(0, 14))
         tk.Radiobutton(box, text="PK / Partnerkondition", variable=choice, value="PK", bg="#ffffff", font=("Arial", 11)).pack(anchor="w", padx=16, pady=(14, 6))
-        tk.Radiobutton(box, text="ZF / Zukunftswerk", variable=choice, value="ZF", bg="#ffffff", font=("Arial", 11)).pack(anchor="w", padx=16, pady=(6, 14))
+        tk.Radiobutton(box, text="ZW / Zukunftswerk", variable=choice, value="ZF", bg="#ffffff", font=("Arial", 11)).pack(anchor="w", padx=16, pady=(6, 14))
 
         result = {"value": None}
         def ok():
@@ -9222,7 +9489,7 @@ LIMIT 500
                 bereich="Import / Analyse",
                 titel="Manuelle Analysen importieren für Schulbank und Markt-/Produktanalyse",
                 beschreibung=(
-                    "Manuelle PK-/ZF-Analysen können per Mehrfachauswahl importiert werden. "
+                    "Manuelle PK-/ZW-Analysen können per Mehrfachauswahl importiert werden. "
                     "Dubletten werden per SHA256 erkannt; vorhandene NMG-/Austauschentscheidungen werden "
                     "als Schulbank-Lernvorschläge angelegt. Leere Lernfälle werden nicht übernommen."
                 ),
@@ -9302,7 +9569,7 @@ LIMIT 500
 
         id_map = {}
         for row in rows:
-            dq = "PK" if str(row["datenquelle"] or "NMG") == "NMG" else str(row["datenquelle"] or "")
+            dq = _dq_label(row["datenquelle"])
             iid = tree.insert("", "end", values=(row["id"], str(row["datum"] or "")[:16], dq, str(row["apotheke"] or ""), row["anzahl_positionen"] or 0, Path(str(row["ausgabedatei"] or "")).name))
             id_map[iid] = int(row["id"])
 
