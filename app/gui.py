@@ -163,7 +163,7 @@ ADMIN_CLEAR_TABLES = [
     ("tbl_pzn_basisdaten", "Artikelstamm / PZN-Basis"),
     ("tbl_auswertungen", "Gespeicherte Auswertungen"),
     ("tbl_auswertungspositionen", "Auswertungspositionen"),
-    ("tbl_kunden_center", "Kunden App"),
+    ("tbl_kunden_center", "Kunden"),
     ("tbl_todo_center", "ToDo-Center"),
     ("tbl_mitarbeiter", "Mitarbeiter"),
     ("tbl_mitarbeiterprofil", "Mitarbeiterprofile"),
@@ -4205,7 +4205,7 @@ LIMIT 500
             ("neue_auswertung",  "📊", "Neue Auswertung",      "PK-/ZW-Auswertung starten.",               self.show_neue_auswertung_page,              "#0b4a86"),
             ("gespeicherte",     "📁", "Ges. Analysen",        "Vorhandene Analysen öffnen.",               self.open_saved_analyses,                    "#3867b7"),
             ("schulbank",        "🎓", "Schulbank",            "Lernvorschläge bearbeiten.",                lambda: self.show_schulbank_page("Schulbank"),"#11823b"),
-            ("kunden",           "👥", "Kunden App",           "Kundenstamm und -history.",                 self.show_kunden_center,                     "#0b4a86"),
+            ("kunden",           "👥", "Kunden",           "Kundenstamm und -history.",                 self.show_kunden_center,                     "#0b4a86"),
             ("kasse",            "🛒", "Kasse",                "Verkauf an Apotheken + Wareneingang.",      self.open_kasse_app,                         "#8b5a00"),
             ("todo",             "✅", "ToDo",                 "Aufgaben und offene Punkte.",               self.show_todo_center,                        "#11823b"),
             ("mitarbeiter",      "👥", "Mitarbeiter",          "Zuständigkeiten und Datenpfade.",           self.show_mitarbeiter_center,                "#6b4fb3"),
@@ -4770,7 +4770,7 @@ LIMIT 500
         typ = entry.get("typ")
         payload = entry.get("payload") or {}
         if typ == "kunde":
-            # Such-Wert fuer die Kunden App vormerken, dann Seite oeffnen.
+            # Such-Wert fuer die Kunden vormerken, dann Seite oeffnen.
             self._kunden_center_pre_search = payload.get("search_value", "")
             self.show_kunden_center()
         elif typ == "analyse":
@@ -5547,7 +5547,7 @@ LIMIT 500
                 bereich="Organisation",
                 titel=titel,
                 beschreibung=(
-                    "Mitarbeiterdatenbank mit Vertretung 1 und Vertretung 2, Kunden-Center mit einem Ansprechpartner, "
+                    "Mitarbeiterdatenbank mit Vertretung 1 und Vertretung 2, Kunden mit einem Ansprechpartner, "
                     "Bestell-Center als Vorbereitung und ToDo-Center wurden als Grundstruktur angelegt. "
                     "Mitarbeiter-Center zeigt Aufgaben, Vertretungen, OneDrive-Pfade und bereitet eine Board-/Post-it-Ansicht vor."
                 ),
@@ -6172,110 +6172,148 @@ LIMIT 500
             con.commit()
 
     def _kunden_detail_dialog(self, kunden_row=None):
-        """Vollständiges Kunden-Formular: Stammdaten + Analysen + E-Mail."""
+        """Kompaktes Kunden-Formular mit Reitern: Stammdaten, Artikel-Rabatte,
+        Analysen, Verkaufte Artikel, Notizen."""
         self._ensure_kunden_center_extended()
         is_new = kunden_row is None
-        title = "Neuer Kunde" if is_new else f"Kunde: {kunden_row.get('kundenname','') or kunden_row.get('kundennummer','')}"
+        initial = dict(kunden_row) if kunden_row else {}
+        title = "Neuer Kunde" if is_new else f"Kunde: {initial.get('kundenname','') or initial.get('kundennummer','')}"
 
         win = tk.Toplevel(self)
-        win.resizable(True, True)
         win.title(title)
-        win.geometry("1000x700")
-        win.minsize(800, 560)
         win.configure(bg="#f5f7fb")
         win.transient(self)
-        win.grab_set()
+        win.resizable(True, True)
+        win.minsize(720, 500)
+        # Kompaktes, mittig platziertes Fenster (kein Vollbild).
+        w, h = 820, 600
         try:
-            win.state("zoomed")
+            self.update_idletasks()
+            x = self.winfo_rootx() + max(0, (self.winfo_width() - w) // 2)
+            y = self.winfo_rooty() + max(0, (self.winfo_height() - h) // 2)
+            win.geometry(f"{w}x{h}+{x}+{y}")
         except Exception:
-            pass
+            win.geometry(f"{w}x{h}")
+        win.grab_set()
 
-        win.columnconfigure(0, weight=3)
-        win.columnconfigure(1, weight=2)
-        win.rowconfigure(1, weight=1)
+        win.columnconfigure(0, weight=1)
+        win.rowconfigure(2, weight=1)
 
-        tk.Label(win, text=title, font=("Arial", 16, "bold"), fg="#0b4a86", bg="#f5f7fb").grid(row=0, column=0, columnspan=2, sticky="w", padx=22, pady=(16, 8))
-
-        # ── Linke Spalte: scrollbares Stammdaten-Formular ─────────────────────
-        left_outer = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
-        left_outer.grid(row=1, column=0, sticky="nsew", padx=(22, 8), pady=(0, 12))
-        left_outer.rowconfigure(0, weight=1)
-        left_outer.columnconfigure(0, weight=1)
-        _lcanvas = tk.Canvas(left_outer, bg="#ffffff", highlightthickness=0)
-        _lcanvas.grid(row=0, column=0, sticky="nsew")
-        _lsb = tk.Scrollbar(left_outer, orient="vertical", command=_lcanvas.yview)
-        _lsb.grid(row=0, column=1, sticky="ns")
-        _lcanvas.configure(yscrollcommand=_lsb.set)
-        left = tk.Frame(_lcanvas, bg="#ffffff")
-        _lwin = _lcanvas.create_window((0, 0), window=left, anchor="nw")
-        left.columnconfigure(1, weight=1)
-        left.bind("<Configure>", lambda e: _lcanvas.configure(scrollregion=_lcanvas.bbox("all")))
-        _lcanvas.bind("<Configure>", lambda e: _lcanvas.itemconfigure(_lwin, width=e.width))
-        _lcanvas.bind("<Enter>", lambda e: _lcanvas.bind_all(
-            "<MouseWheel>", lambda ev: _lcanvas.yview_scroll(int(-1 * (ev.delta / 120)), "units")))
-        _lcanvas.bind("<Leave>", lambda e: _lcanvas.unbind_all("<MouseWheel>"))
-        win.bind("<Destroy>", lambda e: _lcanvas.unbind_all("<MouseWheel>"), add="+")
-
-        initial = dict(kunden_row) if kunden_row else {}
         vars_ = {}
-        _row = [0]
 
-        def _section(text, pady_top=14):
-            tk.Label(left, text=text, font=("Arial", 12, "bold"), fg="#0b4a86",
-                     bg="#ffffff").grid(row=_row[0], column=0, columnspan=2, sticky="w",
-                                        padx=14, pady=(pady_top, 4))
-            _row[0] += 1
+        # ── Kopf: Typ-Auswahl (PK/ZW) + Kundennummer + MSK ────────────────────
+        head = tk.Frame(win, bg="#f5f7fb")
+        head.grid(row=0, column=0, sticky="ew", padx=18, pady=(14, 8))
 
-        def _field(key, label, required=False, readonly=False):
-            fg = "#c00" if required else "#0b4a86"
-            tk.Label(left, text=label, bg="#ffffff", fg=fg,
-                     font=("Arial", 10, "bold")).grid(row=_row[0], column=0, sticky="w", padx=14, pady=4)
-            var = tk.StringVar(value=str(initial.get(key, "") or ""))
-            vars_[key] = var
-            tk.Entry(left, textvariable=var,
-                     state=("readonly" if readonly else "normal")).grid(
-                row=_row[0], column=1, sticky="ew", padx=14, pady=4)
-            _row[0] += 1
-            return var
+        typ_var = tk.StringVar(value=str(initial.get("kundentyp", "") or ""))
+        vars_["kundentyp"] = typ_var
 
-        def _combo(key, label, values, default=""):
-            tk.Label(left, text=label, bg="#ffffff", fg="#0b4a86",
-                     font=("Arial", 10, "bold")).grid(row=_row[0], column=0, sticky="w", padx=14, pady=4)
-            var = tk.StringVar(value=(str(initial.get(key, "") or "") or default))
-            vars_[key] = var
-            ttk.Combobox(left, textvariable=var, values=values,
-                         state="readonly").grid(row=_row[0], column=1, sticky="ew", padx=14, pady=4)
-            _row[0] += 1
-            return var
+        tk.Label(head, text="Typ:", bg="#f5f7fb", fg="#0b4a86",
+                 font=("Arial", 11, "bold")).pack(side="left")
+        typ_btns = {}
 
-        # Kunde
-        _section("Kunde", pady_top=12)
-        _field("kundennummer", "Kundennummer *", required=True)
-        msk_var = _field("msk_kundennummer", "MSK-Kundennummer", readonly=True)
+        def _set_typ(val):
+            typ_var.set(val)
+            for v, b in typ_btns.items():
+                on = (v == val)
+                b.configure(bg=("#0b4a86" if on else "#e8eef5"),
+                            fg=("white" if on else "#11304d"))
+            _apply_typ_defaults(val)
+
+        for val in ("PK", "ZW"):
+            b = tk.Button(head, text=val, width=6, relief="flat", cursor="hand2",
+                          bg="#e8eef5", fg="#11304d", font=("Arial", 11, "bold"),
+                          activebackground="#d8e2ee", command=lambda v=val: _set_typ(v))
+            b.pack(side="left", padx=(8, 0))
+            typ_btns[val] = b
+
+        tk.Label(head, text="Kundennummer *", bg="#f5f7fb", fg="#c00",
+                 font=("Arial", 11, "bold")).pack(side="left", padx=(22, 6))
+        knr_var = tk.StringVar(value=str(initial.get("kundennummer", "") or ""))
+        vars_["kundennummer"] = knr_var
+        tk.Entry(head, textvariable=knr_var, width=16, font=("Arial", 11)).pack(side="left")
+
+        tk.Label(head, text="MSK:", bg="#f5f7fb", fg="#0b4a86",
+                 font=("Arial", 11, "bold")).pack(side="left", padx=(16, 6))
+        msk_var = tk.StringVar()
+        vars_["msk_kundennummer"] = msk_var
+        tk.Entry(head, textvariable=msk_var, width=16, state="readonly",
+                 readonlybackground="#eef2f8", fg="#555").pack(side="left")
 
         def _sync_msk(*_a):
-            knr = vars_["kundennummer"].get().strip()
-            msk_var.set(("216" + knr) if knr else "")
-        vars_["kundennummer"].trace_add("write", _sync_msk)
+            k = knr_var.get().strip()
+            msk_var.set(("216" + k) if k else "")
+        knr_var.trace_add("write", _sync_msk)
         _sync_msk()
-        _field("kundenname", "Apothekenname *", required=True)
-        _combo("kundentyp", "Typ (PK / ZW)", ["PK", "ZW"], default="PK")
 
-        # Adresse
-        _section("Adresse")
-        _field("strasse", "Straße")
-        _field("hausnummer", "Hausnummer")
-        tk.Label(left, text="PLZ *", bg="#ffffff", fg="#c00",
-                 font=("Arial", 10, "bold")).grid(row=_row[0], column=0, sticky="w", padx=14, pady=4)
-        _plz_box = tk.Frame(left, bg="#ffffff")
-        _plz_box.grid(row=_row[0], column=1, sticky="ew", padx=14, pady=4)
+        tk.Frame(win, bg="#d8e2ee", height=1).grid(row=1, column=0, sticky="ew", padx=18)
+
+        # ── Notebook mit Reitern ──────────────────────────────────────────────
+        nb = ttk.Notebook(win)
+        nb.grid(row=2, column=0, sticky="nsew", padx=18, pady=(8, 6))
+
+        def _mk_section(parent, rowref, text, top=10):
+            tk.Label(parent, text=text, bg="#ffffff", fg="#0b4a86",
+                     font=("Arial", 11, "bold")).grid(row=rowref[0], column=0, columnspan=2,
+                                                      sticky="w", pady=(top, 2))
+            rowref[0] += 1
+
+        def _mk_field(parent, rowref, key, label, required=False):
+            fg = "#c00" if required else "#11304d"
+            tk.Label(parent, text=label, bg="#ffffff", fg=fg,
+                     font=("Arial", 9, "bold")).grid(row=rowref[0], column=0, sticky="w", pady=3, padx=(0, 8))
+            var = tk.StringVar(value=str(initial.get(key, "") or ""))
+            vars_[key] = var
+            tk.Entry(parent, textvariable=var).grid(row=rowref[0], column=1, sticky="ew", pady=3)
+            rowref[0] += 1
+            return var
+
+        def _mk_combo(parent, rowref, key, label, values, default=""):
+            tk.Label(parent, text=label, bg="#ffffff", fg="#11304d",
+                     font=("Arial", 9, "bold")).grid(row=rowref[0], column=0, sticky="w", pady=3, padx=(0, 8))
+            var = tk.StringVar(value=(str(initial.get(key, "") or "") or default))
+            vars_[key] = var
+            ttk.Combobox(parent, textvariable=var, values=values, state="readonly").grid(
+                row=rowref[0], column=1, sticky="ew", pady=3)
+            rowref[0] += 1
+            return var
+
+        # ---- Reiter: Stammdaten (zweispaltig) ----
+        tab_stamm = tk.Frame(nb, bg="#ffffff")
+        nb.add(tab_stamm, text="  Stammdaten  ")
+        tab_stamm.columnconfigure(0, weight=1, uniform="cols")
+        tab_stamm.columnconfigure(1, weight=1, uniform="cols")
+
+        colL = tk.Frame(tab_stamm, bg="#ffffff")
+        colL.grid(row=0, column=0, sticky="nsew", padx=(10, 12), pady=8)
+        colL.columnconfigure(1, weight=1)
+        colR = tk.Frame(tab_stamm, bg="#ffffff")
+        colR.grid(row=0, column=1, sticky="nsew", padx=(12, 10), pady=8)
+        colR.columnconfigure(1, weight=1)
+
+        # Linke Spalte: Adresse (inkl. Apothekenname) + Inhaber
+        rL = [0]
+        _mk_section(colL, rL, "Adresse", top=0)
+        _mk_field(colL, rL, "kundenname", "Apothekenname *", required=True)
+        _mk_field(colL, rL, "strasse", "Straße")
+        _mk_field(colL, rL, "hausnummer", "Hausnummer")
+        tk.Label(colL, text="PLZ *", bg="#ffffff", fg="#c00",
+                 font=("Arial", 9, "bold")).grid(row=rL[0], column=0, sticky="w", pady=3, padx=(0, 8))
+        _plz_box = tk.Frame(colL, bg="#ffffff")
+        _plz_box.grid(row=rL[0], column=1, sticky="ew", pady=3)
         plz_var = tk.StringVar(value=str(initial.get("plz", "") or ""))
         vars_["plz"] = plz_var
-        tk.Entry(_plz_box, textvariable=plz_var, width=12).pack(side="left")
-        _plz_status = tk.Label(_plz_box, text="", bg="#ffffff", font=("Arial", 9))
-        _plz_status.pack(side="left", padx=(8, 0))
-        _row[0] += 1
-        _field("ort", "Ort")
+        tk.Entry(_plz_box, textvariable=plz_var, width=10).pack(side="left")
+        _plz_status = tk.Label(_plz_box, text="", bg="#ffffff", font=("Arial", 8))
+        _plz_status.pack(side="left", padx=(6, 0))
+        rL[0] += 1
+        _mk_field(colL, rL, "ort", "Ort")
+
+        _mk_section(colL, rL, "Inhaber")
+        _mk_field(colL, rL, "inhaber_titel", "Titel")
+        _mk_combo(colL, rL, "inhaber_anrede", "Anrede", ["", "Frau", "Herr", "Divers"])
+        _mk_field(colL, rL, "inhaber_vorname", "Vorname")
+        _mk_field(colL, rL, "inhaber_zuname", "Zuname")
 
         def _check_plz(*_a):
             try:
@@ -6306,62 +6344,59 @@ LIMIT 500
         plz_var.trace_add("write", _check_plz)
         _check_plz()
 
-        # Inhaber
-        _section("Inhaber")
-        _field("inhaber_titel", "Titel")
-        _combo("inhaber_anrede", "Anrede", ["", "Frau", "Herr", "Divers"])
-        _field("inhaber_vorname", "Vorname")
-        _field("inhaber_zuname", "Zuname")
+        # Rechte Spalte: Kontakt + Besteller + Abrechnung
+        rR = [0]
+        _mk_section(colR, rR, "Kontakt", top=0)
+        _mk_field(colR, rR, "telefon", "Telefon")
+        _mk_field(colR, rR, "email", "E-Mail")
+        _mk_field(colR, rR, "rechnungsemail", "Rechnungs-E-Mail")
 
-        # Kontakt
-        _section("Kontakt")
-        _field("telefon", "Telefon")
-        _field("email", "E-Mail")
-        _field("rechnungsemail", "Rechnungs-E-Mail")
+        _mk_section(colR, rR, "Verantw. Besteller (Rückfragen)")
+        _mk_field(colR, rR, "besteller_name", "Name (leer = Inhaber)")
+        _mk_field(colR, rR, "besteller_durchwahl", "Durchwahl")
+        _mk_field(colR, rR, "besteller_email", "E-Mail")
 
-        # Verantwortlicher Besteller (Rückfragen)
-        _section("Verantwortlicher Besteller (Rückfragen)")
-        _field("besteller_name", "Name (leer = Inhaber)")
-        _field("besteller_durchwahl", "Telefondurchwahl")
-        _field("besteller_email", "E-Mail")
+        _mk_section(colR, rR, "Abrechnung")
+        _mk_combo(colR, rR, "rechnungsart", "Rechnungsart",
+                  ["Sofortige Rechnung", "Monatlich", "Quartalsrechnung"],
+                  default="Sofortige Rechnung")
+        _mk_combo(colR, rR, "status", "Status", ["aktiv", "inaktiv"], default="aktiv")
 
-        # Abrechnung
-        _section("Abrechnung")
-        _combo("rechnungsart", "Rechnungsart",
-               ["Sofortige Rechnung", "Monatlich", "Quartalsrechnung"],
-               default="Sofortige Rechnung")
-        _field("quartalsverguetung", "Quartalsvergütung Partnerprogramm")
-        _combo("status", "Status", ["aktiv", "inaktiv"], default="aktiv")
+        def _truthy(v):
+            return str(v or "").strip().lower() in ("ja", "yes", "1", "true", "x")
+        quart_touched = [False]
+        quart_bv = tk.BooleanVar(value=_truthy(initial.get("quartalsverguetung")))
+        tk.Checkbutton(colR, text="Quartalsvergütung Partnerprogramm", variable=quart_bv,
+                       bg="#ffffff", fg="#11304d", activebackground="#ffffff",
+                       font=("Arial", 9, "bold"), anchor="w",
+                       command=lambda: quart_touched.__setitem__(0, True)).grid(
+            row=rR[0], column=0, columnspan=2, sticky="w", pady=(6, 3))
+        rR[0] += 1
 
-        # Notizen
-        _section("Notizen")
-        notiz_txt = tk.Text(left, height=4, wrap="word")
-        notiz_txt.insert("1.0", str(initial.get("notizen", "") or ""))
-        notiz_txt.grid(row=_row[0], column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 12))
-        _row[0] += 1
+        def _apply_typ_defaults(val):
+            # Vorbelegung nur bei NEUEM Kunden und solange der Nutzer den Haken
+            # nicht selbst gesetzt hat: ZW -> nein, PK -> ja.
+            if is_new and not quart_touched[0]:
+                quart_bv.set(val == "PK")
 
-        # ── Rechte Spalte: Artikel-Rabatte + Analysen ─────────────────────────
-        right = tk.Frame(win, bg="#fafbff", highlightbackground="#d8e2ee", highlightthickness=1)
-        right.grid(row=1, column=1, sticky="nsew", padx=(0, 22), pady=(0, 12))
-        right.columnconfigure(0, weight=1)
-        right.rowconfigure(1, weight=1)
-        right.rowconfigure(4, weight=1)
+        # Bestehenden Typ markieren (stylt die Buttons); bei neuem Kunden bleibt
+        # bewusst nichts vorbelegt -> Typ muss aktiv gewählt werden.
+        if str(initial.get("kundentyp", "") or "") in ("PK", "ZW"):
+            _set_typ(initial["kundentyp"])
 
-        # --- Spezielle Artikel-Rabatte (schreiben in tbl_pk_konditionen) ---
-        tk.Label(right, text="Spezielle Artikel-Rabatte", font=("Arial", 12, "bold"),
-                 fg="#0b4a86", bg="#fafbff").grid(row=0, column=0, sticky="w", padx=14, pady=(12, 6))
-        rab_frame = tk.Frame(right, bg="#fafbff")
-        rab_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 4))
-        rab_frame.columnconfigure(0, weight=1)
-        rab_frame.rowconfigure(0, weight=1)
-        rab_tree = ttk.Treeview(rab_frame, columns=("pzn", "artikel", "rabatt"),
-                                show="headings", selectmode="browse", height=6)
-        for col, head, w in [("pzn", "PZN", 80), ("artikel", "Artikel", 180), ("rabatt", "Rabatt %", 70)]:
-            rab_tree.heading(col, text=head)
-            rab_tree.column(col, width=w, anchor=("e" if col == "rabatt" else "w"))
-        rab_tree.grid(row=0, column=0, sticky="nsew")
-        rab_sb = tk.Scrollbar(rab_frame, orient="vertical", command=rab_tree.yview)
-        rab_sb.grid(row=0, column=1, sticky="ns")
+        # ---- Reiter: Artikel-Rabatte ----
+        tab_rab = tk.Frame(nb, bg="#ffffff")
+        nb.add(tab_rab, text="  Artikel-Rabatte  ")
+        tab_rab.columnconfigure(0, weight=1)
+        tab_rab.rowconfigure(0, weight=1)
+        rab_tree = ttk.Treeview(tab_rab, columns=("pzn", "artikel", "rabatt"),
+                                show="headings", selectmode="browse")
+        for col, head_t, wdt in [("pzn", "PZN", 90), ("artikel", "Artikel", 260), ("rabatt", "Rabatt %", 80)]:
+            rab_tree.heading(col, text=head_t)
+            rab_tree.column(col, width=wdt, anchor=("e" if col == "rabatt" else "w"))
+        rab_tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
+        rab_sb = tk.Scrollbar(tab_rab, orient="vertical", command=rab_tree.yview)
+        rab_sb.grid(row=0, column=1, sticky="ns", pady=8)
         rab_tree.configure(yscrollcommand=rab_sb.set)
 
         nmg_artikel = []
@@ -6376,7 +6411,7 @@ LIMIT 500
         def _rab_load():
             for it in rab_tree.get_children():
                 rab_tree.delete(it)
-            knr = vars_["kundennummer"].get().strip()
+            knr = knr_var.get().strip()
             if not knr:
                 return
             try:
@@ -6395,7 +6430,7 @@ LIMIT 500
         _rab_load()
 
         def _rab_add():
-            if not vars_["kundennummer"].get().strip():
+            if not knr_var.get().strip():
                 messagebox.showinfo(title, "Bitte zuerst die Kundennummer eingeben.")
                 return
             if not nmg_artikel:
@@ -6443,27 +6478,26 @@ LIMIT 500
             for it in rab_tree.selection():
                 rab_tree.delete(it)
 
-        rab_btns = tk.Frame(right, bg="#fafbff")
-        rab_btns.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
+        rab_btns = tk.Frame(tab_rab, bg="#ffffff")
+        rab_btns.grid(row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8))
         tk.Button(rab_btns, text="➕ Rabatt", command=_rab_add, bg="#3867b7", fg="white",
                   relief="flat", padx=12, pady=6).pack(side="left")
         tk.Button(rab_btns, text="➖ Entfernen", command=_rab_del, padx=10, pady=6).pack(side="left", padx=(8, 0))
 
-        # --- Analysen ---
-        tk.Label(right, text="Analysen zu diesem Kunden", font=("Arial", 12, "bold"), fg="#0b4a86", bg="#fafbff").grid(row=3, column=0, sticky="w", padx=14, pady=(8, 6))
-
-        ana_frame = tk.Frame(right, bg="#fafbff")
-        ana_frame.grid(row=4, column=0, sticky="nsew", padx=8, pady=(0, 8))
-        ana_frame.columnconfigure(0, weight=1)
-        ana_frame.rowconfigure(0, weight=1)
-
-        ana_tree = ttk.Treeview(ana_frame, columns=("datum","typ","apotheke","treffer"), show="headings", selectmode="browse")
-        for col, head, w in [("datum","Datum",90),("typ","Typ",50),("apotheke","Name",160),("treffer","Treffer",60)]:
-            ana_tree.heading(col, text=head)
-            ana_tree.column(col, width=w, anchor="w")
-        ana_tree.grid(row=0, column=0, sticky="nsew")
-        ana_sb = tk.Scrollbar(ana_frame, orient="vertical", command=ana_tree.yview)
-        ana_sb.grid(row=0, column=1, sticky="ns")
+        # ---- Reiter: Analysen ----
+        tab_ana = tk.Frame(nb, bg="#ffffff")
+        nb.add(tab_ana, text="  Analysen  ")
+        tab_ana.columnconfigure(0, weight=1)
+        tab_ana.rowconfigure(0, weight=1)
+        ana_tree = ttk.Treeview(tab_ana, columns=("datum", "typ", "apotheke", "treffer"),
+                                show="headings", selectmode="browse")
+        for col, head_t, wdt in [("datum", "Datum", 90), ("typ", "Typ", 50),
+                                 ("apotheke", "Name", 200), ("treffer", "Treffer", 60)]:
+            ana_tree.heading(col, text=head_t)
+            ana_tree.column(col, width=wdt, anchor="w")
+        ana_tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
+        ana_sb = tk.Scrollbar(tab_ana, orient="vertical", command=ana_tree.yview)
+        ana_sb.grid(row=0, column=1, sticky="ns", pady=8)
         ana_tree.configure(yscrollcommand=ana_sb.set)
 
         ana_rows = {}
@@ -6472,17 +6506,20 @@ LIMIT 500
             for item in ana_tree.get_children():
                 ana_tree.delete(item)
             ana_rows.clear()
-            knr = vars_["kundennummer"].get().strip()
+            knr = knr_var.get().strip()
             kname = vars_["kundenname"].get().strip()
             if not knr and not kname:
                 return
             try:
                 with sqlite3.connect(DB_PATH) as con:
                     con.row_factory = sqlite3.Row
-                    rows = con.execute("""\nSELECT id, datum, COALESCE(datenquelle,'PK') as datenquelle,
-                               apotheke, quelldatei, ausgabedatei, nmg_treffer, kundennummer, kundenname\nFROM tbl_auswertungen
-                        WHERE (kundennummer=? AND kundennummer<>'')\nOR (kundenname=? AND kundenname<>'')
-                        ORDER BY datetime(datum) DESC LIMIT 30\n""", (knr, kname)).fetchall()
+                    rows = con.execute(
+                        "SELECT id, datum, COALESCE(datenquelle,'PK') as datenquelle, "
+                        "apotheke, quelldatei, ausgabedatei, nmg_treffer, kundennummer, kundenname "
+                        "FROM tbl_auswertungen "
+                        "WHERE (kundennummer=? AND kundennummer<>'') "
+                        "OR (kundenname=? AND kundenname<>'') "
+                        "ORDER BY datetime(datum) DESC LIMIT 30", (knr, kname)).fetchall()
                 for row in rows:
                     dq = _dq_label(row["datenquelle"])
                     datum = str(row["datum"] or "")[:10]
@@ -6523,7 +6560,7 @@ LIMIT 500
                 except Exception:
                     pass
             try:
-                import subprocess, sys
+                import sys
                 if sys.platform.startswith("win"):
                     import win32com.client
                     outlook = win32com.client.Dispatch("Outlook.Application")
@@ -6539,20 +6576,85 @@ LIMIT 500
             except Exception as exc:
                 messagebox.showerror(title, f"Outlook konnte nicht geöffnet werden:\n{exc}")
 
-        btn_ana_row = tk.Frame(right, bg="#fafbff")
-        btn_ana_row.grid(row=5, column=0, sticky="ew", padx=8, pady=(0, 8))
-        tk.Button(btn_ana_row, text="📧 Analyse per E-Mail senden", command=send_email_analyse,
+        ana_btns = tk.Frame(tab_ana, bg="#ffffff")
+        ana_btns.grid(row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8))
+        tk.Button(ana_btns, text="📧 Analyse per E-Mail senden", command=send_email_analyse,
                   bg="#3867b7", fg="white", relief="flat", padx=12, pady=6).pack(side="left")
-        tk.Button(btn_ana_row, text="🔄 Aktualisieren", command=load_analysen, padx=10, pady=6).pack(side="left", padx=(8, 0))
+        tk.Button(ana_btns, text="🔄 Aktualisieren", command=load_analysen, padx=10, pady=6).pack(side="left", padx=(8, 0))
 
+        # ---- Reiter: Verkaufte Artikel ----
+        tab_vk = tk.Frame(nb, bg="#ffffff")
+        nb.add(tab_vk, text="  Verkaufte Artikel  ")
+        tab_vk.columnconfigure(0, weight=1)
+        tab_vk.rowconfigure(0, weight=1)
+        vk_tree = ttk.Treeview(tab_vk, columns=("datum", "pzn", "artikel", "menge", "rabatt", "status"),
+                               show="headings", selectmode="browse")
+        for col, head_t, wdt, anc in [("datum", "Datum", 90, "w"), ("pzn", "PZN", 80, "w"),
+                                      ("artikel", "Artikel", 210, "w"), ("menge", "Menge", 60, "e"),
+                                      ("rabatt", "Rabatt %", 70, "e"), ("status", "Status", 90, "w")]:
+            vk_tree.heading(col, text=head_t)
+            vk_tree.column(col, width=wdt, anchor=anc)
+        vk_tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
+        vk_sb = tk.Scrollbar(tab_vk, orient="vertical", command=vk_tree.yview)
+        vk_sb.grid(row=0, column=1, sticky="ns", pady=8)
+        vk_tree.configure(yscrollcommand=vk_sb.set)
+        vk_info = tk.Label(tab_vk, text="", bg="#ffffff", fg="#555", font=("Arial", 9))
+        vk_info.grid(row=1, column=0, columnspan=2, sticky="w", padx=10, pady=(0, 6))
 
-        # ── Button-Leiste – immer am unteren Rand sichtbar ────────────────────
-        win.rowconfigure(2, weight=0)
+        def load_verkaufte():
+            for it in vk_tree.get_children():
+                vk_tree.delete(it)
+            knr = knr_var.get().strip()
+            if not knr:
+                vk_info.config(text="Keine Kundennummer angegeben.")
+                return
+            try:
+                with sqlite3.connect(DB_PATH) as con:
+                    if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                                       "AND name='tbl_bestellpositionen'").fetchone():
+                        vk_info.config(text="Noch keine Verkaufsdaten vorhanden.")
+                        return
+                    rows = con.execute(
+                        "SELECT b.datum, p.pzn, p.artikelname, p.menge, p.rabatt_prozent, b.status "
+                        "FROM tbl_bestellpositionen p "
+                        "JOIN tbl_bestellungen b ON b.id = p.bestell_id "
+                        "WHERE b.kundennummer = ? "
+                        "ORDER BY datetime(b.datum) DESC, p.id DESC LIMIT 300", (knr,)).fetchall()
+                gesamt = 0
+                for datum, pzn, art, menge, rab, status in rows:
+                    vk_tree.insert("", "end", values=(
+                        str(datum or "")[:10], pzn or "", art or "",
+                        menge if menge is not None else "",
+                        f"{rab:g}" if rab is not None else "", status or ""))
+                    gesamt += (menge or 0)
+                vk_info.config(text=(f"{len(rows)} Positionen · Gesamtmenge {gesamt}"
+                                     if rows else "Für diesen Kunden sind keine Verkäufe erfasst."))
+            except Exception as exc:
+                vk_info.config(text=f"Fehler beim Laden: {exc}")
+        load_verkaufte()
+
+        # ---- Reiter: Notizen ----
+        tab_notiz = tk.Frame(nb, bg="#ffffff")
+        nb.add(tab_notiz, text="  Notizen  ")
+        tab_notiz.columnconfigure(0, weight=1)
+        tab_notiz.rowconfigure(0, weight=1)
+        notiz_txt = tk.Text(tab_notiz, wrap="word", relief="flat",
+                            highlightbackground="#d8e2ee", highlightthickness=1)
+        notiz_txt.insert("1.0", str(initial.get("notizen", "") or ""))
+        notiz_txt.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        notiz_sb = tk.Scrollbar(tab_notiz, orient="vertical", command=notiz_txt.yview)
+        notiz_sb.grid(row=0, column=1, sticky="ns", pady=10)
+        notiz_txt.configure(yscrollcommand=notiz_sb.set)
+
+        # ── Button-Leiste ─────────────────────────────────────────────────────
         bar = tk.Frame(win, bg="#e8edf5", highlightbackground="#c5d3e8", highlightthickness=1)
-        bar.grid(row=2, column=0, columnspan=2, sticky="ew", padx=0, pady=0, ipady=4)
+        bar.grid(row=3, column=0, sticky="ew")
 
         def save_kunde():
-            knr = vars_["kundennummer"].get().strip()
+            if typ_var.get() not in ("PK", "ZW"):
+                messagebox.showinfo(title, "Bitte oben den Typ (PK oder ZW) wählen.")
+                return
+            knr = knr_var.get().strip()
             kname = vars_["kundenname"].get().strip()
             plz = vars_["plz"].get().strip()
             if not knr:
@@ -6577,6 +6679,7 @@ LIMIT 500
             _teile = [data.get("inhaber_titel", ""), data.get("inhaber_anrede", ""),
                       data.get("inhaber_vorname", ""), data.get("inhaber_zuname", "")]
             data["inhaber"] = " ".join(t for t in (x.strip() for x in _teile) if t)
+            data["quartalsverguetung"] = "ja" if quart_bv.get() else "nein"
             data["notizen"] = notiz_txt.get("1.0", "end").strip()
             data["bearbeiter"] = self.bearbeiter
 
@@ -6597,7 +6700,7 @@ LIMIT 500
                     con.execute(
                         f"UPDATE tbl_kunden_center SET {_sets},"
                         f"geaendert_am=CURRENT_TIMESTAMP WHERE id=:id", data)
-                # Artikel-Rabatte: die Kunden App ist alleiniger Editor je Kunde,
+                # Artikel-Rabatte: die Kunden-Maske ist alleiniger Editor je Kunde,
                 # daher alle Konditionen dieses Kunden neu setzen.
                 con.execute("""CREATE TABLE IF NOT EXISTS tbl_pk_konditionen(
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -6619,7 +6722,7 @@ LIMIT 500
                     con.execute(
                         "INSERT OR REPLACE INTO tbl_pk_konditionen"
                         "(kundennummer,kundenname,pzn,rabatt_prozent,quelle,letzte_aktualisierung) "
-                        "VALUES(?,?,?,?,?,?)", (knr, kname, pzn, rabv, "Kunden App", _jetzt))
+                        "VALUES(?,?,?,?,?,?)", (knr, kname, pzn, rabv, "Kunden", _jetzt))
                 con.commit()
             try:
                 with sqlite3.connect(DB_PATH) as con:
@@ -6627,18 +6730,18 @@ LIMIT 500
                     for col in ("kundennummer", "kundenname"):
                         if col not in cols_a:
                             con.execute(f"ALTER TABLE tbl_auswertungen ADD COLUMN {col} TEXT")
-                    con.execute("""
-                        UPDATE tbl_auswertungen SET kundennummer=?, kundenname=?
-                        WHERE (apotheke=? OR kundenname=?) AND (kundennummer IS NULL OR kundennummer='')
-                    """, (data["kundennummer"], data["kundenname"], data["kundenname"], data["kundenname"]))
+                    con.execute(
+                        "UPDATE tbl_auswertungen SET kundennummer=?, kundenname=? "
+                        "WHERE (apotheke=? OR kundenname=?) AND (kundennummer IS NULL OR kundennummer='')",
+                        (data["kundennummer"], data["kundenname"], data["kundenname"], data["kundenname"]))
                     con.commit()
             except Exception:
                 pass
-            win.destroy()  # schließt ohne Meldung
+            win.destroy()
 
-        tk.Button(bar, text="Abbrechen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8, 8), pady=4)
+        tk.Button(bar, text="Abbrechen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8, 12), pady=6)
         tk.Button(bar, text="✔  Speichern", command=save_kunde, bg="#0b4a86", fg="white",
-                  relief="flat", font=("Arial", 12, "bold"), padx=18, pady=7).pack(side="right", pady=4)
+                  relief="flat", font=("Arial", 11, "bold"), padx=18, pady=7).pack(side="right", pady=6)
 
 
     def show_nmg_rabatte_uebersicht(self):
@@ -6865,7 +6968,7 @@ LIMIT 500
         body.columnconfigure((0, 1, 2, 3), weight=1)
 
         app_tiles = [
-            ("\U0001f465", "Kunden App", "Kundenstamm, Analysen, E-Mail-Versand.", self.show_kunden_center, "#0b4a86"),
+            ("\U0001f465", "Kunden", "Kundenstamm, Analysen, E-Mail-Versand.", self.show_kunden_center, "#0b4a86"),
             ("\U0001f464", "Mitarbeiter", "Mitarbeiterdaten, Profile, Vertretungen.", self.show_mitarbeiter_center, "#6b4fb3"),
             ("\u2705", "ToDo", "Aufgaben, offene Punkte und Notizen.", self.show_todo_center, "#11823b"),
             ("\U0001f6d2", "Kasse", "Verkauf an Apotheken + Wareneingang.", self.open_kasse_app, "#8b5a00"),
@@ -7250,11 +7353,11 @@ LIMIT 500
             win.after(50, do_search)
 
     def show_kunden_center(self):
-        """Kunden App: Tabelle + Detail-Dialog mit Analysen und E-Mail."""
+        """Kunden: Tabelle + Detail-Dialog mit Analysen und E-Mail."""
         self._ensure_center_tables()
         self._ensure_kunden_center_extended()
         self.clear_page()
-        self._page_header("Kunden App", "Apotheken verwalten · Analysen einsehen · per E-Mail versenden.")
+        self._page_header("Kunden", "Apotheken verwalten · Analysen einsehen · per E-Mail versenden.")
 
         body = tk.Frame(self.page, bg="#ffffff")
         body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
@@ -7374,7 +7477,7 @@ LIMIT 500
             row = row_map.get(sel[0])
             if not row:
                 return
-            if not messagebox.askyesno("Kunden App", f"Kunde '{row.get('kundenname','')}' wirklich löschen?"):
+            if not messagebox.askyesno("Kunden", f"Kunde '{row.get('kundenname','')}' wirklich löschen?"):
                 return
             with sqlite3.connect(DB_PATH) as con:
                 con.execute("DELETE FROM tbl_kunden_center WHERE id=?", (row["id"],))
@@ -7388,7 +7491,7 @@ LIMIT 500
         tk.Button(toolbar, text="Löschen", command=delete_kunde, padx=14, pady=7).pack(side="left", padx=(0, 6))
         tk.Button(toolbar, text="Aktualisieren", command=lambda: reload(search_var.get().strip()), padx=14, pady=7).pack(side="left")
 
-        self.status.set("Kunden App bereit.")
+        self.status.set("Kunden bereit.")
 
     def open_kasse_app(self):
         """Kasse als EIGENEN Prozess starten (NMGone.exe --kasse bzw. start.py
