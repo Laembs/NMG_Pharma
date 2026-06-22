@@ -5,6 +5,15 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V1.2 SP1", "2026-06-22", [
+        "Vorbestellungen: neues Sammelfenster 'Mehrere in Verkauf uebernehmen' - alle offenen Vorbestellungen mit Menge und aktuellem Bestand, Uebernehmen-Menge je Zeile anpassbar (0 = ueberspringen), Uebernahme in einem Rutsch (ein Kunde gleichzeitig).",
+        "Verkaeufe + Verkauf: Suche und Anzeige nach Auftrag-Nr (neue Auftrag-Spalte in der Liste). Im Verkauf nur Ansicht - es wird kein neuer Auftrag angelegt.",
+        "Verkaeufe-Detail zeigt nur noch echte Bestellungen (Vorbestellungen gehoeren in den Vorbestellungen-Reiter); 'Pos.'-Zaehler und Gesamt-Netto rechnen nur Bestellungen.",
+        "Kunde: 'Gekaufte Artikel' zeigt jetzt ALLE vom Kunden gekauften Artikel mit waehlbarem Zeitraum (3 / 6 / 12 Monate oder freie Eingabe) statt nur Top-10/12 Monate.",
+        "Wareneingang: EK wird nicht mehr abgefragt - er entspricht immer dem APU aus den Stammdaten. Verfalldatum darf jetzt auch ohne Trenner eingegeben werden (1226 -> 12/26, 122026 -> 12/2026).",
+        "Kasse startet aus NMGone als eigenes Programm mit getrenntem Taskleisten-Icon (eigene App-ID NMG.Kasse); NMGone und Kasse sind dadurch getrennte Taskleisten-Gruppen.",
+        "Umbenennung 'Kunden-Center' -> 'Kunden App' (Kacheln, Titel, Dialoge).",
+    ]),
     ("V1.2.0", "2026-06-22", [
         "Neuer Meilenstein mit der NMG Kassen-App - als eigenes Programm und eigene Verknuepfung; eine NMGone-Installation bringt die Kasse mit (NMGone.exe --kasse).",
         "Kasse: Verkauf an Apotheken (globale Kunden-/Artikelsuche, Charge/Verfall aus Lager, Rabatt-Kaskade PK->NMG->manuell, Liefertermin-Automatik).",

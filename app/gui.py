@@ -7124,49 +7124,32 @@ LIMIT 500
         self.status.set("Kunden App bereit.")
 
     def open_kasse_app(self):
-        """Kasse-App (Verkauf + Wareneingang) als eigenes Toplevel-Fenster mit
-        eigenem Taskleisten-Icon. UI liegt in app/kasse_app.py (KassePanel) -
-        dieselbe Klasse nutzt die eigenstaendige Kasse-.exe (start_kasse.py).
-        Singleton: zweiter Aufruf bringt das vorhandene Fenster nach vorn.
+        """Kasse als EIGENEN Prozess starten (NMGone.exe --kasse bzw. start.py
+        --kasse). Nur so bekommt die Kasse ein eigenes Taskleisten-Icon (eigene
+        AppUserModelID NMG.Kasse) getrennt von NMGone. DB wird via WAL geteilt.
+        Zweiter Aufruf bringt keinen weiteren Start, solange der Prozess laeuft.
         """
-        existing = getattr(self, "_kasse_app_window", None)
-        if existing is not None:
-            try:
-                if existing.winfo_exists():
-                    existing.deiconify()
-                    existing.lift()
-                    existing.focus_force()
-                    return
-            except Exception:
-                pass
-
-        from .kasse_app import KassePanel
-
-        win = tk.Toplevel(self)
-        win.title("NMG Kasse")
-        win.geometry("1040x660")
-        win.minsize(860, 580)
-        win.configure(bg="#f5f7fb")
+        import subprocess
+        proc = getattr(self, "_kasse_proc", None)
+        if proc is not None and proc.poll() is None:
+            messagebox.showinfo(
+                "NMG Kasse",
+                "Die Kasse läuft bereits in einem eigenen Fenster.\n"
+                "Bitte über die Taskleiste nach vorn holen.", parent=self)
+            return
         try:
-            win.iconbitmap(str(ASSETS_DIR / "kasse.ico"))
-        except Exception:
-            pass
-        self._kasse_app_window = win
-
-        def on_close():
-            self._kasse_app_window = None
-            win.destroy()
-        win.protocol("WM_DELETE_WINDOW", on_close)
-
-        def zu_nmgone():
-            haupt = self.winfo_toplevel()
-            haupt.deiconify()
-            haupt.lift()
-            haupt.focus_force()
-
-        KassePanel(win, on_close=on_close, nmgone_action=zu_nmgone).pack(fill="both", expand=True)
-        win.lift()
-        win.focus_force()
+            flags = 0
+            if sys.platform == "win32":
+                flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable, "--kasse"]
+            else:
+                start_py = Path(__file__).resolve().parent.parent / "start.py"
+                cmd = [sys.executable, str(start_py), "--kasse"]
+            self._kasse_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
+        except Exception as exc:
+            messagebox.showerror("NMG Kasse", f"Kasse konnte nicht gestartet werden:\n{exc}",
+                                 parent=self)
 
     def show_todo_center(self):
         cols = ("id", "titel", "bereich", "verantwortlich", "faellig_am", "status", "prioritaet")
@@ -11605,6 +11588,14 @@ def _show_splash_screen():
 
 
 def main():
+    # Eigene AppUserModelID -> NMGone und die Kasse (NMG.Kasse) bilden getrennte
+    # Taskleisten-Gruppen mit eigenem Icon. Muss VOR dem ersten Fenster gesetzt werden.
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("NMG.NMGone")
+        except Exception:
+            pass
     # SP11: erst Splash, dann Hauptprogramm. Wenn der User die Splash
     # ueber X/Escape schliesst, wird das Hauptprogramm nicht gestartet.
     if not _show_splash_screen():

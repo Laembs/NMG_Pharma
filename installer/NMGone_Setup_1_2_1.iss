@@ -1,6 +1,6 @@
 #define MyAppName "NMGone"
-#define MyAppDisplayName "NMGone V1.2.0"
-#define MyAppVersion "1.2.0"
+#define MyAppDisplayName "NMGone V1.2 SP1"
+#define MyAppVersion "1.2.1"
 #define MyAppPublisher "Laembs Software"
 #define MyAppExeName "NMGone.exe"
 #define MyAppId "{{8A2C6F40-1A77-4C2E-9F33-NMGONE000100}"
@@ -17,17 +17,17 @@ DefaultDirName={localappdata}\Programs\NMGone
 DefaultGroupName=NMGone
 DisableProgramGroupPage=yes
 OutputDir=..\dist_setup
-OutputBaseFilename=NMGone_Setup_1_2_0
+OutputBaseFilename=NMGone_Setup_1_2_1
 SetupIconFile=..\assets\NMGone.ico
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\NMGone.exe
-VersionInfoVersion=1.2.0.0
+VersionInfoVersion=1.2.1.0
 VersionInfoCompany=Laembs Software
 VersionInfoDescription=NMGone Setup
 VersionInfoProductName=NMGone
-VersionInfoProductVersion=1.2.0
+VersionInfoProductVersion=1.2.1
 CloseApplications=yes
 RestartApplications=no
 
@@ -112,14 +112,14 @@ var
   Msg: String;
 begin
   RunOldUninstaller(HKCU);
-  Msg := 'NMGone V1.2.0 wird installiert.' + #13#10#13#10 +
-         'Neuer Meilenstein V1.2.0 mit der Kassen-App.' + #13#10#13#10 +
-         'NMG Kasse (eigenes Programm + eigene Verknuepfung):' + #13#10 +
-         '- Verkauf, Vorbestellungen, Verkaeufe, Artikel, Wareneingang' + #13#10 +
-         '- Lagerbestand mit Charge/Verfall, Rabatt-Kaskade' + #13#10 +
-         '- Auftragsbestaetigung (Druck/E-Mail), MSK-Status' + #13#10 +
-         '- Aenderungs-Protokoll (wer/was/wann)' + #13#10#13#10 +
-         'Eine Installation bringt NMGone UND die Kasse mit.';
+  Msg := 'NMGone V1.2 SP1 wird installiert.' + #13#10#13#10 +
+         'Service Pack 1 fuer die Kassen-App:' + #13#10 +
+         '- Vorbestellungen: Sammelfenster (mehrere auf einmal in den Verkauf)' + #13#10 +
+         '- Verkaeufe/Verkauf: Suche + Anzeige nach Auftrag-Nr' + #13#10 +
+         '- Gekaufte Artikel pro Kunde mit Zeitraum 3/6/12 Monate (oder frei)' + #13#10 +
+         '- Wareneingang: EK = APU automatisch; Verfall auch ohne Trenner (1226)' + #13#10 +
+         '- Kasse als eigenes Programm mit getrenntem Taskleisten-Icon' + #13#10 +
+         '- "Kunden-Center" heisst jetzt "Kunden App"';
   MsgBox(Msg, mbInformation, MB_OK);
   Result := True;
 end;

@@ -99,10 +99,19 @@ def _make_treeview_sortable(tree):
 def _normalize_verfall(t):
     """Leer -> ''. Gueltiges Verfalldatum (MM/JJ, MM/JJJJ, auch '.' als Trenner,
     einstelliger Monat) -> 'MM/JJ' bzw. 'MM/JJJJ' mit aufgefuelltem Monat.
+    Auch ohne Trenner: '1226' -> '12/26', '0127' -> '01/27', '122026' -> '12/2026'.
     Ungueltig (z.B. Monat 13) -> None."""
-    t = str(t or "").strip().replace(".", "/").replace("-", "/")
+    t = str(t or "").strip().replace(".", "/").replace("-", "/").replace(" ", "")
     if not t:
         return ""
+    # Reine Ziffernfolge ohne Trenner -> Monat/Jahr nach Laenge aufteilen.
+    if "/" not in t and t.isdigit():
+        if len(t) in (3, 4):       # M+JJ / MM+JJ
+            t = f"{t[:-2]}/{t[-2:]}"
+        elif len(t) in (5, 6):     # M+JJJJ / MM+JJJJ
+            t = f"{t[:-4]}/{t[-4:]}"
+        else:
+            return None
     teile = [x for x in t.split("/") if x != ""]
     if len(teile) != 2:
         return None
@@ -606,9 +615,22 @@ class KassePanel(tk.Frame):
 
     # ================================================================= Verkauf
     def _build_verkauf(self, parent):
+        # Auftrag-Nr nachschlagen (read-only Detailansicht, KEIN neuer Auftrag).
+        nrbar = tk.Frame(parent, bg=BG)
+        nrbar.pack(fill="x", padx=8, pady=(10, 0))
+        tk.Label(nrbar, text="Auftrag-Nr anzeigen:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        self._vk_nr_var = tk.StringVar()
+        en = tk.Entry(nrbar, textvariable=self._vk_nr_var, width=8)
+        en.pack(side="left", padx=(4, 4))
+        en.bind("<Return>", lambda _e: self._vk_open_auftrag_nr())
+        tk.Button(nrbar, text="Anzeigen", command=self._vk_open_auftrag_nr,
+                  font=("Arial", 8), padx=6, pady=1).pack(side="left")
+        tk.Label(nrbar, text="(nur ansehen – legt keinen Auftrag an)", bg=BG, fg="#999",
+                 font=("Arial", 8)).pack(side="left", padx=(8, 0))
+
         kopf = tk.LabelFrame(parent, text="Kunde", bg=BG, fg=ACCENT,
                              font=("Arial", 10, "bold"), padx=12, pady=8)
-        kopf.pack(fill="x", padx=8, pady=(10, 6))
+        kopf.pack(fill="x", padx=8, pady=(6, 6))
 
         khead = tk.Frame(kopf, bg=BG)
         khead.pack(fill="x")
@@ -617,7 +639,7 @@ class KassePanel(tk.Frame):
                   font=("Arial", 8), padx=6, pady=1).pack(side="left", padx=(10, 0))
         tk.Button(khead, text="📥 Kundenliste importieren", command=self._import_kunden,
                   font=("Arial", 8), padx=6, pady=1).pack(side="right")
-        tk.Button(khead, text="📊 Top-Artikel (12 Mon.)", command=self._show_kunde_top,
+        tk.Button(khead, text="📊 Gekaufte Artikel", command=self._show_kunde_top,
                   font=("Arial", 8), padx=6, pady=1).pack(side="right", padx=(0, 6))
         self.vk_kunde_search = SearchBox(
             kopf,
@@ -754,20 +776,24 @@ class KassePanel(tk.Frame):
                 "JOIN tbl_bestellungen b ON b.id = p.bestell_id "
                 "WHERE p.bestellart='Vorbestellung' AND b.kundennummer=?", (knr,)).fetchone()[0]
 
-    def _kunde_top_artikel(self, knr, monate=12, limit=10):
-        """Top-Artikel eines Kunden nach gekaufter Menge in den letzten N Monaten.
-        Nur echte Bestellungen, keine stornierten Verkaeufe."""
+    def _kunde_top_artikel(self, knr, monate=12, limit=None):
+        """Vom Kunden gekaufte Artikel nach Menge in den letzten N Monaten.
+        Nur echte Bestellungen, keine stornierten Verkaeufe. limit=None -> alle."""
         from datetime import date, timedelta
         cutoff = (date.today() - timedelta(days=int(monate * 30.4))).isoformat()
+        sql = (
+            "SELECT p.pzn, p.artikelname, SUM(p.menge), COUNT(DISTINCT b.id), "
+            "SUM(p.apu*p.menge*(1-COALESCE(p.rabatt_prozent,0)/100.0)) "
+            "FROM tbl_bestellpositionen p JOIN tbl_bestellungen b ON b.id=p.bestell_id "
+            "WHERE b.kundennummer=? AND p.bestellart='Bestellung' "
+            "AND COALESCE(b.status,'offen')<>'storniert' AND b.datum >= ? "
+            "GROUP BY p.pzn, p.artikelname ORDER BY SUM(p.menge) DESC, SUM(p.apu*p.menge) DESC")
+        params = [knr, cutoff]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
         with self._conn() as con:
-            return con.execute(
-                "SELECT p.pzn, p.artikelname, SUM(p.menge), COUNT(DISTINCT b.id), "
-                "SUM(p.apu*p.menge*(1-COALESCE(p.rabatt_prozent,0)/100.0)) "
-                "FROM tbl_bestellpositionen p JOIN tbl_bestellungen b ON b.id=p.bestell_id "
-                "WHERE b.kundennummer=? AND p.bestellart='Bestellung' "
-                "AND COALESCE(b.status,'offen')<>'storniert' AND b.datum >= ? "
-                "GROUP BY p.pzn, p.artikelname ORDER BY SUM(p.menge) DESC, SUM(p.apu*p.menge) DESC "
-                "LIMIT ?", (knr, cutoff, limit)).fetchall()
+            return con.execute(sql, params).fetchall()
 
     def _show_kunde_top(self):
         top = self.winfo_toplevel()
@@ -775,42 +801,65 @@ class KassePanel(tk.Frame):
             messagebox.showinfo("Top-Artikel", "Bitte zuerst einen Kunden wählen.", parent=top)
             return
         knr = self.vk_kunde.get("kundennummer")
-        rows = self._kunde_top_artikel(knr)
         win = tk.Toplevel(top)
-        win.title("Top-Artikel")
+        win.title("Gekaufte Artikel")
         win.configure(bg=BG)
         win.transient(top)
-        tk.Label(win, text=f"Top-Artikel · {self.vk_kunde.get('kundenname', '')}",
+        win.geometry("680x460")
+        tk.Label(win, text=f"Gekaufte Artikel · {self.vk_kunde.get('kundenname', '')}",
                  font=("Arial", 13, "bold"), fg=ACCENT, bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
-        tk.Label(win, text="Meistgekaufte Artikel der letzten 12 Monate (nur abgeschlossene "
-                          "Verkäufe, ohne Stornos).", font=("Arial", 9), fg="#555",
-                 bg=BG).pack(padx=18, anchor="w", pady=(0, 8))
-        if not rows:
-            tk.Label(win, text="Keine Käufe in den letzten 12 Monaten.", font=("Arial", 10),
-                     fg="#888", bg=BG).pack(padx=18, pady=(0, 14))
-        else:
-            tf = tk.Frame(win, bg=BG)
-            tf.pack(fill="both", expand=True, padx=18, pady=(0, 8))
-            cols = ("rang", "pzn", "artikel", "menge", "anzahl", "umsatz")
-            heads = {"rang": "#", "pzn": "PZN", "artikel": "Artikel", "menge": "Menge",
-                     "anzahl": "Bestellungen", "umsatz": "Umsatz netto"}
-            tree = ttk.Treeview(tf, columns=cols, show="headings", height=min(10, len(rows)))
-            for c in cols:
-                tree.heading(c, text=heads[c])
-                if c == "artikel":
-                    w = 240
-                elif c == "rang":
-                    w = 30
-                else:
-                    w = 90
-                tree.column(c, width=w, anchor="w")
-            tree.pack(side="left", fill="both", expand=True)
-            sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
-            sb.pack(side="right", fill="y")
-            tree.configure(yscrollcommand=sb.set)
-            _make_treeview_sortable(tree)
+
+        # Zeitraum-Auswahl: 3 / 6 / 12 Monate oder freie Eingabe.
+        zrow = tk.Frame(win, bg=BG)
+        zrow.pack(fill="x", padx=18, pady=(2, 6))
+        tk.Label(zrow, text="Zeitraum:", font=("Arial", 9, "bold"), bg=BG).pack(side="left")
+        zeit_var = tk.StringVar(value="12 Monate")
+        ttk.Combobox(zrow, textvariable=zeit_var, width=12, state="readonly",
+                     values=("3 Monate", "6 Monate", "12 Monate", "Frei")).pack(side="left", padx=(4, 8))
+        tk.Label(zrow, text="frei (Monate):", font=("Arial", 9), bg=BG).pack(side="left")
+        frei_var = tk.StringVar(value="12")
+        tk.Entry(zrow, textvariable=frei_var, width=5).pack(side="left", padx=(4, 8))
+        info_lbl = tk.Label(win, text="", font=("Arial", 9), fg="#555", bg=BG)
+        info_lbl.pack(padx=18, anchor="w", pady=(0, 6))
+
+        tf = tk.Frame(win, bg=BG)
+        tf.pack(fill="both", expand=True, padx=18, pady=(0, 8))
+        cols = ("rang", "pzn", "artikel", "menge", "anzahl", "umsatz")
+        heads = {"rang": "#", "pzn": "PZN", "artikel": "Artikel", "menge": "Menge",
+                 "anzahl": "Bestellungen", "umsatz": "Umsatz netto"}
+        tree = ttk.Treeview(tf, columns=cols, show="headings")
+        for c in cols:
+            tree.heading(c, text=heads[c])
+            w = 240 if c == "artikel" else (30 if c == "rang" else 90)
+            tree.column(c, width=w, anchor="w")
+        tree.pack(side="left", fill="both", expand=True)
+        sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
+        sb.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=sb.set)
+        _make_treeview_sortable(tree)
+
+        def _monate():
+            if zeit_var.get() == "Frei":
+                try:
+                    m = int(frei_var.get().strip())
+                    return m if m > 0 else 12
+                except ValueError:
+                    return 12
+            return {"3 Monate": 3, "6 Monate": 6, "12 Monate": 12}.get(zeit_var.get(), 12)
+
+        def _refresh(*_):
+            monate = _monate()
+            rows = self._kunde_top_artikel(knr, monate=monate, limit=None)
+            tree.delete(*tree.get_children())
             for i, (pzn, art, menge, anzahl, umsatz) in enumerate(rows, 1):
                 tree.insert("", "end", values=(i, pzn, art, int(menge or 0), anzahl, _eur(umsatz)))
+            info_lbl.config(text=(f"{len(rows)} Artikel in den letzten {monate} Monaten "
+                                  "(nur abgeschlossene Verkäufe, ohne Stornos)."
+                                  if rows else f"Keine Käufe in den letzten {monate} Monaten."))
+
+        zeit_var.trace_add("write", _refresh)
+        frei_var.trace_add("write", lambda *_: zeit_var.get() == "Frei" and _refresh())
+        _refresh()
         tk.Button(win, text="Schließen", command=win.destroy, padx=14, pady=4).pack(pady=(2, 14))
         self._restyle_buttons(win)
         win.lift()
@@ -862,6 +911,21 @@ class KassePanel(tk.Frame):
         self.vk_kunde = None
         self.vk_kunde_search.clear()
         self._render_kunde_card(None)
+
+    def _vk_open_auftrag_nr(self):
+        """Im Verkauf eine bestehende Auftrag-Nr nur ANZEIGEN (kein neuer Auftrag)."""
+        bid = self._auftrag_id_eingabe(self._vk_nr_var.get())
+        if bid is None:
+            messagebox.showinfo("Auftrag anzeigen", "Bitte eine Auftrag-Nr (Zahl) eingeben.",
+                                parent=self.winfo_toplevel())
+            return
+        with self._conn() as con:
+            ok = con.execute("SELECT 1 FROM tbl_bestellungen WHERE id=?", (bid,)).fetchone()
+        if not ok:
+            messagebox.showinfo("Auftrag anzeigen", f"Kein Auftrag #{bid} gefunden.",
+                                parent=self.winfo_toplevel())
+            return
+        self._verkauf_detail_window(bid)
 
     def _vk_pick_artikel(self, pzn):
         det = self._artikel_details(pzn)
@@ -1220,6 +1284,9 @@ class KassePanel(tk.Frame):
         bar.pack(fill="x", padx=8, pady=(10, 4))
         self.vb_info = tk.Label(bar, text="", bg=BG, fg=ACCENT, font=("Arial", 11, "bold"))
         self.vb_info.pack(side="left")
+        tk.Button(bar, text="➡ Mehrere in Verkauf übernehmen", command=self._vb_bulk_dialog,
+                  bg="#11823b", fg="white", font=("Arial", 9, "bold"), padx=10, pady=2).pack(
+                      side="left", padx=(16, 0))
         tk.Button(bar, text="🔄 Aktualisieren", command=self._refresh_vorbestellungen,
                   font=("Arial", 9), padx=8, pady=2).pack(side="right")
 
@@ -1472,15 +1539,203 @@ class KassePanel(tk.Frame):
                             "hinzufügen, dann „Verkauf speichern“.", parent=self.winfo_toplevel())
         return True
 
+    def _vb_bulk_dialog(self):
+        """Sammelfenster: alle offenen Vorbestellungen mit Bestand; je Zeile eine
+        Übernehmen-Menge (Doppelklick = ändern, 0 = überspringen). „Übernehmen“ lädt
+        alle Zeilen mit Menge>0 in den Verkauf (nur EIN Kunde gleichzeitig)."""
+        top = self.winfo_toplevel()
+        with self._conn() as con:
+            rows = con.execute(
+                "SELECT p.id, COALESCE(b.kundennummer,''), COALESCE(b.apotheke,''), p.pzn, "
+                "p.artikelname, p.menge, "
+                "(SELECT COALESCE(SUM(menge),0) FROM tbl_lagerbestand l WHERE l.pzn=p.pzn) "
+                "FROM tbl_bestellpositionen p JOIN tbl_bestellungen b ON b.id=p.bestell_id "
+                "WHERE p.bestellart='Vorbestellung' ORDER BY b.apotheke, p.liefertermin, b.datum"
+            ).fetchall()
+        if not rows:
+            messagebox.showinfo("Vorbestellungen", "Keine offenen Vorbestellungen vorhanden.", parent=top)
+            return
+
+        win = tk.Toplevel(top)
+        win.title("Vorbestellungen übernehmen")
+        win.configure(bg=BG)
+        win.transient(top)
+        win.geometry("820x520")
+        tk.Label(win, text="Vorbestellungen in den Verkauf übernehmen", font=("Arial", 13, "bold"),
+                 fg=ACCENT, bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
+        tk.Label(win, text="Übernehmen-Menge je Zeile per Doppelklick ändern (0 = überspringen). "
+                          "Es kann immer nur EIN Kunde gleichzeitig übernommen werden.",
+                 font=("Arial", 9), fg="#555", bg=BG).pack(padx=18, anchor="w")
+
+        srow = tk.Frame(win, bg=BG)
+        srow.pack(fill="x", padx=18, pady=(6, 4))
+        tk.Label(srow, text="Filter (Kunde / Artikel / PZN):", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        filt_var = tk.StringVar()
+        tk.Entry(srow, textvariable=filt_var, width=26).pack(side="left", padx=(6, 8))
+
+        tf = tk.Frame(win, bg=BG)
+        tf.pack(fill="both", expand=True, padx=18, pady=(0, 6))
+        cols = ("kunde", "pzn", "artikel", "offen", "bestand", "uebernehmen")
+        heads = {"kunde": "Kunde", "pzn": "PZN", "artikel": "Artikel", "offen": "Vorbestellt",
+                 "bestand": "Bestand", "uebernehmen": "Übernehmen"}
+        tree = ttk.Treeview(tf, columns=cols, show="headings")
+        for c in cols:
+            tree.heading(c, text=heads[c])
+            w = 200 if c == "artikel" else (150 if c == "kunde" else 90)
+            tree.column(c, width=w, anchor="w")
+        tree.tag_configure("skip", foreground="#999")
+        tree.pack(side="left", fill="both", expand=True)
+        sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
+        sb.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=sb.set)
+        _make_treeview_sortable(tree)
+
+        # state: iid -> {pid, knr, kunde, pzn, artikel, offen, bestand, take}
+        state = {}
+        for pid, knr, apotheke, pzn, artikel, menge, bestand in rows:
+            state[pid] = {"pid": pid, "knr": knr, "kunde": apotheke, "pzn": pzn,
+                          "artikel": artikel, "offen": int(menge or 0),
+                          "bestand": int(bestand or 0), "take": int(menge or 0)}
+
+        def _fill():
+            tree.delete(*tree.get_children())
+            f = filt_var.get().strip().lower()
+            for pid, d in state.items():
+                if f and f not in " ".join(str(x).lower() for x in (d["kunde"], d["pzn"], d["artikel"])):
+                    continue
+                tags = () if d["take"] > 0 else ("skip",)
+                tree.insert("", "end", iid=str(pid), tags=tags,
+                            values=(d["kunde"], d["pzn"], d["artikel"], d["offen"],
+                                    d["bestand"], d["take"]))
+
+        filt_var.trace_add("write", lambda *_: _fill())
+
+        def _edit_take(_e=None):
+            sel = tree.selection()
+            if not sel:
+                return
+            d = state.get(int(sel[0]))
+            if not d:
+                return
+            neu = simpledialog.askinteger(
+                "Übernehmen-Menge",
+                f"{d['artikel'] or d['pzn']}\nVorbestellt {d['offen']} · Bestand {d['bestand']}\n\n"
+                "Wie viel übernehmen? (0 = überspringen)",
+                parent=win, initialvalue=d["take"], minvalue=0, maxvalue=d["offen"])
+            if neu is None:
+                return
+            d["take"] = neu
+            _fill()
+        tree.bind("<Double-1>", _edit_take)
+
+        def _set_all(full):
+            for d in state.values():
+                d["take"] = d["offen"] if full else 0
+            _fill()
+
+        def _uebernehmen():
+            gewaehlt = [(d["pid"], d["take"], d["knr"], d["kunde"])
+                        for d in state.values() if d["take"] > 0]
+            if not gewaehlt:
+                messagebox.showinfo("Übernehmen", "Keine Zeile mit Menge > 0 gewählt.", parent=win)
+                return
+            knrs = {g[2] for g in gewaehlt}
+            if len(knrs) > 1:
+                kunden = ", ".join(sorted({g[3] or g[2] for g in gewaehlt}))
+                messagebox.showwarning(
+                    "Mehrere Kunden",
+                    "Es können nur Vorbestellungen EINES Kunden gleichzeitig übernommen werden.\n\n"
+                    f"Aktuell gewählt: {kunden}\n\nBitte über den Filter auf einen Kunden eingrenzen.",
+                    parent=win)
+                return
+            if self._vb_load_many([(g[0], g[1]) for g in gewaehlt]):
+                win.destroy()
+
+        btns = tk.Frame(win, bg=BG)
+        btns.pack(fill="x", padx=18, pady=(0, 14))
+        tk.Button(btns, text="➡ Übernehmen", command=_uebernehmen, bg="#11823b", fg="white",
+                  font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="left")
+        tk.Button(btns, text="Alle = volle Menge", command=lambda: _set_all(True),
+                  padx=10, pady=4).pack(side="left", padx=(8, 0))
+        tk.Button(btns, text="Alle = 0", command=lambda: _set_all(False),
+                  padx=10, pady=4).pack(side="left", padx=(6, 0))
+        tk.Button(btns, text="Abbrechen", command=win.destroy, padx=12, pady=4).pack(side="right")
+        _fill()
+        self._restyle_buttons(win)
+        win.lift()
+        win.focus_force()
+
+    def _vb_load_many(self, pairs):
+        """Laedt mehrere Vorbestellungen (Liste (pid, menge)) in den Verkauf-Reiter.
+        Alle muessen zum selben Kunden gehoeren. Originale werden erst beim Speichern
+        des Verkaufs reduziert/geloescht (_vb_source). True = uebernommen."""
+        top = self.winfo_toplevel()
+        geladen = []
+        with self._conn() as con:
+            for pid, menge in pairs:
+                row = con.execute(
+                    "SELECT p.pzn, p.artikelname, p.df, p.pck, p.apu, p.rabatt_prozent, "
+                    "p.rabatt_quelle, b.kundennummer, COALESCE(b.apotheke,''), p.menge, "
+                    "COALESCE(p.lieferzeit,''), COALESCE(p.liefertermin,'') "
+                    "FROM tbl_bestellpositionen p JOIN tbl_bestellungen b ON b.id=p.bestell_id "
+                    "WHERE p.id=?", (pid,)).fetchone()
+                if row:
+                    geladen.append((pid, menge, row))
+        if not geladen:
+            return False
+        knrs = {g[2][7] for g in geladen}
+        if len(knrs) > 1:
+            messagebox.showwarning("Mehrere Kunden",
+                                   "Nur Vorbestellungen eines Kunden können gemeinsam übernommen werden.",
+                                   parent=top)
+            return False
+        knr = next(iter(knrs))
+        # Konflikt mit bereits laufendem Verkauf (anderer Kunde)?
+        if (self.vk_kunde and self.vk_kunde.get("kundennummer") != knr) or \
+           (self.vk_positions and not self.vk_kunde):
+            messagebox.showwarning(
+                "Unterschiedlicher Kunde im Verkauf",
+                f"Im Verkauf liegt bereits ein anderer Kunde "
+                f"({(self.vk_kunde or {}).get('kundenname', 'unbekannt')}).\n\n"
+                "Bitte den laufenden Auftrag erst löschen oder abschließen.", parent=top)
+            return False
+        apotheke = geladen[0][2][8]
+        det = self._kunde_details(knr)
+        self.vk_kunde = {
+            "kundennummer": knr, "kundenname": det.get("kundenname") or apotheke,
+            "plz": det.get("plz", ""), "ort": det.get("ort", ""), "strasse": det.get("strasse", ""),
+            "inhaber": det.get("inhaber", ""), "telefon": det.get("telefon", ""),
+            "email": det.get("email", ""),
+        }
+        self._render_kunde_card(self.vk_kunde)
+        for pid, menge, row in geladen:
+            pzn, artikel, df, pck, apu, rabatt, rquelle, _knr, _apo, orig_menge, lz, termin = row
+            self.vk_positions.append({
+                "pzn": pzn, "artikelname": artikel, "df": df or "", "pck": pck or "", "apu": apu,
+                "menge": menge, "rabatt": rabatt or 0, "rabatt_quelle": rquelle or "manuell",
+                "charge": "", "verfall": "", "bestellart": "Bestellung",
+                "lieferzeit": lz, "liefertermin": termin,
+                "_vb_source": pid, "_vb_orig_menge": orig_menge or 0,
+            })
+        self._vk_render_positions()
+        self._show_view("verkauf")
+        messagebox.showinfo("Vorbestellungen",
+                            f"{len(geladen)} Vorbestellung(en) in den Verkauf übernommen. "
+                            "Charge/Bestand je Position wählen, dann „Verkauf speichern“.", parent=top)
+        return True
+
     # =============================================================== Verkaeufe
     def _build_verkaeufe(self, parent):
         bar = tk.Frame(parent, bg=BG)
         bar.pack(fill="x", padx=8, pady=(10, 4))
-        tk.Label(bar, text="Suche (Kunde):", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        tk.Label(bar, text="Suche (Kunde / Auftrag-Nr):", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
         self._vh_filter_var = tk.StringVar()
         e = tk.Entry(bar, textvariable=self._vh_filter_var, width=24)
         e.pack(side="left", padx=(6, 8))
         e.bind("<KeyRelease>", lambda _e: self._refresh_verkaeufe())
+        e.bind("<Return>", lambda _e: self._verkaeufe_open_nr())
+        tk.Button(bar, text="Auftrag öffnen", command=self._verkaeufe_open_nr,
+                  font=("Arial", 8), padx=6, pady=1).pack(side="left", padx=(0, 8))
         tk.Label(bar, text="Status:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
         self._vh_status_var = tk.StringVar(value="Alle")
         ttk.Combobox(bar, textvariable=self._vh_status_var, width=11, state="readonly",
@@ -1533,13 +1788,14 @@ class KassePanel(tk.Frame):
 
         tf = tk.Frame(parent, bg=BG)
         tf.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-        cols = ("datum", "kunde", "bearbeiter", "msk", "status", "pos", "summe")
-        heads = {"datum": "Datum", "kunde": "Kunde", "bearbeiter": "Erfasst von",
+        cols = ("nr", "datum", "kunde", "bearbeiter", "msk", "status", "pos", "summe")
+        heads = {"nr": "Auftrag", "datum": "Datum", "kunde": "Kunde", "bearbeiter": "Erfasst von",
                  "msk": "MSK", "status": "Status", "pos": "Pos.", "summe": "Summe (netto)"}
         tree = ttk.Treeview(tf, columns=cols, show="headings", selectmode="extended")
         for c in cols:
             tree.heading(c, text=heads[c])
-            w = 180 if c == "kunde" else (110 if c in ("summe",) else (90 if c in ("bearbeiter", "msk", "status") else 70))
+            w = 180 if c == "kunde" else (110 if c in ("summe",) else (
+                90 if c in ("bearbeiter", "msk", "status") else (60 if c == "nr" else 70)))
             tree.column(c, width=w, anchor="w")
         tree.tag_configure("msk_erfasst", background="#e7f4ea")
         tree.pack(side="left", fill="both", expand=True)
@@ -1588,7 +1844,8 @@ class KassePanel(tk.Frame):
         with self._conn() as con:
             rows = con.execute(
                 "SELECT b.id, b.datum, COALESCE(b.apotheke,''), COALESCE(b.status,'offen'), "
-                "COALESCE(b.bearbeiter,''), COALESCE(b.msk_erfasst,0), COUNT(p.id), "
+                "COALESCE(b.bearbeiter,''), COALESCE(b.msk_erfasst,0), "
+                "SUM(CASE WHEN p.bestellart='Bestellung' THEN 1 ELSE 0 END), "
                 "COALESCE(SUM(CASE WHEN p.bestellart='Bestellung' "
                 "  THEN p.apu*p.menge*(1-COALESCE(p.rabatt_prozent,0)/100.0) ELSE 0 END),0) "
                 "FROM tbl_bestellungen b LEFT JOIN tbl_bestellpositionen p ON p.bestell_id=b.id "
@@ -1598,7 +1855,8 @@ class KassePanel(tk.Frame):
         summe_ges = 0.0
         gezeigt = storniert_anz = msk_offen_anz = 0
         for bid, datum, apotheke, status, bearbeiter, msk, anz, summe in rows:
-            if filt and filt not in str(apotheke).lower():
+            if filt and filt not in str(apotheke).lower() and filt not in str(bid) \
+                    and filt.lstrip("#") != str(bid):
                 continue
             if status_f == "Storniert" and status != "storniert":
                 continue
@@ -1617,7 +1875,7 @@ class KassePanel(tk.Frame):
             erfasst = bool(msk) and status != "storniert"
             msk_txt = "✓ erfasst" if msk else ("offen" if status != "storniert" else "–")
             iid = self.vh_tree.insert("", "end", tags=("msk_erfasst",) if erfasst else (),
-                                      values=(datum, apotheke, bearbeiter, msk_txt, status,
+                                      values=(f"#{bid}", datum, apotheke, bearbeiter, msk_txt, status,
                                               anz, _eur(summe)))
             self._vh_rowmap[iid] = bid
             if status != "storniert":
@@ -1629,6 +1887,26 @@ class KassePanel(tk.Frame):
             gezeigt += 1
         self.vh_info.config(text=f"{gezeigt} Verkäufe · ⚠ {msk_offen_anz} MSK offen · "
                                  f"{storniert_anz} storniert · Summe {_eur(summe_ges)}")
+
+    def _auftrag_id_eingabe(self, text):
+        """Auftrag-Nr aus einer Eingabe lesen ('#12' / '12'); None wenn keine Zahl."""
+        t = str(text or "").strip().lstrip("#").strip()
+        return int(t) if t.isdigit() else None
+
+    def _verkaeufe_open_nr(self):
+        """Auftrag-Nr aus dem Suchfeld der Verkäufe-Liste oeffnen (Detailansicht)."""
+        bid = self._auftrag_id_eingabe(self._vh_filter_var.get())
+        if bid is None:
+            messagebox.showinfo("Auftrag öffnen", "Bitte eine Auftrag-Nr (Zahl) eingeben.",
+                                parent=self.winfo_toplevel())
+            return
+        with self._conn() as con:
+            ok = con.execute("SELECT 1 FROM tbl_bestellungen WHERE id=?", (bid,)).fetchone()
+        if not ok:
+            messagebox.showinfo("Auftrag öffnen", f"Kein Auftrag #{bid} gefunden.",
+                                parent=self.winfo_toplevel())
+            return
+        self._verkauf_detail_window(bid)
 
     def _msk_markieren(self, erfasst, bids=None):
         if bids is None:
@@ -1660,14 +1938,25 @@ class KassePanel(tk.Frame):
         bid = self._vh_rowmap.get(sel[0])
         if not bid:
             return
+        self._verkauf_detail_window(bid)
+
+    def _verkauf_detail_window(self, bid):
+        """Read-only Detailansicht eines Verkaufs (Stornieren/MSK/Auftragsbestaetigung).
+        Wird per Doppelklick in „Verkäufe“ UND per Auftrag-Nr-Suche aufgerufen -
+        erzeugt selbst KEINEN neuen Auftrag."""
+        if not bid:
+            return
         with self._conn() as con:
             h = con.execute("SELECT datum, COALESCE(apotheke,''), COALESCE(status,'offen'), "
                             "COALESCE(bearbeiter,''), COALESCE(msk_erfasst,0), COALESCE(msk_von,''), "
                             "COALESCE(msk_am,'') FROM tbl_bestellungen WHERE id=?", (bid,)).fetchone()
+            # Nur echte Bestellungen anzeigen - Vorbestellungen gehoeren in den
+            # Reiter "Vorbestellungen", nicht in die Verkaufs-Detailansicht.
             positions = con.execute(
                 "SELECT pzn, artikelname, menge, COALESCE(rabatt_prozent,0), apu, "
                 "COALESCE(charge,''), COALESCE(verfall,''), COALESCE(bestellart,'Bestellung') "
-                "FROM tbl_bestellpositionen WHERE bestell_id=? ORDER BY id", (bid,)).fetchall()
+                "FROM tbl_bestellpositionen WHERE bestell_id=? "
+                "AND COALESCE(bestellart,'Bestellung')='Bestellung' ORDER BY id", (bid,)).fetchall()
         if not h:
             return
         datum, apotheke, status, bearbeiter, msk, msk_von, msk_am = h
@@ -1968,9 +2257,9 @@ class KassePanel(tk.Frame):
         self.we_charge_var = tk.StringVar()
         self.we_verfall_var = tk.StringVar()
         self.we_menge_var = tk.StringVar()
-        self.we_ek_var = tk.StringVar()
+        # EK wird NICHT abgefragt - er entspricht immer dem APU aus den NMG-Stammdaten.
         for label, var, w in (("Charge", self.we_charge_var, 12), ("Verfall", self.we_verfall_var, 10),
-                              ("Menge", self.we_menge_var, 6), ("EK €", self.we_ek_var, 8)):
+                              ("Menge", self.we_menge_var, 6)):
             tk.Label(row, text=label + ":", bg=BG, font=("Arial", 9, "bold")).pack(side="left", padx=(0, 4))
             tk.Entry(row, textvariable=var, width=w).pack(side="left", padx=(0, 12))
         tk.Button(row, text="Einbuchen", command=self._wareneingang_buchen,
@@ -2033,22 +2322,17 @@ class KassePanel(tk.Frame):
         except ValueError:
             messagebox.showwarning("Wareneingang", "Menge muss eine positive Zahl sein.", parent=top)
             return
-        ek = None
-        if self.we_ek_var.get().strip():
-            try:
-                ek = float(self.we_ek_var.get().strip().replace(",", "."))
-            except ValueError:
-                ek = None
-
         with self._conn() as con:
             row = con.execute(
-                "SELECT artikelname FROM tbl_nmg_stamm WHERE pzn=? LIMIT 1", (pzn,)
+                "SELECT artikelname, apu FROM tbl_nmg_stamm WHERE pzn=? LIMIT 1", (pzn,)
             ).fetchone()
             if not row:
                 messagebox.showwarning("Wareneingang",
                                        f"PZN {pzn} ist kein NMG-Artikel.", parent=top)
                 return
             artikelname = row[0]
+            # EK = APU (Einkaufspreis entspricht dem Stammdaten-APU).
+            ek = row[1]
             jetzt = datetime.now().isoformat(timespec="seconds")
             cur = con.execute(
                 "INSERT INTO tbl_wareneingang(datum, lieferant, bearbeiter) VALUES(?,?,?)",
@@ -2074,7 +2358,7 @@ class KassePanel(tk.Frame):
         self.we_pzn = None
         self.we_search.clear()
         self.we_artikel_label.config(text="Kein Artikel gewählt.", fg="#999")
-        for var in (self.we_charge_var, self.we_verfall_var, self.we_menge_var, self.we_ek_var):
+        for var in (self.we_charge_var, self.we_verfall_var, self.we_menge_var):
             var.set("")
         self._refresh_lager()
 
