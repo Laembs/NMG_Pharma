@@ -145,4 +145,32 @@ def _copy_seed_data_if_needed() -> None:
         return
 
 
+def _migrate_zf_to_zw_dirs() -> None:
+    """ZF -> ZW: Vorhandene Unterordner 'ZF' in 'ZW' umbenennen (die Datenquelle
+    Zukunftswerk wurde von 'ZF' auf 'ZW' vereinheitlicht). Non-destruktiv:
+    existiert 'ZW' schon, werden die Inhalte hineinverschoben statt ueberschrieben.
+    """
+    for base in (SAVED_ANALYSES_DIR, IMPORT_DIR):
+        old = base / "ZF"
+        new = base / "ZW"
+        try:
+            if not old.exists():
+                continue
+            if not new.exists():
+                old.rename(new)
+            else:
+                for item in old.iterdir():
+                    target = new / item.name
+                    if not target.exists():
+                        shutil.move(str(item), str(target))
+                try:
+                    old.rmdir()  # nur entfernen, wenn restlos geleert
+                except OSError:
+                    pass
+        except Exception:
+            # Best-Effort: schlaegt die Migration fehl, bleibt der Alt-Ordner bestehen.
+            pass
+
+
 _copy_seed_data_if_needed()
+_migrate_zf_to_zw_dirs()

@@ -10,6 +10,9 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from pathlib import Path
 from datetime import datetime
 
+# Zentrales Design-System (Palette, Schrift, ttk-Styles, Widgets).
+from . import theme
+
 # V1.1 SP10: tkcalendar fuer Datum-Picker. Optional - falls nicht vorhanden,
 # faellt der Code auf tk.Entry mit YYYY-MM-DD-Format zurueck.
 try:
@@ -21,15 +24,17 @@ except Exception:
 
 
 # V1.1 SP11: Einheitliche Button-Stile fuer die App.
-_BTN_PRIMARY = {"bg": "#0b4a86", "fg": "white", "activebackground": "#0b4a86",
-                "relief": "flat", "font": ("Arial", 10, "bold"),
-                "padx": 14, "pady": 7}
-_BTN_DANGER = {"bg": "#9b1c1c", "fg": "white", "activebackground": "#9b1c1c",
-               "relief": "flat", "font": ("Arial", 10, "bold"),
-               "padx": 14, "pady": 7}
-_BTN_NEUTRAL = {"bg": "#f0f4fa", "fg": "#0b4a86", "activebackground": "#e8eef6",
-                "relief": "solid", "borderwidth": 1,
-                "font": ("Arial", 10), "padx": 12, "pady": 6}
+# Redesign: moderne, flache Optik aus dem zentralen Theme. Signaturen bleiben
+# stabil, damit alle ~50 Aufrufstellen unveraendert funktionieren.
+_BTN_PRIMARY = {"bg": theme.PRIMARY, "fg": "white", "activebackground": theme.PRIMARY_DARK,
+                "relief": "flat", "font": (theme.FONT, 10, "bold"),
+                "padx": 16, "pady": 8, "cursor": "hand2"}
+_BTN_DANGER = {"bg": theme.DANGER, "fg": "white", "activebackground": theme.DANGER_DARK,
+               "relief": "flat", "font": (theme.FONT, 10, "bold"),
+               "padx": 16, "pady": 8, "cursor": "hand2"}
+_BTN_NEUTRAL = {"bg": "#EDF1F6", "fg": theme.PRIMARY, "activebackground": "#E2E9F1",
+                "relief": "flat", "borderwidth": 0,
+                "font": (theme.FONT, 10, "bold"), "padx": 14, "pady": 7, "cursor": "hand2"}
 
 
 def primary_button(parent, text, command, **kwargs):
@@ -117,7 +122,7 @@ from .db import init_db
 from .importer import import_excel
 from .learning_db import import_learning_list, import_checked_auswertung
 from .manual_analysis_import import import_manual_analysis_files
-from .exporter import create_linden_export, UnknownInputFormatError
+from .exporter import create_vorlage_export, UnknownInputFormatError
 from .market import export_marktanalyse_nicht_nmg, export_marktanalyse_produktchancen, export_produktanalyse_neu
 from .compare import export_abweichungsanalyse
 from .historical_import import import_historical_market_folder, import_historical_market_file
@@ -129,7 +134,7 @@ from .archiv_db import (
     archiviere_zeitraum, liste_archive, liste_analysen_im_archiv,
     excel_aus_archiv, loesche_archiv, zaehle_zeitraum, ensure_archiv_dir,
 )
-from .file_loader import SUPPORTED_DATA_FILETYPES
+from .file_loader import SUPPORTED_DATA_FILETYPES, SUPPORTED_DATA_EXTENSIONS
 from .db_overview import get_database_overview, format_size
 from .update_manager import (
     validate_update_package, install_update_package, open_updates_folder, write_version_file,
@@ -224,13 +229,13 @@ def datetime_from_mtime(path: Path) -> str:
 def _dq_label(dq) -> str:
     """Anzeige-Label fuer eine gespeicherte datenquelle.
 
-    Intern bleiben die Werte 'NMG' (Altdaten) und 'ZF' (Zukunftswerk) erhalten;
-    fuer den Nutzer werden sie als 'PK' bzw. 'ZW' angezeigt.
+    Intern ist PK weiterhin 'NMG' (Altdaten); die Zukunftswerk-Datenquelle ist 'ZW'
+    (frueher 'ZF', das als Alt-Token noch toleriert wird).
     """
     val = (dq or "NMG")
     if val == "NMG":
         return "PK"
-    if val == "ZF":
+    if val in ("ZW", "ZF"):
         return "ZW"
     return str(val)
 
@@ -548,52 +553,17 @@ class NMGApp(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _show_busy_modal(self, title, subtitle="Bitte warten..."):
-        """SP3: Modaler Warte-Dialog mit Logo + Indeterminate-Progressbar +
-        Sanduhr-Cursor im Hauptfenster. Caller ruft danach _close_busy_modal(win).
-        Auch wenn der Import synchron laeuft: die animierte Progressbar zeigt
-        dem Anwender wenigstens 'Programm arbeitet'.
+        """Redesign: KEIN modaler Mittendialog mehr - stattdessen die Status-Box
+        rechts oben (gleiche Animation wie _run_background). Die UI bleibt waehrend
+        des Laufs bedienbar. Rueckgabe ist API-kompatibel: ein Handle mit
+        ._msg_var/._pb, damit _set_busy_message/_close_busy_modal (und damit alle
+        bestehenden Import-/Export-Aufrufer) unveraendert weiterfunktionieren.
         """
-        win = tk.Toplevel(self)
-        win.title(title)
-        win.transient(self)
-        win.grab_set()
-        win.protocol("WM_DELETE_WINDOW", lambda: None)
-        win.configure(bg="#f5f7fb")
-        win.resizable(False, False)
-        try:
-            self.update_idletasks()
-            px, py = self.winfo_x(), self.winfo_y()
-            pw, ph = self.winfo_width(), self.winfo_height()
-            ww, wh = 440, 230
-            win.geometry(f"{ww}x{wh}+{px + max(0, (pw - ww) // 2)}+{py + max(0, (ph - wh) // 2)}")
-        except Exception:
-            win.geometry("440x230")
-        try:
-            logo_path = ASSETS_DIR / "NMGone.png"
-            if logo_path.exists():
-                raw = tk.PhotoImage(file=str(logo_path))
-                factor = max(1, int(max(raw.width() / 200, raw.height() / 70) + 0.999))
-                win._logo_img = raw.subsample(factor, factor)
-                tk.Label(win, image=win._logo_img, bg="#f5f7fb").pack(pady=(16, 6))
-        except Exception:
-            pass
-        tk.Label(win, text=title, font=("Arial", 13, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(pady=(0, 2))
-        msg_var = tk.StringVar(value=subtitle)
-        tk.Label(win, textvariable=msg_var, fg="#444", bg="#f5f7fb").pack(pady=(0, 10))
-        pb = ttk.Progressbar(win, mode="indeterminate", length=340)
-        pb.pack(pady=(0, 16))
-        pb.start(12)
-        win._msg_var = msg_var
-        win._pb = pb
-        try:
-            self.config(cursor="watch")
-        except Exception:
-            pass
-        try:
-            self.update_idletasks()
-        except Exception:
-            pass
-        return win
+        ctx = self._bg_create_widget(title, subtitle)
+        box = ctx["box"]
+        box._msg_var = ctx["sub_var"]
+        box._pb = ctx["pb"]
+        return box
 
     def _set_busy_message(self, win, text):
         try:
@@ -661,23 +631,27 @@ class NMGApp(tk.Tk):
         except Exception:
             alive = False
         if not alive:
-            panel = tk.Frame(self, bg="#f5f7fb")
+            panel = tk.Frame(self, bg=theme.BG)
             panel.place(relx=1.0, x=-18, y=18, anchor="ne")
             self._bg_jobs_panel = panel
-        box = tk.Frame(panel, bg="#e8f1fb",
-                       highlightbackground="#a8c5e8", highlightthickness=1)
-        box.pack(side="top", anchor="ne", padx=0, pady=(0, 6))
+        box = tk.Frame(panel, bg=theme.CARD,
+                       highlightbackground=theme.BORDER, highlightthickness=1)
+        box.pack(side="top", anchor="ne", padx=0, pady=(0, 8))
 
         title_var = tk.StringVar(value=title)
         sub_var = tk.StringVar(value=subtitle)
-        tk.Label(box, textvariable=title_var, font=("Arial", 9, "bold"),
-                 fg="#0b4a86", bg="#e8f1fb", anchor="w").pack(
-            anchor="w", padx=10, pady=(6, 0))
-        tk.Label(box, textvariable=sub_var, font=("Arial", 9),
-                 fg="#444", bg="#e8f1fb", anchor="w", wraplength=300).pack(
-            anchor="w", padx=10, pady=(0, 4))
-        pb = ttk.Progressbar(box, mode="indeterminate", length=280)
-        pb.pack(padx=10, pady=(0, 8))
+        head = tk.Frame(box, bg=theme.CARD)
+        head.pack(fill="x", padx=12, pady=(10, 0))
+        tk.Label(head, text="⏳", bg=theme.CARD, fg=theme.ACCENT,
+                 font=(theme.FONT, 11)).pack(side="left")
+        tk.Label(head, textvariable=title_var, font=(theme.FONT, 10, "bold"),
+                 fg=theme.INK, bg=theme.CARD, anchor="w").pack(side="left", padx=(6, 0))
+        tk.Label(box, textvariable=sub_var, font=(theme.FONT, 9),
+                 fg=theme.MUTED, bg=theme.CARD, anchor="w", wraplength=300,
+                 justify="left").pack(anchor="w", padx=12, pady=(2, 6))
+        pb = ttk.Progressbar(box, mode="indeterminate", length=290,
+                             style="NMG.Horizontal.TProgressbar")
+        pb.pack(padx=12, pady=(0, 12))
         pb.start(12)
         return {"box": box, "title_var": title_var, "sub_var": sub_var, "pb": pb}
 
@@ -726,15 +700,20 @@ class NMGApp(tk.Tk):
             except BaseException as exc:
                 # SP19: Worker-Exception immer ins Fehler-Log schreiben.
                 # Vorher konnten Fehler in work_fn unsichtbar verschwinden.
+                # WICHTIG: 'exc' wird am Ende des except-Blocks von Python
+                # geloescht. Da _on_err erst spaeter (via after) laeuft, muss die
+                # Exception in einer eigenen Variable festgehalten werden - sonst
+                # NameError im Handler und der echte Fehler wird verschluckt.
+                worker_exc = exc
                 try:
-                    self._log_error(title, "Background-Worker-Fehler", exc)
+                    self._log_error(title, "Background-Worker-Fehler", worker_exc)
                 except Exception:
                     pass
-                def _on_err():
+                def _on_err(worker_exc=worker_exc):
                     self._bg_destroy_widget(ctx)
                     if on_error:
                         try:
-                            on_error(exc)
+                            on_error(worker_exc)
                         except Exception as cb_exc:
                             # SP19: on_error-Callback-Fehler nicht schlucken.
                             try:
@@ -742,11 +721,11 @@ class NMGApp(tk.Tk):
                             except Exception:
                                 pass
                             try:
-                                messagebox.showerror(title, f"{exc}\n\n(Folgefehler im on_error-Handler: {cb_exc})")
+                                messagebox.showerror(title, f"{worker_exc}\n\n(Folgefehler im on_error-Handler: {cb_exc})")
                             except Exception:
                                 pass
                     else:
-                        self._bg_status_toast(f"{title}: Fehler - {exc}", fg="#9b1c1c")
+                        self._bg_status_toast(f"{title}: Fehler - {worker_exc}", fg="#9b1c1c")
                 try:
                     self.after(0, _on_err)
                 except Exception:
@@ -781,11 +760,12 @@ class NMGApp(tk.Tk):
 
     def _run_busy(self, work_fn, title="NMGone arbeitet", subtitle="Bitte warten ...",
                    progress: bool = False):
-        """SP20: Fuehrt work_fn() in einem Hintergrund-Thread aus, zeigt waehrend
-        der Ausfuehrung den modalen Busy-Dialog mit animierter Progressbar.
-        Gibt den Rueckgabewert von work_fn zurueck oder wirft die Exception
-        weiter. Backend-Funktionen muessen ihre eigenen DB-Verbindungen
-        erstellen (sqlite3 standardmaessig thread-bound).
+        """SP20: Fuehrt work_fn() in einem Hintergrund-Thread aus und zeigt
+        waehrend der Ausfuehrung die Status-Box rechts oben mit animierter
+        Progressbar (gleiches Design wie _run_background). Die UI bleibt
+        bedienbar. Gibt den Rueckgabewert von work_fn zurueck oder wirft die
+        Exception weiter. Backend-Funktionen muessen ihre eigenen DB-
+        Verbindungen erstellen (sqlite3 standardmaessig thread-bound).
 
         V1.1 SP14: Wenn progress=True, bekommt work_fn ein progress(text)-
         Callable als erstes Argument. Damit kann das Backend die Subtitle-
@@ -796,12 +776,17 @@ class NMGApp(tk.Tk):
         import threading
         state = {"value": None, "exc": None}
         done_flag = tk.IntVar(master=self, value=0)
-        busy = self._show_busy_modal(title, subtitle)
+        # Redesign: gleiche Hintergrund-Status-Box rechts oben wie _run_background
+        # (statt modalem Mittendialog). Die UI bleibt waehrend des Laufs bedienbar;
+        # die synchrone Rueckgabe bleibt erhalten, weil wait_variable den Tk-Event-
+        # Loop weiter pumpt. Dadurch bekommen alle bestehenden Aufrufstellen
+        # (Importe/Exporte) automatisch dasselbe Design - ohne Einzelumbau.
+        ctx = self._bg_create_widget(title, subtitle)
 
         def update_progress(text):
             # Thread-safe: GUI nur ueber self.after vom Worker aus aendern.
             try:
-                self.after(0, lambda t=text: self._set_busy_message(busy, t))
+                self.after(0, lambda t=text: ctx["sub_var"].set(t))
             except Exception:
                 pass
 
@@ -823,15 +808,11 @@ class NMGApp(tk.Tk):
         try:
             self.wait_variable(done_flag)
         finally:
-            self._close_busy_modal(busy)
+            self._bg_destroy_widget(ctx)
 
         if state["exc"] is not None:
             raise state["exc"]
         return state["value"]
-        try:
-            self.config(cursor="")
-        except Exception:
-            pass
 
     def _toggle_admin_visible(self, event=None):
         self._admin_visible = not self._admin_visible
@@ -843,75 +824,31 @@ class NMGApp(tk.Tk):
             pass
 
     def _build(self):
-        self.configure(bg="#f5f7fb")
+        self.configure(bg=theme.BG)
+        theme.apply_theme(self)
+        theme.apply_widget_defaults(self)
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
 
-        # Linke Navigation
-        left = tk.Frame(self, bg="#ffffff", width=285)
-        left.grid(row=0, column=0, sticky="ns")
-        left.grid_propagate(False)
-        left.rowconfigure(1, weight=1)
-
-        logo_path = ASSETS_DIR / "NMGone.png"
-        logo_box = tk.Frame(left, bg="#ffffff", width=285, height=92)
-        logo_box.grid(row=0, column=0, sticky="ew", padx=8, pady=(12, 8))
-        logo_box.grid_propagate(False)
-        if logo_path.exists():
-            try:
-                raw_logo = tk.PhotoImage(file=str(logo_path))
-                # Logo proportional verkleinern, damit es nicht abgeschnitten wird.
-                factor = max(1, int(max(raw_logo.width() / 245, raw_logo.height() / 72) + 0.999))
-                self.logo_img = raw_logo.subsample(factor, factor)
-                tk.Label(logo_box, image=self.logo_img, bg="#ffffff").pack(expand=True)
-            except Exception:
-                tk.Label(logo_box, text="NMGone", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#ffffff").pack(expand=True)
-        else:
-            tk.Label(logo_box, text="NMGone", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#ffffff").pack(expand=True)
-
-        nav_frame = tk.Frame(left, bg="#ffffff")
-        nav_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
-        nav_frame.rowconfigure(0, weight=1)
-        nav_frame.columnconfigure(0, weight=1)
-
-        style = ttk.Style(self)
+        # Linke Navigation (Redesign: dunkle Sidebar aus dem zentralen Theme).
+        self.sidebar = theme.Sidebar(self, width=252, title="NMGone",
+                                     subtitle="Pharma-Analyse")
+        self.sidebar.grid(row=0, column=0, sticky="ns")
+        # NMGone-Logo oben in der Sidebar (auf weisser Karte, weil dunkelblau).
         try:
-            style.theme_use("clam")
+            _logo_path = ASSETS_DIR / "NMGone.png"
+            if _logo_path.exists():
+                _raw = tk.PhotoImage(file=str(_logo_path))
+                _factor = max(1, round(max(_raw.width() / 210, _raw.height() / 130)))
+                self._sidebar_logo = _raw.subsample(_factor, _factor)
+                self.sidebar.set_logo(self._sidebar_logo)
         except Exception:
             pass
-        style.configure(
-            "NMG.Treeview",
-            background="#ffffff",
-            fieldbackground="#ffffff",
-            foreground="#123",
-            borderwidth=0,
-            rowheight=30,
-            font=("Arial", 10),
-        )
-        style.configure("NMG.Treeview.Heading", font=("Arial", 10, "bold"))
-        style.map("NMG.Treeview", background=[("selected", "#e8f1fb")], foreground=[("selected", "#0b4a86")])
-
-        self.nav_tree = ttk.Treeview(
-            nav_frame,
-            show="tree",
-            selectmode="browse",
-            style="NMG.Treeview",
-        )
-        self.nav_tree.grid(row=0, column=0, sticky="nsew")
         self._build_nav_tree()
-        self.nav_tree.bind("<<TreeviewSelect>>", self._on_nav_select)
-
-        tk.Label(
-            left,
-            text=f"Datenbank:\n{DB_PATH.name}",
-            justify="left",
-            bg="#ffffff",
-            fg="#666",
-            font=("Arial", 9)
-        ).grid(row=2, column=0, sticky="w", padx=18, pady=18)
+        self.sidebar.add_footer_note(f"Datenbank:\n{DB_PATH.name}")
 
         # Hauptbereich
-        main = tk.Frame(self, bg="#f5f7fb")
+        main = tk.Frame(self, bg=theme.BG)
         main.grid(row=0, column=1, sticky="nsew")
         main.columnconfigure(0, weight=1)
         main.columnconfigure(1, weight=0)
@@ -920,10 +857,10 @@ class NMGApp(tk.Tk):
         # Oberer Programmkopf entfernt: Startseite soll direkt mit dem Arbeitsbereich beginnen.
         # V1.1 SP18: _bg_jobs_panel ist jetzt in der rechten Sidebar (ueber dem
         # Backup-Status), nicht mehr im Header. Header bleibt leer.
-        header = tk.Frame(main, bg="#f5f7fb")
+        header = tk.Frame(main, bg=theme.BG)
         header.grid(row=0, column=0, columnspan=2, sticky="ew", padx=0, pady=0)
 
-        self.page = tk.Frame(main, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
+        self.page = tk.Frame(main, bg=theme.CARD, highlightbackground=theme.BORDER, highlightthickness=1)
         self.page.grid(row=1, column=0, sticky="nsew", padx=(22, 12), pady=10)
         self.page.columnconfigure(0, weight=1)
         self.page.rowconfigure(0, weight=0)
@@ -931,33 +868,33 @@ class NMGApp(tk.Tk):
 
         self._main_frame = main
 
-        self._right_panel = tk.Frame(main, bg="#f5f7fb", width=280)
+        self._right_panel = tk.Frame(main, bg=theme.BG, width=280)
         self._right_panel_visible = self._get_meta_value("sidebar_visible", "1") != "0"
         if self._right_panel_visible:
             self._right_panel.grid(row=1, column=1, sticky="ns", padx=(0, 22), pady=10)
             self._status_card(self._right_panel)
 
-        footer = tk.Frame(main, bg="#f5f7fb")
+        footer = tk.Frame(main, bg=theme.BG)
         footer.grid(row=2, column=0, columnspan=2, sticky="ew", padx=22, pady=(0, 10))
-        tk.Label(footer, textvariable=self.status, bg="#f5f7fb", fg="#0a7d2c", anchor="w", justify="left").pack(side="left", fill="x", expand=True)
+        tk.Label(footer, textvariable=self.status, bg=theme.BG, fg=theme.SUCCESS, anchor="w", justify="left").pack(side="left", fill="x", expand=True)
         self._sidebar_btn_text = tk.StringVar(value=("◀ Info ausblenden" if self._right_panel_visible else "▶ Info einblenden"))
         tk.Button(
             footer,
             textvariable=self._sidebar_btn_text,
             command=self._toggle_sidebar,
-            bg="#d8e2ee",
-            fg="#0b4a86",
+            bg="#EDF1F6",
+            fg=theme.PRIMARY,
             relief="flat",
-            font=("Arial", 9, "bold"),
-            padx=10,
-            pady=3,
+            font=(theme.FONT, 9, "bold"),
+            cursor="hand2",
+            padx=12,
+            pady=4,
         ).pack(side="right", padx=(0, 4))
 
         if self.pending_update:
             self.status.set(f"Update verfügbar: Version {self.pending_update.get('target_version')} ({self.pending_update.get('name')}). Links auf 'Update installieren' klicken.")
 
-        self.nav_tree.selection_set("startseite")
-        self.nav_tree.focus("startseite")
+        self.navigate("startseite")
         self.show_startseite()
 
     def _make_window(self, title, geometry="800x600", minsize=None, maximized=False, parent=None):
@@ -1069,12 +1006,12 @@ class NMGApp(tk.Tk):
         win.grab_set()
         win.protocol("WM_DELETE_WINDOW", lambda: None)  # nicht schließbar
 
-        tk.Label(win, text="👤  Mitarbeiterprofil", font=("Arial", 16, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 4))
+        tk.Label(win, text="👤  Mitarbeiterprofil", font=(theme.FONT, 16, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 4))
         tk.Label(win, text=(
             f"Hallo {self.bearbeiter}!\n"
             "Bitte Vorname und Nachname einmalig eintragen.\n"
             "Ohne Profil kann das Programm nicht genutzt werden."
-        ), font=("Arial", 10), fg="#444", bg="#f5f7fb", justify="left").pack(anchor="w", padx=22, pady=(0, 12))
+        ), font=(theme.FONT, 10), fg="#444", bg="#f5f7fb", justify="left").pack(anchor="w", padx=22, pady=(0, 12))
 
         form = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
         form.pack(fill="x", padx=22, pady=(0, 12))
@@ -1088,11 +1025,11 @@ class NMGApp(tk.Tk):
             nachname_var.set(str(existing["nachname"] or ""))
 
         for r, (label, var) in enumerate([("Vorname *", vorname_var), ("Nachname *", nachname_var)]):
-            tk.Label(form, text=label, bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=r, column=0, sticky="w", padx=14, pady=10)
-            tk.Entry(form, textvariable=var, font=("Arial", 12)).grid(row=r, column=1, sticky="ew", padx=14, pady=10)
+            tk.Label(form, text=label, bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 10, "bold")).grid(row=r, column=0, sticky="w", padx=14, pady=10)
+            tk.Entry(form, textvariable=var, font=(theme.FONT, 12)).grid(row=r, column=1, sticky="ew", padx=14, pady=10)
 
         err_var = tk.StringVar()
-        tk.Label(win, textvariable=err_var, fg="#c00", bg="#f5f7fb", font=("Arial", 9)).pack(anchor="w", padx=22)
+        tk.Label(win, textvariable=err_var, fg="#c00", bg="#f5f7fb", font=(theme.FONT, 9)).pack(anchor="w", padx=22)
 
         def save():
             vn = vorname_var.get().strip()
@@ -1110,7 +1047,7 @@ class NMGApp(tk.Tk):
             win.destroy()
 
         tk.Button(win, text="✔  Speichern", command=save, bg="#0b4a86", fg="white",
-                  relief="flat", font=("Arial", 12, "bold"), padx=20, pady=8).pack(pady=(4, 18))
+                  relief="flat", font=(theme.FONT, 12, "bold"), padx=20, pady=8).pack(pady=(4, 18))
 
     def show_mitarbeiterprofil_dialog(self, login=None, readonly=False):
         """Profil anzeigen/bearbeiten. readonly=True → nur ansehen."""
@@ -1128,9 +1065,9 @@ class NMGApp(tk.Tk):
         win.transient(self)
         win.grab_set()
 
-        tk.Label(win, text=f"👤  {title}", font=("Arial", 15, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 4))
+        tk.Label(win, text=f"👤  {title}", font=(theme.FONT, 15, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 4))
         if not can_edit:
-            tk.Label(win, text="Nur ansehen — du kannst nur dein eigenes Profil bearbeiten.", font=("Arial", 9), fg="#888", bg="#f5f7fb").pack(anchor="w", padx=22)
+            tk.Label(win, text="Nur ansehen — du kannst nur dein eigenes Profil bearbeiten.", font=(theme.FONT, 9), fg="#888", bg="#f5f7fb").pack(anchor="w", padx=22)
 
         form = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
         form.pack(fill="both", expand=True, padx=22, pady=(8, 10))
@@ -1144,7 +1081,7 @@ class NMGApp(tk.Tk):
         ]
         vars_ = {}
         for r, (key, label) in enumerate(fields_def):
-            tk.Label(form, text=label, bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=r, column=0, sticky="w", padx=14, pady=6)
+            tk.Label(form, text=label, bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 10, "bold")).grid(row=r, column=0, sticky="w", padx=14, pady=6)
             var = tk.StringVar(value=str(profil[key] if profil and key in profil.keys() and profil[key] else ""))
             vars_[key] = var
             state = "normal" if can_edit else "readonly"
@@ -1172,7 +1109,7 @@ class NMGApp(tk.Tk):
                 messagebox.showinfo(title, "Profil gespeichert.")
                 win.destroy()
             tk.Button(bar, text="✔  Speichern", command=save_profil, bg="#0b4a86", fg="white",
-                      relief="flat", font=("Arial", 11, "bold"), padx=16, pady=7).pack(side="right")
+                      relief="flat", font=(theme.FONT, 11, "bold"), padx=16, pady=7).pack(side="right")
 
     # ── BENACHRICHTIGUNGEN / DATEN-AMPEL ────────────────────────────────────────
     def _check_daten_benachrichtigungen(self):
@@ -1204,12 +1141,12 @@ class NMGApp(tk.Tk):
         win.transient(self)
         win.grab_set()
 
-        tk.Label(win, text="⚠️  Daten-Aktualität", font=("Arial", 15, "bold"), fg="#8b4513", bg="#fff8e1").pack(anchor="w", padx=20, pady=(16, 4))
-        tk.Label(win, text="Folgende Datenquellen sind veraltet (>60 Tage) oder fehlen:", font=("Arial", 10), fg="#555", bg="#fff8e1").pack(anchor="w", padx=20)
+        tk.Label(win, text="⚠️  Daten-Aktualität", font=(theme.FONT, 15, "bold"), fg="#8b4513", bg="#fff8e1").pack(anchor="w", padx=20, pady=(16, 4))
+        tk.Label(win, text="Folgende Datenquellen sind veraltet (>60 Tage) oder fehlen:", font=(theme.FONT, 10), fg="#555", bg="#fff8e1").pack(anchor="w", padx=20)
         for name in rote_items:
-            tk.Label(win, text=f"  🔴  {name}", font=("Arial", 11, "bold"), fg="#c00", bg="#fff8e1").pack(anchor="w", padx=20, pady=2)
+            tk.Label(win, text=f"  🔴  {name}", font=(theme.FONT, 11, "bold"), fg="#c00", bg="#fff8e1").pack(anchor="w", padx=20, pady=2)
 
-        tk.Label(win, text="Wann soll diese Meldung erneut erscheinen?", font=("Arial", 10), fg="#444", bg="#fff8e1").pack(anchor="w", padx=20, pady=(14, 6))
+        tk.Label(win, text="Wann soll diese Meldung erneut erscheinen?", font=(theme.FONT, 10), fg="#444", bg="#fff8e1").pack(anchor="w", padx=20, pady=(14, 6))
 
         btn_row = tk.Frame(win, bg="#fff8e1")
         btn_row.pack(anchor="w", padx=20)
@@ -1230,7 +1167,7 @@ class NMGApp(tk.Tk):
         bar = tk.Frame(win, bg="#fff8e1")
         bar.pack(fill="x", padx=20, pady=(16, 14))
         tk.Button(bar, text="Jetzt Daten aktualisieren →", command=oeffne_daten,
-                  bg="#0b4a86", fg="white", relief="flat", font=("Arial", 11, "bold"), padx=16, pady=7).pack(side="left")
+                  bg="#0b4a86", fg="white", relief="flat", font=(theme.FONT, 11, "bold"), padx=16, pady=7).pack(side="left")
         tk.Button(bar, text="Schließen", command=win.destroy, padx=14, pady=7).pack(side="right")
 
     # ── OUTLOOK-KALENDER-WIDGET ──────────────────────────────────────────────────
@@ -1333,16 +1270,16 @@ class NMGApp(tk.Tk):
     def _dashboard_widget_kalender(self, parent):
         """Outlook-Kalender-Widget für das Dashboard."""
         box = tk.Frame(parent, bg="#faf4ff", highlightbackground="#c9b8e8", highlightthickness=1)
-        tk.Label(box, text="📅 Termine (Outlook)", font=("Arial", 11, "bold"), fg="#6b4fb3", bg="#faf4ff").pack(anchor="w", padx=10, pady=(10, 4))
+        tk.Label(box, text="📅 Termine (Outlook)", font=(theme.FONT, 11, "bold"), fg="#6b4fb3", bg="#faf4ff").pack(anchor="w", padx=10, pady=(10, 4))
         termine = self._get_outlook_termine(14)
         if termine:
             for t in termine:
                 start_short = t["start"][5:16].replace("T", "  ").replace("-", ".")
                 text = f"📌 {start_short}  –  {t['betreff'][:38]}"
-                tk.Label(box, text=text, font=("Arial", 9), fg="#3a2060", bg="#faf4ff", anchor="w").pack(anchor="w", padx=10, pady=1)
+                tk.Label(box, text=text, font=(theme.FONT, 9), fg="#3a2060", bg="#faf4ff", anchor="w").pack(anchor="w", padx=10, pady=1)
         else:
-            tk.Label(box, text="Keine Termine gefunden\n(Outlook nicht verfügbar oder keine Termine)", font=("Arial", 9), fg="#888", bg="#faf4ff", justify="left").pack(anchor="w", padx=10, pady=4)
-        tk.Label(box, text="Nur-Lese-Ansicht · Termine aus Outlook", font=("Arial", 8), fg="#999", bg="#faf4ff").pack(anchor="w", padx=10, pady=(0, 8))
+            tk.Label(box, text="Keine Termine gefunden\n(Outlook nicht verfügbar oder keine Termine)", font=(theme.FONT, 9), fg="#888", bg="#faf4ff", justify="left").pack(anchor="w", padx=10, pady=4)
+        tk.Label(box, text="Nur-Lese-Ansicht · Termine aus Outlook", font=(theme.FONT, 8), fg="#999", bg="#faf4ff").pack(anchor="w", padx=10, pady=(0, 8))
         return box
 
     def _check_wissensbasis_leer(self):
@@ -1417,35 +1354,59 @@ class NMGApp(tk.Tk):
             pass
 
     def _build_nav_tree(self):
-        """Ausklappbarer Menübaum. Beschlossene Punkte bleiben sichtbar."""
-        tree = self.nav_tree
+        """Befuellt die Sidebar. Reihenfolge wie gehabt, in Abschnitte gruppiert.
 
-        # SP11: alle Navi-Texte ueber _T() - Sprache wird beim Programmstart aus
-        # language.json gelesen und gilt bis zum naechsten Start.
-        tree.insert("", "end", "startseite", text=f"🏠  {_T('Startseite')}")
-        tree.insert("", "end", "neue_auswertung", text=f"📊  {_T('Neue Auswertung')}")
+        SP11: alle Navi-Texte ueber _T() - Sprache wird beim Programmstart aus
+        language.json gelesen und gilt bis zum naechsten Start.
+        """
+        groups = [
+            (None, [
+                ("startseite", "🏠", _T("Startseite")),
+                ("neue_auswertung", "📊", _T("Neue Auswertung")),
+            ]),
+            ("Arbeiten", [
+                ("apps", "🚀", _T("Apps")),
+                ("analysen", "📁", _T("Analysen")),
+                ("schulbank", "🎓", _T("Schulbank")),
+            ]),
+            ("Daten", [
+                ("daten_aktualisieren", "🗄", _T("Daten aktualisieren")),
+                ("datenbankuebersicht", "🗂", _T("Datenbankübersicht")),
+                ("update_backup", "🔄", _T("Update / Backup")),
+            ]),
+            ("Mehr", [
+                ("report", "📋", _T("Report")),
+                ("roadmap", "📌", _T("Roadmap")),
+                ("datenbankpfad", "☁️", _T("Cloud / DB-Pfad")),
+                ("hilfe", "❓", _T("Hilfe")),
+            ]),
+        ]
+        for section, entries in groups:
+            if section:
+                self.sidebar.add_section(section)
+            for key, icon, label in entries:
+                self.sidebar.add_item(key, icon, label, lambda k=key: self.navigate(k))
 
-        tree.insert("", "end", "apps", text=f"🚀  {_T('Apps')}")
-        tree.insert("", "end", "analysen", text=f"📁  {_T('Analysen')}")
-        tree.insert("", "end", "schulbank", text=f"🎓  {_T('Schulbank')}")
-        tree.insert("", "end", "daten_aktualisieren", text=f"🗄  {_T('Daten aktualisieren')}")
-        tree.insert("", "end", "update_backup", text=f"🔄  {_T('Update / Backup')}")
-
-        tree.insert("", "end", "datenbankuebersicht", text=f"🗄  {_T('Datenbankübersicht')}")
-
-        tree.insert("", "end", "report", text=f"📋  {_T('Report')}")
-        tree.insert("", "end", "roadmap", text=f"📌  {_T('Roadmap')}")
-
-        tree.insert("", "end", "datenbankpfad", text=f"☁️  {_T('Cloud / DB-Pfad')}")
-        tree.insert("", "end", "hilfe", text=f"❓  {_T('Hilfe')}")
-
-    def _on_nav_select(self, event=None):
-        selected = self.nav_tree.selection()
-        if not selected:
+    def navigate(self, key):
+        """Oeffnet die zum Schluessel gehoerende Seite/Aktion (Sidebar oder
+        programmatisch). Ersetzt den alten Treeview-Dispatch."""
+        handler = self._nav_handlers().get(key)
+        if not handler:
             return
-        item_id = selected[0]
+        try:
+            self.sidebar.set_active(key)
+        except Exception:
+            pass
+        try:
+            log_event("programm", "Navigation", f"Menüpunkt geöffnet: {key}", user=self.bearbeiter)
+        except Exception:
+            pass
+        handler()
 
-        handlers = {
+    def _nav_handlers(self):
+        """Zentrale Zuordnung Navigations-/Aktions-Schluessel -> Methode.
+        Einzige Quelle fuer Sidebar-Klicks und programmatische Navigation."""
+        return {
             "startseite": self.show_startseite,
             "neue_auswertung": self.show_neue_auswertung_page,
 
@@ -1467,7 +1428,7 @@ class NMGApp(tk.Tk):
             "lern_manuelle_pruefung": self.show_schulbank_manuelle_pruefung,
 
             "daten_aktualisieren": self.show_daten_aktualisieren_page,
-            "daten_manuelle_analysen_zf": lambda: self.show_import_page("Manuelle Analysen / Zukunftswerk", self.import_zf_data),
+            "daten_manuelle_analysen_zw": lambda: self.show_import_page("Manuelle Analysen / Zukunftswerk", self.import_zw_data),
             "daten_partnerkonditionen": lambda: self.show_import_page("Partnerkonditionen", self.import_pk_data),
             "daten_apu_hap": lambda: self.show_import_page("APU/HAP Daten", self.import_apu_data),
             "daten_nmg_artikel": lambda: self.show_import_page("NMG Artikel", self.import_nmg_articles),
@@ -1495,27 +1456,21 @@ class NMGApp(tk.Tk):
             "todo_center": self.show_todo_center,
             "kasse": self.open_kasse_app,
             "bestell_center": self.open_kasse_app,
+            "auswertungen": self.open_auswertungen_app,
             "report": self.show_report_page,
             "roadmap": self.show_roadmap_page,
             "datenbankpfad": self.show_datenbankpfad_page,
 
-            "hilfe": self.show_help_center,
+            "hilfe": self.open_hilfe_app,
         }
-        handler = handlers.get(item_id)
-        if handler:
-            try:
-                log_event("programm", "Navigation", f"Menüpunkt geöffnet: {item_id}", user=self.bearbeiter)
-            except Exception:
-                pass
-            handler()
 
     def _tile(self, parent, col, icon, title, desc, button, command, color):
-        f = tk.Frame(parent, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1)
+        f = tk.Frame(parent, bg=theme.CARD, highlightbackground=theme.BORDER, highlightthickness=1)
         f.grid(row=2, column=col, sticky="nsew", padx=10, pady=8)
-        tk.Label(f, text=icon, font=("Arial", 34), bg="#f8fbff", fg=color).pack(pady=(22, 6))
-        tk.Label(f, text=title, font=("Arial", 14, "bold"), bg="#f8fbff").pack()
-        tk.Label(f, text=desc, wraplength=180, justify="center", bg="#f8fbff", fg="#333").pack(padx=14, pady=12)
-        tk.Button(f, text=button + "  →", command=command, bg=color, fg="white", activebackground=color, relief="flat", font=("Arial", 12, "bold"), padx=18, pady=8).pack(fill="x", padx=18, pady=(8, 18))
+        tk.Label(f, text=icon, font=(theme.FONT, 32), bg=theme.CARD, fg=color).pack(pady=(22, 6))
+        tk.Label(f, text=title, font=(theme.FONT, 14, "bold"), bg=theme.CARD, fg=theme.INK).pack()
+        tk.Label(f, text=desc, wraplength=180, justify="center", bg=theme.CARD, fg=theme.MUTED, font=(theme.FONT, 10)).pack(padx=14, pady=12)
+        tk.Button(f, text=button + "  →", command=command, bg=color, fg="white", activebackground=color, relief="flat", font=(theme.FONT, 11, "bold"), padx=18, pady=8, cursor="hand2").pack(fill="x", padx=18, pady=(8, 18))
 
     def _parse_status_datetime(self, value):
         """Wandelt verschiedene DB-Datumsformate inkl. Excel-Serienzahl in datetime um."""
@@ -1780,7 +1735,7 @@ class NMGApp(tk.Tk):
         tk.Label(
             box_bearbeiter,
             text="👤 Aktiver Bearbeiter",
-            font=("Arial", 13, "bold"),
+            font=(theme.FONT, 13, "bold"),
             fg="#0b4a86",
             bg="#ffffff"
         ).pack(anchor="w", padx=14, pady=(14, 6))
@@ -1800,7 +1755,7 @@ class NMGApp(tk.Tk):
         tk.Label(
             box_updates,
             text="🕘 Letzte Datenaktualisierung",
-            font=("Arial", 13, "bold"),
+            font=(theme.FONT, 13, "bold"),
             fg="#0b4a86",
             bg="#ffffff"
         ).pack(anchor="w", padx=14, pady=(14, 6))
@@ -1816,7 +1771,7 @@ class NMGApp(tk.Tk):
                     justify="left",
                     bg="#ffffff",
                     fg=color,
-                    font=("Arial", 10, "bold")
+                    font=(theme.FONT, 10, "bold")
                 ).pack(anchor="w", padx=14, pady=(0, 8))
             tk.Label(
                 box_updates,
@@ -1824,7 +1779,7 @@ class NMGApp(tk.Tk):
                 justify="left",
                 bg="#ffffff",
                 fg="#555",
-                font=("Arial", 8)
+                font=(theme.FONT, 8)
             ).pack(anchor="w", padx=14, pady=(0, 14))
         except Exception:
             tk.Label(
@@ -1847,7 +1802,7 @@ class NMGApp(tk.Tk):
         box_backup = tk.Frame(parent, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
         box_backup.pack(fill="x", side="bottom")
         txt = "Backup heute erstellt" if auto.get("created") else "Backup heute vorhanden"
-        tk.Label(box_backup, text="✅ Backup-Status", font=("Arial", 13, "bold"), fg="#0b4a86", bg="#ffffff").pack(anchor="w", padx=14, pady=(14, 6))
+        tk.Label(box_backup, text="✅ Backup-Status", font=(theme.FONT, 13, "bold"), fg="#0b4a86", bg="#ffffff").pack(anchor="w", padx=14, pady=(14, 6))
         tk.Label(box_backup, text=f"{txt}\nAufbewahrung: 7 Tage\nÄltestes Auto-Backup wird zuerst gelöscht.", justify="left", bg="#ffffff", fg="#222").pack(anchor="w", padx=14, pady=(0, 12))
         tk.Button(box_backup, text="Backup-Verwaltung", command=self.show_backup_dialog).pack(fill="x", padx=14, pady=(0, 6))
         tk.Button(box_backup, text="📋 Protokolle", command=self.show_protocol_center).pack(fill="x", padx=14, pady=(0, 14))
@@ -1981,33 +1936,33 @@ class NMGApp(tk.Tk):
 
         # Volltext (wirkt auf alle Spalten zusammen)
         tk.Label(search_bar, text="Suche:", bg="#ffffff", fg="#0b4a86",
-                 font=("Arial", 10, "bold")).pack(side="left")
+                 font=(theme.FONT, 10, "bold")).pack(side="left")
         _sa_search_var = tk.StringVar()
         tk.Entry(search_bar, textvariable=_sa_search_var, width=22).pack(side="left", padx=(6, 12))
 
         # Getrennte Felder (V1.1 SP8)
         tk.Label(search_bar, text="Apotheke:", bg="#ffffff", fg="#0b4a86",
-                 font=("Arial", 9)).pack(side="left")
+                 font=(theme.FONT, 9)).pack(side="left")
         _sa_apo_var = tk.StringVar()
         tk.Entry(search_bar, textvariable=_sa_apo_var, width=14).pack(side="left", padx=(4, 8))
 
         tk.Label(search_bar, text="Kunden-Nr.:", bg="#ffffff", fg="#0b4a86",
-                 font=("Arial", 9)).pack(side="left")
+                 font=(theme.FONT, 9)).pack(side="left")
         _sa_knr_var = tk.StringVar()
         tk.Entry(search_bar, textvariable=_sa_knr_var, width=10).pack(side="left", padx=(4, 8))
 
         tk.Label(search_bar, text="Kunde:", bg="#ffffff", fg="#0b4a86",
-                 font=("Arial", 9)).pack(side="left")
+                 font=(theme.FONT, 9)).pack(side="left")
         _sa_kname_var = tk.StringVar()
         tk.Entry(search_bar, textvariable=_sa_kname_var, width=14).pack(side="left", padx=(4, 8))
 
         tk.Label(search_bar, text="Datum von:", bg="#ffffff", fg="#0b4a86",
-                 font=("Arial", 9)).pack(side="left")
+                 font=(theme.FONT, 9)).pack(side="left")
         _sa_von_var = tk.StringVar()
         _make_date_entry(search_bar, _sa_von_var, width=11).pack(side="left", padx=(4, 4))
 
         tk.Label(search_bar, text="bis:", bg="#ffffff", fg="#0b4a86",
-                 font=("Arial", 9)).pack(side="left")
+                 font=(theme.FONT, 9)).pack(side="left")
         _sa_bis_var = tk.StringVar()
         _make_date_entry(search_bar, _sa_bis_var, width=11).pack(side="left", padx=(4, 4))
 
@@ -2018,22 +1973,22 @@ class NMGApp(tk.Tk):
         _sa_bis_var.set("")
 
         tk.Label(search_bar, text="Doppelklick = Kunden zuordnen",
-                 bg="#ffffff", fg="#888", font=("Arial", 9)).pack(side="left", padx=8)
+                 bg="#ffffff", fg="#888", font=(theme.FONT, 9)).pack(side="left", padx=8)
 
         filter_bar = tk.Frame(body, bg="#ffffff")
         filter_bar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         filter_mode = tk.StringVar(value="ALLE")
-        tk.Label(filter_bar, text="Anzeigen:", bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).pack(side="left", padx=(0, 6))
+        tk.Label(filter_bar, text="Anzeigen:", bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 10, "bold")).pack(side="left", padx=(0, 6))
         def set_filter_mode(value):
             filter_mode.set(value)
             _sa_reload()
         # V1.1 SP10: 'IMPORT' = via bemerkung 'historischer Analyseimport%',
-        # 'PROGRAMM' = der Rest (create_linden_export), 'PA' = Produktanalyse-
+        # 'PROGRAMM' = der Rest (create_vorlage_export), 'PA' = Produktanalyse-
         # Excels aus OUTPUT_DIR (Spezialmodus, scannt Dateisystem).
         for label, value in (
             ("Alle", "ALLE"),
             ("PK", "NMG"),
-            ("ZW", "ZF"),
+            ("ZW", "ZW"),
             ("Importiert", "IMPORT"),
             ("Programm", "PROGRAMM"),
             ("Produktanalyse", "PA"),
@@ -2071,7 +2026,7 @@ class NMGApp(tk.Tk):
         side.grid(row=2, column=1, sticky="ns", padx=(16, 0), pady=(0, 16))
         side.grid_propagate(False)
         detail = tk.StringVar(value="Bitte Analyse auswählen.")
-        tk.Label(side, text="Aktionen", font=("Arial", 14, "bold"), fg="#0b4a86", bg="#f8fbff").pack(anchor="w", padx=16, pady=(16, 8))
+        tk.Label(side, text="Aktionen", font=(theme.FONT, 14, "bold"), fg="#0b4a86", bg="#f8fbff").pack(anchor="w", padx=16, pady=(16, 8))
         tk.Label(side, textvariable=detail, justify="left", wraplength=230, bg="#f8fbff", fg="#333").pack(anchor="w", padx=16, pady=(0, 14))
 
         rows = []
@@ -2138,14 +2093,14 @@ LIMIT 500
                 kname = str(row["kundenname"] if "kundenname" in row.keys() else "")
                 vals = (row["id"], str(row["datum"] or "")[:16], dq, apo, knr, kname,
                         row["anzahl_positionen"] or 0, row["nmg_treffer"] or 0)
-                if mode in ("NMG", "ZF") and str(row["datenquelle"] or "NMG") != mode:
+                if mode in ("NMG", "ZW") and str(row["datenquelle"] or "NMG").replace("ZF", "ZW") != mode:
                     continue
                 if mode == "DATEI" and not find_output_file(row):
                     continue
                 if mode == "NEU" and apo.lower().startswith(("manuell", "zf import", "zf daten")):
                     continue
                 # V1.1 SP10: 'IMPORT' = historischer Analyseimport,
-                # 'PROGRAMM' = alles andere (create_linden_export etc.).
+                # 'PROGRAMM' = alles andere (create_vorlage_export etc.).
                 bem = str(row["bemerkung"] if "bemerkung" in row.keys() else "")
                 is_import = bem.lower().startswith("historischer analyseimport")
                 if mode == "IMPORT" and not is_import:
@@ -2293,16 +2248,21 @@ LIMIT 500
             if not row:
                 return
             dq = row["datenquelle"] or "NMG"
-            try:
-                out = self._run_busy(
-                    lambda: export_marktanalyse_produktchancen(limit=500, min_apotheken=1, datenquelle=dq, auswertung_id=int(row["id"])),
-                    title="Produktanalyse",
-                    subtitle="Produktchancen werden berechnet ...",
-                )
-                self.status.set(f"Produktanalyse für Analyse {row['id']} erzeugt: {out}")
+            rid = int(row["id"])
+
+            # Hintergrund-Lauf mit Animation rechts oben, UI bleibt klickbar.
+            def on_done(out):
+                self.status.set(f"Produktanalyse für Analyse {rid} erzeugt: {out}")
                 messagebox.showinfo("Produktanalyse", f"Produktanalyse erstellt:\n{out}")
-            except Exception as exc:
-                messagebox.showerror("Produktanalyse", str(exc))
+
+            self._run_background(
+                lambda: export_marktanalyse_produktchancen(limit=500, min_apotheken=1, datenquelle=dq, auswertung_id=rid),
+                title="Produktanalyse",
+                subtitle="Produktchancen werden berechnet ...",
+                progress=False,
+                on_done=on_done,
+                on_error=lambda exc: messagebox.showerror("Produktanalyse", str(exc)),
+            )
 
         def deviation_selected():
             row = selected_row()
@@ -2329,7 +2289,7 @@ LIMIT 500
                 messagebox.showerror("Abweichungsanalyse", str(exc))
 
         def add_btn(text, cmd, color="#0b4a86"):
-            tk.Button(side, text=text, command=cmd, bg=color, fg="white", activebackground=color, relief="flat", font=("Arial", 11, "bold"), padx=10, pady=8).pack(fill="x", padx=16, pady=5)
+            tk.Button(side, text=text, command=cmd, bg=color, fg="white", activebackground=color, relief="flat", font=(theme.FONT, 11, "bold"), padx=10, pady=8).pack(fill="x", padx=16, pady=5)
 
         add_btn("📄 Auswertung öffnen", open_selected_output, "#0b4a86")
         add_btn("📈 Produktanalyse", product_selected, "#11823b")
@@ -2339,17 +2299,17 @@ LIMIT 500
         tk.Button(side, text="📦 Zeitraum archivieren",
                   command=self._archivieren_zeitraum_dialog,
                   bg="#0b6e6e", fg="white", relief="flat",
-                  font=("Arial", 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(14, 5))
+                  font=(theme.FONT, 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(14, 5))
         # V1.1 SP10: Zeitraum-Loeschen
         tk.Button(side, text="🗑  Zeitraum LOESCHEN",
                   command=self._loeschen_zeitraum_dialog,
                   bg="#9b1c1c", fg="white", relief="flat",
-                  font=("Arial", 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(0, 5))
+                  font=(theme.FONT, 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(0, 5))
         tk.Button(side, text="🗂  Archive verwalten",
                   command=self._archive_verwalten_dialog,
                   bg="#3867b7", fg="white", relief="flat",
-                  font=("Arial", 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(0, 5))
-        tk.Button(side, text="🔐 Admin: Auswertungen löschen", command=self.open_admin_auswertungen_loeschen, bg="#9b1c1c", fg="white", relief="flat", font=("Arial", 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(8, 5))
+                  font=(theme.FONT, 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(0, 5))
+        tk.Button(side, text="🔐 Admin: Auswertungen löschen", command=self.open_admin_auswertungen_loeschen, bg="#9b1c1c", fg="white", relief="flat", font=(theme.FONT, 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(8, 5))
 
         if not rows:
             listbox.insert("end", "Keine gespeicherten Analysen in der Datenbank gefunden.")
@@ -2375,13 +2335,13 @@ LIMIT 500
         win.grab_set()
         win.columnconfigure((0, 1, 2), weight=1)
 
-        tk.Label(win, text=title, font=("Arial", 20, "bold"), fg="#0b4a86", bg="#f5f7fb").grid(row=0, column=0, columnspan=3, sticky="w", padx=24, pady=(22, 4))
-        tk.Label(win, text="Welche Daten sollen berücksichtigt werden?", font=("Arial", 11), fg="#333", bg="#f5f7fb").grid(row=1, column=0, columnspan=3, sticky="w", padx=24, pady=(0, 16))
+        tk.Label(win, text=title, font=(theme.FONT, 20, "bold"), fg="#0b4a86", bg="#f5f7fb").grid(row=0, column=0, columnspan=3, sticky="w", padx=24, pady=(22, 4))
+        tk.Label(win, text="Welche Daten sollen berücksichtigt werden?", font=(theme.FONT, 11), fg="#333", bg="#f5f7fb").grid(row=1, column=0, columnspan=3, sticky="w", padx=24, pady=(0, 16))
 
         choice = tk.StringVar(value="ALLE")
         cards = [
             ("PK-Daten", "Partnerkonditionskunden\nAuswertungen, Lernstände, PK-/NMG-Zuordnung", "NMG"),
-            ("ZW-Daten", "Zukunftswerk-Kundendaten\nMarkt- und Produktpotenzial ohne Lernstand", "ZF"),
+            ("ZW-Daten", "Zukunftswerk-Kundendaten\nMarkt- und Produktpotenzial ohne Lernstand", "ZW"),
             ("PK + ZW", "Beide Datenwelten gemeinsam\nfür Gesamtmarkt und Produktchancen", "ALLE"),
         ]
 
@@ -2397,8 +2357,8 @@ LIMIT 500
         for col, (head, desc, val) in enumerate(cards):
             f = tk.Frame(win, bg="#ffffff", highlightthickness=2, highlightbackground="#d8e2ee", cursor="hand2")
             f.grid(row=2, column=col, sticky="nsew", padx=(24 if col == 0 else 8, 24 if col == 2 else 8), pady=8, ipady=8)
-            tk.Label(f, text=head, font=("Arial", 13, "bold"), fg="#0b4a86", bg="#ffffff").pack(pady=(14, 6), padx=10)
-            tk.Label(f, text=desc, font=("Arial", 9), fg="#333", bg="#ffffff", justify="center", wraplength=145).pack(padx=10, pady=(0, 12))
+            tk.Label(f, text=head, font=(theme.FONT, 13, "bold"), fg="#0b4a86", bg="#ffffff").pack(pady=(14, 6), padx=10)
+            tk.Label(f, text=desc, font=(theme.FONT, 9), fg="#333", bg="#ffffff", justify="center", wraplength=145).pack(padx=10, pady=(0, 12))
             f.bind("<Button-1>", lambda e, v=val: select(v))
             for child in f.winfo_children():
                 child.bind("<Button-1>", lambda e, v=val: select(v))
@@ -2414,12 +2374,12 @@ LIMIT 500
         buttonbar = tk.Frame(win, bg="#f5f7fb")
         buttonbar.grid(row=3, column=0, columnspan=3, sticky="e", padx=24, pady=18)
         tk.Button(buttonbar, text="Abbrechen", command=cancel, padx=18, pady=8).pack(side="right", padx=(8, 0))
-        tk.Button(buttonbar, text="Analyse starten  →", command=ok, bg="#0b4a86", fg="white", activebackground="#0b4a86", relief="flat", font=("Arial", 11, "bold"), padx=22, pady=9).pack(side="right")
+        tk.Button(buttonbar, text="Analyse starten  →", command=ok, bg="#0b4a86", fg="white", activebackground="#0b4a86", relief="flat", font=(theme.FONT, 11, "bold"), padx=22, pady=9).pack(side="right")
         select("ALLE")
         self.wait_window(win)
         return result["value"]
 
-    def import_zf_data(self):
+    def import_zw_data(self):
         files = filedialog.askopenfilenames(title="ZW-Dateien auswählen", filetypes=SUPPORTED_DATA_FILETYPES)
         if not files:
             return
@@ -2427,13 +2387,13 @@ LIMIT 500
         ok = messagebox.askyesno("ZW-Daten importieren", f"{len(files)} Datei(en) als ZW-Daten importieren?\n\nDiese Daten werden NICHT als PK-Lernstand übernommen.")
         if not ok:
             return
-        def _do_zf_import():
+        def _do_zw_import():
             imported_local = 0
             rows_local = 0
             errors_local = []
             for file in files:
                 try:
-                    r = import_historical_market_file(file, datenquelle="ZF", analyse_name=name)
+                    r = import_historical_market_file(file, datenquelle="ZW", analyse_name=name)
                     imported_local += 1
                     rows_local += int(r.get("rows", 0))
                 except Exception as exc:
@@ -2441,7 +2401,7 @@ LIMIT 500
             return imported_local, rows_local, errors_local
 
         imported, rows, errors = self._run_busy(
-            _do_zf_import,
+            _do_zw_import,
             title="ZW-Daten importieren",
             subtitle=f"Importiere {len(files)} Datei(en) ...",
         )
@@ -2455,7 +2415,7 @@ LIMIT 500
     # deckt fachlich alles ab, was wir brauchen.
 
     def _ask_produktanalyse_kundentyp(self):
-        """SP14: Fragt PK / ZF / PK+ZF ab. Liefert String oder None bei Abbruch."""
+        """SP14: Fragt PK / ZW / PK+ZW ab. Liefert String oder None bei Abbruch."""
         win = tk.Toplevel(self)
         win.title("Produktanalyse")
         win.transient(self)
@@ -2472,9 +2432,9 @@ LIMIT 500
             win.geometry("460x280")
 
         tk.Label(win, text="Welche Auswertungen sollen ausgewertet werden?",
-                 font=("Arial", 13, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(pady=(20, 6))
+                 font=(theme.FONT, 13, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(pady=(20, 6))
         tk.Label(win, text="Filter: nur Auswertungen der letzten 6 Monate.",
-                 font=("Arial", 10), fg="#444", bg="#f5f7fb").pack(pady=(0, 18))
+                 font=(theme.FONT, 10), fg="#444", bg="#f5f7fb").pack(pady=(0, 18))
 
         choice = {"value": None}
 
@@ -2486,12 +2446,12 @@ LIMIT 500
         btn_frame.pack()
         for label, val, color in [
             ("📊 PK", "PK", "#0b4a86"),
-            ("📊 ZW", "ZF", "#3867b7"),
-            ("📊 PK + ZW", "PK+ZF", "#11823b"),
+            ("📊 ZW", "ZW", "#3867b7"),
+            ("📊 PK + ZW", "PK+ZW", "#11823b"),
         ]:
             tk.Button(btn_frame, text=label, command=lambda v=val: pick(v),
                       bg=color, fg="white", relief="flat",
-                      font=("Arial", 12, "bold"), padx=20, pady=10, width=10).pack(side="left", padx=6)
+                      font=(theme.FONT, 12, "bold"), padx=20, pady=10, width=10).pack(side="left", padx=6)
 
         tk.Button(win, text="Abbrechen", command=win.destroy, padx=12, pady=6).pack(pady=(20, 12))
         win.bind("<Escape>", lambda e: win.destroy())
@@ -2499,27 +2459,35 @@ LIMIT 500
         return choice["value"]
 
     def market_opportunities(self):
-        # SP14: neuer Workflow - User waehlt PK/ZF/PK+ZF, dann erzeuge
-        # Produktchancen-Excel pro Kundentyp (bei PK+ZF: 3 Tabs).
+        # SP14: neuer Workflow - User waehlt PK/ZW/PK+ZW, dann erzeuge
+        # Produktchancen-Excel pro Kundentyp (bei PK+ZW: 3 Tabs).
         self._log_action("produktanalyse", "Produktanalyse gestartet")
         kundentyp = self._ask_produktanalyse_kundentyp()
         if not kundentyp:
             return
-        try:
-            out = self._run_busy(
-                lambda: export_produktanalyse_neu(kundentyp=kundentyp, monate=6),
-                title="Produktanalyse",
-                subtitle=f"Erzeuge Produktanalyse {kundentyp} ...",
-            )
+
+        # Laeuft im Hintergrund mit der Status-Box rechts oben (Animation),
+        # die UI bleibt klickbar. Post-Processing im UI-Thread via on_done.
+        def on_done(out):
             self._log_action("produktanalyse", "Produktanalyse erzeugt",
                              f"Kundentyp: {kundentyp} | Datei: {out}")
             self.status.set(f"Produktanalyse erzeugt: {out}")
             if messagebox.askyesno("Fertig",
                                    f"Produktanalyse {kundentyp} erstellt:\n{out}\n\nDatei jetzt oeffnen?"):
                 _open_file(out)
-        except Exception as exc:
+
+        def on_error(exc):
             self._log_error("produktanalyse", "Produktanalyse", exc)
             messagebox.showerror("Produktanalyse-Fehler", str(exc))
+
+        self._run_background(
+            lambda: export_produktanalyse_neu(kundentyp=kundentyp, monate=6),
+            title="Produktanalyse",
+            subtitle=f"Erzeuge Produktanalyse {kundentyp} ...",
+            progress=False,
+            on_done=on_done,
+            on_error=on_error,
+        )
 
     def deviation_analysis(self):
         self._log_action("abweichungsanalyse", "Abweichungsanalyse geöffnet")
@@ -2945,14 +2913,14 @@ LIMIT 500
         tk.Label(
             header,
             text="Abweichungsanalyse-Editor",
-            font=("Arial", 20, "bold"),
+            font=(theme.FONT, 20, "bold"),
             fg="#0b4a86",
             bg="#ffffff"
         ).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 2))
         tk.Label(
             header,
             text="Abweichungen im Programm prüfen. Die Excel-Ausgabe bleibt erhalten; Lernvorschläge entstehen erst durch bewusste Übernahme.",
-            font=("Arial", 10),
+            font=(theme.FONT, 10),
             fg="#333",
             bg="#ffffff"
         ).grid(row=1, column=0, sticky="w", padx=14, pady=(0, 12))
@@ -2970,7 +2938,7 @@ LIMIT 500
 
         top = tk.Frame(body, bg="#ffffff")
         top.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-        tk.Label(top, text="Filter:", bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).pack(side="left", padx=(0, 6))
+        tk.Label(top, text="Filter:", bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 10, "bold")).pack(side="left", padx=(0, 6))
         status_var = tk.StringVar(value="offen")
         source_label = Path(output_file).name if output_file else "alle Abweichungen"
         tk.Label(top, text=f"Quelle: {source_label}", bg="#ffffff", fg="#333").pack(side="right")
@@ -3027,7 +2995,7 @@ LIMIT 500
         side.grid(row=1, column=1, sticky="ns", padx=(16, 0))
         side.grid_propagate(False)
         detail = tk.StringVar(value="Abweichung auswählen.")
-        tk.Label(side, text="Aktionen", font=("Arial", 14, "bold"), fg="#0b4a86", bg="#f8fbff").pack(anchor="w", padx=16, pady=(16, 8))
+        tk.Label(side, text="Aktionen", font=(theme.FONT, 14, "bold"), fg="#0b4a86", bg="#f8fbff").pack(anchor="w", padx=16, pady=(16, 8))
         tk.Label(side, textvariable=detail, justify="left", wraplength=245, bg="#f8fbff", fg="#333").pack(anchor="w", padx=16, pady=(0, 14))
 
         row_map = {}
@@ -3157,7 +3125,7 @@ LIMIT 500
 
         def add_btn(text, cmd, color="#0b4a86"):
             tk.Button(side, text=text, command=cmd, bg=color, fg="white", activebackground=color,
-                      relief="flat", font=("Arial", 10, "bold"), padx=10, pady=8).pack(fill="x", padx=16, pady=4)
+                      relief="flat", font=(theme.FONT, 10, "bold"), padx=10, pady=8).pack(fill="x", padx=16, pady=4)
 
         for label, val in (("Offen", "offen"), ("Richtig", "richtig"), ("Falsch", "falsch"), ("Lernvorschlag", "lernvorschlag"), ("Abgelehnt", "abgelehnt"), ("Ignoriert", "ignoriert"), ("Alle", "alle")):
             tk.Radiobutton(top, text=label, variable=status_var, value=val, command=reload_rows, bg="#ffffff").pack(side="left", padx=(0, 8))
@@ -3217,8 +3185,8 @@ LIMIT 500
         header = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
         header.grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 8))
         header.columnconfigure(0, weight=1)
-        tk.Label(header, text="Protokolle", font=("Arial", 20, "bold"), fg="#0b4a86", bg="#ffffff").grid(row=0, column=0, sticky="w", padx=14, pady=(12, 2))
-        tk.Label(header, text=f"Protokollverzeichnis: {PROTOCOL_ROOT}", font=("Arial", 10), fg="#333", bg="#ffffff").grid(row=1, column=0, sticky="w", padx=14, pady=(0, 12))
+        tk.Label(header, text="Protokolle", font=(theme.FONT, 20, "bold"), fg="#0b4a86", bg="#ffffff").grid(row=0, column=0, sticky="w", padx=14, pady=(12, 2))
+        tk.Label(header, text=f"Protokollverzeichnis: {PROTOCOL_ROOT}", font=(theme.FONT, 10), fg="#333", bg="#ffffff").grid(row=1, column=0, sticky="w", padx=14, pady=(0, 12))
         tk.Button(header, text="Ordner öffnen", command=lambda: _open_folder(PROTOCOL_ROOT), padx=12, pady=6).grid(row=0, column=1, rowspan=2, sticky="e", padx=14, pady=12)
 
         body = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
@@ -3229,7 +3197,7 @@ LIMIT 500
 
         filter_frame = tk.Frame(body, bg="#ffffff")
         filter_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=10)
-        tk.Label(filter_frame, text="Kategorie:", bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).pack(side="left", padx=(0, 8))
+        tk.Label(filter_frame, text="Kategorie:", bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 10, "bold")).pack(side="left", padx=(0, 8))
         category_var = tk.StringVar(value="Alle")
         categories = ["Alle", "Programm", "Fehler", "Neue_Auswertung", "Schulbank", "Datenaktualisierung", "Produktanalyse", "Marktanalyse", "Abweichungsanalyse", "Update_Backup", "Admin", "Protokolle"]
         category_box = ttk.Combobox(filter_frame, textvariable=category_var, values=categories, state="readonly", width=28)
@@ -3345,9 +3313,9 @@ LIMIT 500
                 messagebox.showerror("Admin", str(exc))
 
         tk.Button(buttonbar, text="Aktualisieren", command=reload_list, padx=12, pady=7).pack(side="left", padx=(0, 8))
-        tk.Button(buttonbar, text="Per Mail senden", command=send_selected, bg="#0b4a86", fg="white", relief="flat", font=("Arial", 10, "bold"), padx=14, pady=8).pack(side="left", padx=(0, 8))
-        tk.Button(buttonbar, text="Supportpaket erstellen", command=support_package, bg="#11823b", fg="white", relief="flat", font=("Arial", 10, "bold"), padx=14, pady=8).pack(side="left", padx=(0, 8))
-        tk.Button(buttonbar, text="Admin: Löschen", command=delete_selected_admin, bg="#9b1c1c", fg="white", relief="flat", font=("Arial", 10, "bold"), padx=14, pady=8).pack(side="right")
+        tk.Button(buttonbar, text="Per Mail senden", command=send_selected, bg="#0b4a86", fg="white", relief="flat", font=(theme.FONT, 10, "bold"), padx=14, pady=8).pack(side="left", padx=(0, 8))
+        tk.Button(buttonbar, text="Supportpaket erstellen", command=support_package, bg="#11823b", fg="white", relief="flat", font=(theme.FONT, 10, "bold"), padx=14, pady=8).pack(side="left", padx=(0, 8))
+        tk.Button(buttonbar, text="Admin: Löschen", command=delete_selected_admin, bg="#9b1c1c", fg="white", relief="flat", font=(theme.FONT, 10, "bold"), padx=14, pady=8).pack(side="right")
 
         category_box.bind("<<ComboboxSelected>>", reload_list)
         tree.bind("<<TreeviewSelect>>", show_selected)
@@ -3358,7 +3326,7 @@ LIMIT 500
         win.resizable(True, True)
         win.title("Backup & Wiederherstellung")
         win.geometry("480x220")
-        tk.Label(win, text="Backup & Wiederherstellung", font=("Arial", 16, "bold")).pack(pady=16)
+        tk.Label(win, text="Backup & Wiederherstellung", font=(theme.FONT, 16, "bold")).pack(pady=16)
         tk.Label(win, text="Beim Programmstart wird automatisch ein Tagesbackup erstellt.\nEs werden die letzten 7 Auto-Backups behalten.").pack(pady=4)
         tk.Button(win, text="Backup jetzt manuell erstellen", command=self.create_backup, bg="#0b4a86", fg="white", padx=18, pady=8).pack(pady=6)
         tk.Button(win, text="Backup wiederherstellen", command=self.restore_backup, padx=18, pady=8).pack(pady=6)
@@ -3503,7 +3471,7 @@ LIMIT 500
         win.configure(bg="#f5f7fb")
         win.transient(self)
         win.grab_set()
-        tk.Label(win, text="Vorherige Version wiederherstellen", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 6))
+        tk.Label(win, text="Vorherige Version wiederherstellen", font=(theme.FONT, 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 6))
         tk.Label(win, text="Wählen Sie einen Rücksprungpunkt. Vor dem Zurückspielen wird der aktuelle Stand nochmals gesichert.", bg="#f5f7fb", fg="#333").pack(anchor="w", padx=22, pady=(0, 12))
         lb = tk.Listbox(win, font=("Consolas", 10), height=12)
         lb.pack(fill="both", expand=True, padx=22, pady=(0, 12))
@@ -3547,7 +3515,7 @@ LIMIT 500
 
         # Links: Versionsliste
         left = tk.LabelFrame(body, text=" Versionen ",
-                             bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold"))
+                             bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 10, "bold"))
         left.grid(row=0, column=0, sticky="ns", padx=(0, 8))
         left.rowconfigure(0, weight=1)
         left.columnconfigure(0, weight=1)
@@ -3565,11 +3533,11 @@ LIMIT 500
 
         # Rechts: Changelog
         right = tk.LabelFrame(body, text=" Aenderungen ",
-                              bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold"))
+                              bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 10, "bold"))
         right.grid(row=0, column=1, sticky="nsew")
         right.rowconfigure(0, weight=1)
         right.columnconfigure(0, weight=1)
-        text_widget = tk.Text(right, wrap="word", font=("Arial", 10),
+        text_widget = tk.Text(right, wrap="word", font=(theme.FONT, 10),
                               bg="#fcfdff", fg="#222", relief="flat",
                               padx=12, pady=10)
         text_widget.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
@@ -3597,7 +3565,7 @@ LIMIT 500
             text_widget.insert("end", f"{name}  ({datum})\n\n", "head")
             for line in lines:
                 text_widget.insert("end", f"  • {line}\n\n")
-            text_widget.tag_configure("head", font=("Arial", 12, "bold"),
+            text_widget.tag_configure("head", font=(theme.FONT, 12, "bold"),
                                       foreground="#0b4a86")
             text_widget.configure(state="disabled")
 
@@ -3618,18 +3586,23 @@ LIMIT 500
         self.page.rowconfigure(0, weight=1)
         self.page.rowconfigure(1, weight=1)
 
-    def _page_header(self, title, subtitle=""):
-        header = tk.Frame(self.page, bg="#ffffff")
-        header.grid(row=0, column=0, sticky="ew", padx=14, pady=(8, 4))
-        tk.Label(header, text=title, font=("Arial", 15, "bold"), fg="#0b4a86", bg="#ffffff").pack(anchor="w")
+    def _page_header(self, title, subtitle="", icon=None):
+        header = tk.Frame(self.page, bg=theme.CARD)
+        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 8))
+        if icon is not None:
+            tk.Label(header, image=icon, bg=theme.CARD).pack(side="left", padx=(0, 12))
+            self._page_header_icon = icon  # Referenz halten (sonst GC)
+        textcol = tk.Frame(header, bg=theme.CARD)
+        textcol.pack(side="left", anchor="w")
+        tk.Label(textcol, text=title, font=(theme.FONT, 20, "bold"), fg=theme.INK, bg=theme.CARD).pack(anchor="w")
         if subtitle:
-            tk.Label(header, text=subtitle, font=("Arial", 9), fg="#666", bg="#ffffff").pack(anchor="w", pady=(2, 0))
+            tk.Label(textcol, text=subtitle, font=(theme.FONT, 11), fg=theme.MUTED, bg=theme.CARD).pack(anchor="w", pady=(2, 0))
 
-    def _action_page(self, title, subtitle, button_text, command, color="#0b4a86"):
+    def _action_page(self, title, subtitle, button_text, command, color=theme.PRIMARY):
         self.clear_page()
         self._page_header(title, subtitle)
-        body = tk.Frame(self.page, bg="#ffffff")
-        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        body = tk.Frame(self.page, bg=theme.CARD)
+        body.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 18))
         tk.Button(
             body,
             text=button_text,
@@ -3638,7 +3611,8 @@ LIMIT 500
             fg="white",
             activebackground=color,
             relief="flat",
-            font=("Arial", 12, "bold"),
+            font=(theme.FONT, 12, "bold"),
+            cursor="hand2",
             padx=20,
             pady=10
         ).pack(anchor="w", pady=8)
@@ -3884,8 +3858,10 @@ LIMIT 500
             out_wb.save(out_path)
         except Exception as exc:
             # Layout darf die fachliche Auswertung nicht blockieren.
+            # status.set thread-sicher (Methode laeuft jetzt im Hintergrund-Thread).
             try:
-                self.status.set(f"Auswertung erstellt, aber Vorlage konnte nicht angewendet werden: {exc}")
+                msg = f"Auswertung erstellt, aber Vorlage konnte nicht angewendet werden: {exc}"
+                self.after(0, lambda m=msg: self.status.set(m))
             except Exception:
                 pass
 
@@ -3922,7 +3898,8 @@ LIMIT 500
             except Exception:
                 pass
             # SP7: Auswertungen werden je nach Kundentyp in einen Unterordner sortiert.
-            sub = kundentyp if kundentyp in ("PK", "ZF") else None
+            _kt = "ZW" if kundentyp == "ZF" else kundentyp
+            sub = _kt if _kt in ("PK", "ZW") else None
             base_dir = SAVED_ANALYSES_DIR / sub if sub else SAVED_ANALYSES_DIR
             analyse_dir = base_dir / f"{analyse_name}_{out.stem[-15:] if len(out.stem) >= 15 else ''}".strip("_")
             analyse_dir.mkdir(parents=True, exist_ok=True)
@@ -3932,18 +3909,61 @@ LIMIT 500
                 shutil.copy2(file, analyse_dir / f"Rohdaten_{Path(file).name}")
             except Exception:
                 pass
-            self._apply_auswertungsvorlage(copied_out, vorlage_slot, zeitraum_monate)
-            self._apply_output_period_header(copied_out, zeitraum_monate)
             self._roadmap_mark_neue_auswertung_form_erledigt()
-            self._log_action("neue_auswertung", "Auswertung gespeichert", str(copied_out))
-            self.status.set(f"Auswertung gespeichert: {copied_out}")
-            messagebox.showinfo("Auswertung fertig", f"Auswertung wurde erstellt und gespeichert:\n{copied_out}\n\nDer Ordner wird jetzt geöffnet.")
-            _open_folder(analyse_dir)
-            if on_done:
+
+            # SP31: Die gesamte SCHWERE Nachbearbeitung (Vorlage anwenden =
+            # zehntausende Zell-Format-Kopien, Zeitraum-Kopf, Kurzbericht) lief
+            # bisher im UI-Thread -> Oberflaeche fror nach jeder Auswertung ein.
+            # Jetzt komplett im Hintergrund-Thread; nur die Abschluss-Meldung +
+            # Ordner-Oeffnen laufen via after() wieder im UI-Thread.
+            self.status.set("Auswertung wird nachbearbeitet ...")
+
+            def _heavy_and_finish():
                 try:
-                    on_done(copied_out)
+                    self._apply_auswertungsvorlage(copied_out, vorlage_slot, zeitraum_monate)
                 except Exception:
                     pass
+                try:
+                    self._apply_output_period_header(copied_out, zeitraum_monate)
+                except Exception:
+                    pass
+
+                def _finished_ui():
+                    self._log_action("neue_auswertung", "Auswertung gespeichert", str(copied_out))
+                    self.status.set(f"Auswertung gespeichert: {copied_out}")
+                    messagebox.showinfo(
+                        "Auswertung fertig",
+                        f"Auswertung wurde erstellt und gespeichert:\n{copied_out}\n\n"
+                        "Der Kurzbericht (Excel + PDF) wird noch erstellt und liegt gleich im selben Ordner.\n\n"
+                        "Der Ordner wird jetzt geöffnet."
+                    )
+                    _open_folder(analyse_dir)
+                    if on_done:
+                        try:
+                            on_done(copied_out)
+                        except Exception:
+                            pass
+                try:
+                    self.after(0, _finished_ui)
+                except Exception:
+                    pass
+
+                # Kurzbericht zuletzt - er ist optional und darf nichts blockieren.
+                try:
+                    from .kurzbericht import create_kurzbericht
+                    kb = create_kurzbericht(
+                        copied_out, analyse_name, analyse_dir,
+                        zeitraum_monate=zeitraum_monate,
+                        apotheke=kundenname or analyse_name,
+                    )
+                    erzeugt = [fmt for fmt in ("excel", "pdf") if kb.get(fmt)]
+                    if erzeugt:
+                        self._log_action("neue_auswertung", "Kurzbericht erstellt",
+                                         "; ".join(str(kb[f]) for f in erzeugt))
+                except Exception as kb_exc:
+                    self._log_action("neue_auswertung", "Kurzbericht fehlgeschlagen", str(kb_exc))
+
+            threading.Thread(target=_heavy_and_finish, daemon=True).start()
 
         def on_export_error(exc):
             self._auswertung_running = False
@@ -3968,8 +3988,35 @@ LIMIT 500
                 return
             messagebox.showerror("Auswertungsfehler", str(exc))
 
+        def on_duplicate_prompt(info):
+            # Wird aus dem Worker-Thread aufgerufen. Die Abfrage muss aber im
+            # UI-Thread laufen, also via after(0, ...) marshallen und den Worker
+            # bis zur Antwort blockieren.
+            holder = {}
+            answered = threading.Event()
+
+            def ask():
+                beispiele = ", ".join(info["pzns"][:10])
+                if info["count"] > 10:
+                    beispiele += " …"
+                msg = (
+                    f"{info['count']} PZN kommen in der Rohdatei mehrfach vor"
+                    + (" – teils mit negativen Mengen (z. B. Retouren)" if info["has_negative"] else "")
+                    + ".\n\n"
+                    f"Betroffen: {beispiele}\n\n"
+                    "Sollen die Mengen je PZN summiert werden (eine Zeile pro PZN)?\n\n"
+                    "Ja = zusammenfassen und summieren\n"
+                    "Nein = jede Zeile einzeln lassen (wie bisher)"
+                )
+                holder["v"] = messagebox.askyesno("Mehrfache PZN gefunden", msg)
+                answered.set()
+
+            self.after(0, ask)
+            answered.wait()
+            return holder.get("v", False)
+
         self._run_background(
-            lambda: create_linden_export(file, analyse_name),
+            lambda: create_vorlage_export(file, analyse_name, on_duplicate_prompt=on_duplicate_prompt),
             title="Auswertung wird erstellt",
             subtitle=f"NMGone wertet {Path(file).name} aus ...",
             progress=False,
@@ -4101,7 +4148,7 @@ LIMIT 500
         win.transient(self)
         win.grab_set()
 
-        tk.Label(win, text="Rohdaten-Formatassistent", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 4))
+        tk.Label(win, text="Rohdaten-Formatassistent", font=(theme.FONT, 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 4))
         hinweis = f"Datei: {path.name}\n"
         if fehlertext:
             hinweis += f"\nAutomatische Erkennung fehlgeschlagen:\n{fehlertext}\n"
@@ -4128,11 +4175,11 @@ LIMIT 500
             ("EK-Spalte optional", ek_var, combo_values),
         ]
         for r, (label, var, values) in enumerate(rows):
-            tk.Label(form, text=label, bg="#ffffff", fg="#0b4a86", font=("Arial", 11, "bold")).grid(row=r, column=0, sticky="w", padx=14, pady=9)
+            tk.Label(form, text=label, bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 11, "bold")).grid(row=r, column=0, sticky="w", padx=14, pady=9)
             cb = ttk.Combobox(form, textvariable=var, values=values, state="readonly", width=58)
             cb.grid(row=r, column=1, sticky="ew", padx=14, pady=9)
 
-        tk.Label(form, text="Zeitraum *", bg="#ffffff", fg="#0b4a86", font=("Arial", 11, "bold")).grid(row=5, column=0, sticky="w", padx=14, pady=9)
+        tk.Label(form, text="Zeitraum *", bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 11, "bold")).grid(row=5, column=0, sticky="w", padx=14, pady=9)
         period = tk.Frame(form, bg="#ffffff")
         period.grid(row=5, column=1, sticky="w", padx=14, pady=9)
         tk.Radiobutton(period, text="6 Monate", variable=zeitraum_var, value="6", bg="#ffffff").pack(side="left", padx=(0, 18))
@@ -4194,7 +4241,7 @@ LIMIT 500
         buttons = tk.Frame(win, bg="#f5f7fb")
         buttons.pack(fill="x", padx=22, pady=(0, 18))
         tk.Button(buttons, text="Abbrechen", command=win.destroy, padx=16, pady=8).pack(side="right", padx=(8, 0))
-        tk.Button(buttons, text="Mapping speichern und Auswertung starten", command=save_mapping, bg="#0b4a86", fg="white", relief="flat", font=("Arial", 11, "bold"), padx=20, pady=9).pack(side="right")
+        tk.Button(buttons, text="Mapping speichern und Auswertung starten", command=save_mapping, bg="#0b4a86", fg="white", relief="flat", font=(theme.FONT, 11, "bold"), padx=20, pady=9).pack(side="right")
         self.wait_window(win)
         return result["mapping"]
 
@@ -4202,11 +4249,12 @@ LIMIT 500
         """Alle verfügbaren Kacheln für das Dashboard (Schnellzugriff + Info-Widgets)."""
         return [
             # --- Schnellzugriff ---
-            ("neue_auswertung",  "📊", "Neue Auswertung",      "PK-/ZW-Auswertung starten.",               self.show_neue_auswertung_page,              "#0b4a86"),
+            ("neue_auswertung",  "📊", "Bedarfsanalyse",      "PK-/ZW-Auswertung starten.",               self.show_neue_auswertung_page,              "#0b4a86"),
             ("gespeicherte",     "📁", "Ges. Analysen",        "Vorhandene Analysen öffnen.",               self.open_saved_analyses,                    "#3867b7"),
             ("schulbank",        "🎓", "Schulbank",            "Lernvorschläge bearbeiten.",                lambda: self.show_schulbank_page("Schulbank"),"#11823b"),
             ("kunden",           "👥", "Kunden",           "Kundenstamm und -history.",                 self.show_kunden_center,                     "#0b4a86"),
             ("kasse",            "🛒", "Kasse",                "Verkauf an Apotheken + Wareneingang.",      self.open_kasse_app,                         "#8b5a00"),
+            ("auswertungen",     "📑", "Auswertungen",         "Verkäufe, Kunden, Artikel frei auswerten.", self.open_auswertungen_app,                  "#0b6e6e"),
             ("todo",             "✅", "ToDo",                 "Aufgaben und offene Punkte.",               self.show_todo_center,                        "#11823b"),
             ("mitarbeiter",      "👥", "Mitarbeiter",          "Zuständigkeiten und Datenpfade.",           self.show_mitarbeiter_center,                "#6b4fb3"),
             ("produktanalyse",   "📈", "Produktanalyse",       "Produktchancen erstellen.",                 self.market_opportunities,                   "#11823b"),
@@ -4217,6 +4265,7 @@ LIMIT 500
             ("vergleichssuche",  "🔍", "Vergleichs-Suche",     "PZN/Artikelname schnell finden.",           self.open_vergleichssuche_window,            "#0b6e6e"),
             ("globale_suche",    "🔍", "Globale Suche",        "Kunde, Analyse oder Artikel finden.",       self.open_globale_suche_window,              "#0b4a86"),
             ("nmg_rabatte",      "💰", "NMG-Rabatte",          "Aktuelle Rabatte, Statistik, Diff, Verlauf.", self.show_nmg_rabatte_uebersicht,         "#6b4fb3"),
+            ("hilfe",            "❓", "Hilfe",                "Bebildertes Handbuch: was wie funktioniert.", self.open_hilfe_app,                      "#208acd"),
         ]
 
     def _dashboard_all_info_widgets(self):
@@ -4275,7 +4324,7 @@ LIMIT 500
         if "info_ampel" in active_info:
             amp_box = tk.Frame(info_row, bg="#f0f4fa", highlightbackground="#c5d3e8", highlightthickness=1)
             amp_box.grid(row=0, column=col_idx, sticky="nsew", padx=(0, 4), ipady=2)
-            tk.Label(amp_box, text="🗄 Daten-Aktualität", font=("Arial", 9, "bold"), fg="#0b4a86", bg="#f0f4fa").pack(anchor="w", padx=8, pady=(5,2))
+            tk.Label(amp_box, text="🗄 Daten-Aktualität", font=(theme.FONT, 9, "bold"), fg="#0b4a86", bg="#f0f4fa").pack(anchor="w", padx=8, pady=(5,2))
             items = self._get_data_update_status_items()
             if items:
                 for name, val, count in items:
@@ -4283,16 +4332,16 @@ LIMIT 500
                     color = self._status_ampel_combined_color(val, count)
                     date_str = self._format_status_datetime(val)
                     count_str = self._format_count(count)
-                    tk.Label(amp_box, text=f"{amp} {name} ({count_str}): {date_str}", font=("Arial", 8), fg=color, bg="#f0f4fa").pack(anchor="w", padx=8)
+                    tk.Label(amp_box, text=f"{amp} {name} ({count_str}): {date_str}", font=(theme.FONT, 8), fg=color, bg="#f0f4fa").pack(anchor="w", padx=8)
             else:
-                tk.Label(amp_box, text="–", font=("Arial", 8), fg="#888", bg="#f0f4fa").pack(anchor="w", padx=8)
-            tk.Label(amp_box, text="🟢<30T 🟡30-60T 🔴>60T ⚪leer/kein Datum", font=("Arial", 7), fg="#888", bg="#f0f4fa").pack(anchor="w", padx=8, pady=(0,4))
+                tk.Label(amp_box, text="–", font=(theme.FONT, 8), fg="#888", bg="#f0f4fa").pack(anchor="w", padx=8)
+            tk.Label(amp_box, text="🟢<30T 🟡30-60T 🔴>60T ⚪leer/kein Datum", font=(theme.FONT, 7), fg="#888", bg="#f0f4fa").pack(anchor="w", padx=8, pady=(0,4))
             col_idx += 1
 
         if "info_todos" in active_info:
             todo_box = tk.Frame(info_row, bg="#f0faf4", highlightbackground="#b2d8c0", highlightthickness=1)
             todo_box.grid(row=0, column=col_idx, sticky="nsew", padx=(4, 4), ipady=2)
-            tk.Label(todo_box, text="✅ Offene ToDos", font=("Arial", 9, "bold"), fg="#11823b", bg="#f0faf4").pack(anchor="w", padx=8, pady=(5,2))
+            tk.Label(todo_box, text="✅ Offene ToDos", font=(theme.FONT, 9, "bold"), fg="#11823b", bg="#f0faf4").pack(anchor="w", padx=8, pady=(5,2))
             try:
                 with sqlite3.connect(DB_PATH) as con:
                     con.row_factory = sqlite3.Row
@@ -4304,21 +4353,21 @@ LIMIT 500
                     for t in todos:
                         prio = str(t["prioritaet"] or "")
                         icon = "🔴" if "hoch" in prio.lower() else "🟡"
-                        tk.Label(todo_box, text=f"{icon} {(t['titel'] or '')[:38]}", font=("Arial", 8), fg="#145c2e", bg="#f0faf4").pack(anchor="w", padx=8)
+                        tk.Label(todo_box, text=f"{icon} {(t['titel'] or '')[:38]}", font=(theme.FONT, 8), fg="#145c2e", bg="#f0faf4").pack(anchor="w", padx=8)
                     if gesamt > 4:
-                        tk.Label(todo_box, text=f"… +{gesamt-4} weitere", font=("Arial", 7), fg="#666", bg="#f0faf4").pack(anchor="w", padx=8)
+                        tk.Label(todo_box, text=f"… +{gesamt-4} weitere", font=(theme.FONT, 7), fg="#666", bg="#f0faf4").pack(anchor="w", padx=8)
                 else:
-                    tk.Label(todo_box, text="Keine offenen ToDos ✔", font=("Arial", 8), fg="#11823b", bg="#f0faf4").pack(anchor="w", padx=8)
+                    tk.Label(todo_box, text="Keine offenen ToDos ✔", font=(theme.FONT, 8), fg="#11823b", bg="#f0faf4").pack(anchor="w", padx=8)
             except Exception:
-                tk.Label(todo_box, text="–", font=("Arial", 8), fg="#888", bg="#f0faf4").pack(anchor="w", padx=8)
+                tk.Label(todo_box, text="–", font=(theme.FONT, 8), fg="#888", bg="#f0faf4").pack(anchor="w", padx=8)
             tk.Button(todo_box, text="ToDo →", command=self.show_todo_center, bg="#11823b", fg="white",
-                      relief="flat", font=("Arial", 8), padx=6, pady=2).pack(anchor="w", padx=8, pady=(2,4))
+                      relief="flat", font=(theme.FONT, 8), padx=6, pady=2).pack(anchor="w", padx=8, pady=(2,4))
             col_idx += 1
 
         if "info_analysen" in active_info:
             ana_box = tk.Frame(info_row, bg="#fafafa", highlightbackground="#d8e2ee", highlightthickness=1)
             ana_box.grid(row=0, column=col_idx, sticky="nsew", padx=(4, 0), ipady=2)
-            tk.Label(ana_box, text="📊 Letzte Auswertungen", font=("Arial", 9, "bold"), fg="#0b4a86", bg="#fafafa").pack(anchor="w", padx=8, pady=(5,2))
+            tk.Label(ana_box, text="📊 Letzte Auswertungen", font=(theme.FONT, 9, "bold"), fg="#0b4a86", bg="#fafafa").pack(anchor="w", padx=8, pady=(5,2))
             try:
                 rows = self._get_saved_analysis_rows(limit=4)
                 if rows:
@@ -4326,13 +4375,13 @@ LIMIT 500
                         dq = _dq_label(r["datenquelle"])
                         datum_str = str(r["datum"] or "")[:10]
                         name = str(r["apotheke"] or "–")[:28]
-                        tk.Label(ana_box, text=f"[{dq}] {datum_str} – {name}", font=("Arial", 8), fg="#333", bg="#fafafa").pack(anchor="w", padx=8)
+                        tk.Label(ana_box, text=f"[{dq}] {datum_str} – {name}", font=(theme.FONT, 8), fg="#333", bg="#fafafa").pack(anchor="w", padx=8)
                 else:
-                    tk.Label(ana_box, text="Noch keine Auswertungen.", font=("Arial", 8), fg="#888", bg="#fafafa").pack(anchor="w", padx=8)
+                    tk.Label(ana_box, text="Noch keine Auswertungen.", font=(theme.FONT, 8), fg="#888", bg="#fafafa").pack(anchor="w", padx=8)
             except Exception:
-                tk.Label(ana_box, text="–", font=("Arial", 8), fg="#888", bg="#fafafa").pack(anchor="w", padx=8)
+                tk.Label(ana_box, text="–", font=(theme.FONT, 8), fg="#888", bg="#fafafa").pack(anchor="w", padx=8)
             tk.Button(ana_box, text="Alle →", command=self.open_saved_analyses, bg="#3867b7", fg="white",
-                      relief="flat", font=("Arial", 8), padx=6, pady=2).pack(anchor="w", padx=8, pady=(2,4))
+                      relief="flat", font=(theme.FONT, 8), padx=6, pady=2).pack(anchor="w", padx=8, pady=(2,4))
 
 
 
@@ -4357,11 +4406,11 @@ LIMIT 500
         win.transient(self)
         win.grab_set()
 
-        tk.Label(win, text="⚙️  Dashboard anpassen", font=("Arial", 16, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 2))
-        tk.Label(win, text="Wähle welche Info-Bereiche und Schnellzugriff-Kacheln auf der Startseite erscheinen.\nDie Auswahl wird für dich gespeichert.", font=("Arial", 10), fg="#444", bg="#f5f7fb", justify="left").pack(anchor="w", padx=22, pady=(0, 10))
+        tk.Label(win, text="⚙️  Dashboard anpassen", font=(theme.FONT, 16, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 2))
+        tk.Label(win, text="Wähle welche Info-Bereiche und Schnellzugriff-Kacheln auf der Startseite erscheinen.\nDie Auswahl wird für dich gespeichert.", font=(theme.FONT, 10), fg="#444", bg="#f5f7fb", justify="left").pack(anchor="w", padx=22, pady=(0, 10))
 
         # --- Info-Widgets ---
-        tk.Label(win, text="Info-Bereiche (obere Zeile):", font=("Arial", 11, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(4, 2))
+        tk.Label(win, text="Info-Bereiche (obere Zeile):", font=(theme.FONT, 11, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(4, 2))
         info_frame = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
         info_frame.pack(fill="x", padx=22, pady=(0, 10))
         info_checks = {}
@@ -4371,11 +4420,11 @@ LIMIT 500
             var = tk.BooleanVar(value=(key in active_info))
             info_checks[key] = var
             tk.Checkbutton(row_f, variable=var, bg="#ffffff", activebackground="#ffffff", cursor="hand2").pack(side="left")
-            tk.Label(row_f, text=label, font=("Arial", 11, "bold"), fg="#123", bg="#ffffff", width=26, anchor="w").pack(side="left")
-            tk.Label(row_f, text=desc, font=("Arial", 9), fg="#555", bg="#ffffff", anchor="w", wraplength=280).pack(side="left", padx=(4, 0))
+            tk.Label(row_f, text=label, font=(theme.FONT, 11, "bold"), fg="#123", bg="#ffffff", width=26, anchor="w").pack(side="left")
+            tk.Label(row_f, text=desc, font=(theme.FONT, 9), fg="#555", bg="#ffffff", anchor="w", wraplength=280).pack(side="left", padx=(4, 0))
 
         # --- Schnellzugriff-Kacheln ---
-        tk.Label(win, text="Schnellzugriff-Kacheln:", font=("Arial", 11, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(4, 2))
+        tk.Label(win, text="Schnellzugriff-Kacheln:", font=(theme.FONT, 11, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(4, 2))
         tile_container = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
         tile_container.pack(fill="both", expand=True, padx=22, pady=(0, 10))
 
@@ -4395,9 +4444,9 @@ LIMIT 500
             var = tk.BooleanVar(value=(key in active_tiles))
             tile_checks[key] = var
             tk.Checkbutton(row_f, variable=var, bg="#ffffff", activebackground="#ffffff", cursor="hand2").pack(side="left")
-            tk.Label(row_f, text=icon, font=("Arial", 13), fg=color, bg="#ffffff", width=3).pack(side="left")
-            tk.Label(row_f, text=title, font=("Arial", 11, "bold"), fg="#123", bg="#ffffff", width=20, anchor="w").pack(side="left")
-            tk.Label(row_f, text=desc, font=("Arial", 9), fg="#555", bg="#ffffff", anchor="w").pack(side="left", padx=(4, 0))
+            tk.Label(row_f, text=icon, font=(theme.FONT, 13), fg=color, bg="#ffffff", width=3).pack(side="left")
+            tk.Label(row_f, text=title, font=(theme.FONT, 11, "bold"), fg="#123", bg="#ffffff", width=20, anchor="w").pack(side="left")
+            tk.Label(row_f, text=desc, font=(theme.FONT, 9), fg="#555", bg="#ffffff", anchor="w").pack(side="left", padx=(4, 0))
 
         def save():
             new_tiles = {k for k, v in tile_checks.items() if v.get()}
@@ -4429,7 +4478,7 @@ LIMIT 500
         tk.Button(btn_row, text="Alle auswählen", command=select_all, padx=10, pady=6).pack(side="left", padx=(0, 6))
         tk.Button(btn_row, text="Alle abwählen", command=deselect_all, padx=10, pady=6).pack(side="left")
         tk.Button(btn_row, text="Abbrechen", command=win.destroy, padx=14, pady=6).pack(side="right", padx=(8, 0))
-        tk.Button(btn_row, text="✔  Speichern", command=save, bg="#0b4a86", fg="white", relief="flat", font=("Arial", 11, "bold"), padx=16, pady=6).pack(side="right")
+        tk.Button(btn_row, text="✔  Speichern", command=save, bg="#0b4a86", fg="white", relief="flat", font=(theme.FONT, 11, "bold"), padx=16, pady=6).pack(side="right")
 
     def show_globale_suche(self, start_query=""):
         """Globale Suche über Kunden, Auswertungen, ToDos und Mitarbeiter."""
@@ -4442,13 +4491,13 @@ LIMIT 500
         win.transient(self)
         win.grab_set()
 
-        tk.Label(win, text="🔍  Globale Suche", font=("Arial", 14, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(16, 4))
-        tk.Label(win, text="Suche in Kunden (Name, Kundennummer, PLZ, Inhaber), Auswertungen und ToDos.", font=("Arial", 9), fg="#666", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(0, 8))
+        tk.Label(win, text="🔍  Globale Suche", font=(theme.FONT, 14, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(16, 4))
+        tk.Label(win, text="Suche in Kunden (Name, Kundennummer, PLZ, Inhaber), Auswertungen und ToDos.", font=(theme.FONT, 9), fg="#666", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(0, 8))
 
         search_frame = tk.Frame(win, bg="#f5f7fb")
         search_frame.pack(fill="x", padx=20, pady=(0, 8))
         search_var = tk.StringVar(value=start_query)
-        search_entry = tk.Entry(search_frame, textvariable=search_var, font=("Arial", 12), width=50)
+        search_entry = tk.Entry(search_frame, textvariable=search_var, font=(theme.FONT, 12), width=50)
         search_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
         search_entry.focus_set()
 
@@ -4479,7 +4528,7 @@ LIMIT 500
             if sel:
                 self._kunden_detail_dialog(k_row_map.get(sel[0]))
         k_tree.bind("<Double-1>", open_kunde)
-        tk.Label(kunden_frame, text="Doppelklick = Kundendaten öffnen", font=("Arial", 8), fg="#888", bg="#ffffff").grid(row=1, column=0, sticky="w", padx=4)
+        tk.Label(kunden_frame, text="Doppelklick = Kundendaten öffnen", font=(theme.FONT, 8), fg="#888", bg="#ffffff").grid(row=1, column=0, sticky="w", padx=4)
 
         # Tab 2: Auswertungen
         ana_frame = tk.Frame(nb, bg="#ffffff")
@@ -4585,10 +4634,10 @@ LIMIT 500
         box.pack(fill="x", padx=14, pady=(0, 6))
         box.columnconfigure(1, weight=1)
 
-        tk.Label(box, text="📝 Schnellnotiz", font=("Arial", 9, "bold"), fg="#7a6000", bg="#fffef0").grid(row=0, column=0, sticky="w", padx=8, pady=(5,2))
+        tk.Label(box, text="📝 Schnellnotiz", font=(theme.FONT, 9, "bold"), fg="#7a6000", bg="#fffef0").grid(row=0, column=0, sticky="w", padx=8, pady=(5,2))
 
         notiz_var = tk.StringVar()
-        entry = tk.Entry(box, textvariable=notiz_var, font=("Arial", 10), bg="#fffff8",
+        entry = tk.Entry(box, textvariable=notiz_var, font=(theme.FONT, 10), bg="#fffff8",
                          relief="solid", bd=1)
         entry.grid(row=0, column=1, sticky="ew", padx=(4, 4), pady=(5,2))
 
@@ -4606,9 +4655,9 @@ LIMIT 500
             win.transient(self)
             win.grab_set()
 
-            tk.Label(win, text=f'Notiz: "{text[:50]}"', font=("Arial", 10), fg="#333", bg="#f5f7fb",
+            tk.Label(win, text=f'Notiz: "{text[:50]}"', font=(theme.FONT, 10), fg="#333", bg="#f5f7fb",
                      wraplength=360).pack(anchor="w", padx=20, pady=(14,8))
-            tk.Label(win, text="Wohin soll die Notiz?", font=("Arial", 11, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=20)
+            tk.Label(win, text="Wohin soll die Notiz?", font=(theme.FONT, 11, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=20)
 
             btn_row = tk.Frame(win, bg="#f5f7fb")
             btn_row.pack(fill="x", padx=20, pady=(12,0))
@@ -4632,21 +4681,21 @@ LIMIT 500
                 # Hinweis: Benutzer wählt dann den Kunden via globale Suche
 
             tk.Button(btn_row, text="✅  Als ToDo speichern", command=als_todo,
-                      bg="#11823b", fg="white", relief="flat", font=("Arial", 10, "bold"),
+                      bg="#11823b", fg="white", relief="flat", font=(theme.FONT, 10, "bold"),
                       padx=14, pady=6).pack(side="left", padx=(0,8))
             tk.Button(btn_row, text="👥  Zu Kunde (Suche öffnen)", command=als_kundennotiz,
-                      bg="#0b4a86", fg="white", relief="flat", font=("Arial", 10),
+                      bg="#0b4a86", fg="white", relief="flat", font=(theme.FONT, 10),
                       padx=14, pady=6).pack(side="left")
             tk.Button(btn_row, text="Abbrechen", command=win.destroy, padx=10, pady=6).pack(side="right")
 
         tk.Button(box, text="💾", command=speichern_notiz, bg="#e8d99a", fg="#7a6000",
-                  relief="flat", font=("Arial", 11, "bold"), padx=6, pady=2).grid(row=0, column=2, padx=(0,4), pady=(5,2))
+                  relief="flat", font=(theme.FONT, 11, "bold"), padx=6, pady=2).grid(row=0, column=2, padx=(0,4), pady=(5,2))
 
         # Suche-Button
         tk.Button(box, text="🔍 Suche", command=self.show_globale_suche, bg="#d8e2ee", fg="#0b4a86",
-                  relief="flat", font=("Arial", 9), padx=8, pady=2).grid(row=0, column=3, padx=(0,8), pady=(5,2))
+                  relief="flat", font=(theme.FONT, 9), padx=8, pady=2).grid(row=0, column=3, padx=(0,8), pady=(5,2))
 
-        tk.Label(box, text="Enter = Todo, 🔍 = Globale Suche", font=("Arial", 7), fg="#aaa", bg="#fffef0").grid(
+        tk.Label(box, text="Enter = Todo, 🔍 = Globale Suche", font=(theme.FONT, 7), fg="#aaa", bg="#fffef0").grid(
             row=1, column=0, columnspan=4, sticky="w", padx=8, pady=(0,3))
         entry.bind("<Return>", lambda e: speichern_notiz())
 
@@ -4669,8 +4718,8 @@ LIMIT 500
             with sqlite3.connect(DB_PATH) as con:
                 con.row_factory = sqlite3.Row
 
-                # --- Kunden (PK + ZF zusammen) ---
-                for tbl, typlabel in (("tbl_pk_kunden", "PK"), ("tbl_zf_kunden", "ZW")):
+                # --- Kunden (PK + ZW zusammen) ---
+                for tbl, typlabel in (("tbl_pk_kunden", "PK"), ("tbl_zw_kunden", "ZW")):
                     try:
                         rows = con.execute(f"""
                             SELECT kundennummer, kundenname, apotheke, status
@@ -4805,18 +4854,18 @@ LIMIT 500
         head = tk.Frame(box, bg="#e8f1fb")
         head.pack(fill="x", padx=10, pady=(8, 4))
         tk.Label(head, text="🔍  Globale Suche",
-                 font=("Arial", 12, "bold"), fg="#0b4a86", bg="#e8f1fb").pack(side="left")
+                 font=(theme.FONT, 12, "bold"), fg="#0b4a86", bg="#e8f1fb").pack(side="left")
         tk.Label(head, text="Kunde, Analyse oder Artikel suchen (ab 2 Zeichen) - Doppelklick oeffnet",
-                 font=("Arial", 9), fg="#555", bg="#e8f1fb").pack(side="left", padx=(10, 0))
+                 font=(theme.FONT, 9), fg="#555", bg="#e8f1fb").pack(side="left", padx=(10, 0))
 
         entry_row = tk.Frame(box, bg="#e8f1fb")
         entry_row.pack(fill="x", padx=10, pady=(0, 6))
 
         query_var = tk.StringVar()
-        entry = tk.Entry(entry_row, textvariable=query_var, font=("Arial", 11), width=50)
+        entry = tk.Entry(entry_row, textvariable=query_var, font=(theme.FONT, 11), width=50)
         entry.pack(side="left", padx=(0, 8))
 
-        status_lbl = tk.Label(entry_row, text="", bg="#e8f1fb", fg="#555", font=("Arial", 9))
+        status_lbl = tk.Label(entry_row, text="", bg="#e8f1fb", fg="#555", font=(theme.FONT, 9))
         status_lbl.pack(side="left")
 
         # Treeview fuer Treffer. V1.1 SP12: bei hide_when_empty erst sichtbar
@@ -4841,7 +4890,7 @@ LIMIT 500
         more_row = tk.Frame(box, bg="#e8f1fb")
         more_btn = tk.Button(more_row, text="Mehr anzeigen",
                              bg="#0b4a86", fg="white", relief="flat",
-                             font=("Arial", 10, "bold"), padx=12, pady=4)
+                             font=(theme.FONT, 10, "bold"), padx=12, pady=4)
         more_btn.pack()
 
         row_map: dict[str, dict] = {}
@@ -4949,7 +4998,7 @@ LIMIT 500
 
         tk.Button(entry_row, text="🔍  Anzeigen", command=open_selected,
                   bg="#0b4a86", fg="white", relief="flat",
-                  font=("Arial", 10, "bold"), padx=14, pady=4).pack(side="left", padx=(0, 6))
+                  font=(theme.FONT, 10, "bold"), padx=14, pady=4).pack(side="left", padx=(0, 6))
 
         def _clear():
             query_var.set("")
@@ -4989,11 +5038,11 @@ LIMIT 500
         header = tk.Frame(win, bg="#ffffff")
         header.pack(fill="x", padx=14, pady=(12, 4))
         tk.Label(header, text="Globale Suche",
-                 font=("Arial", 15, "bold"), fg="#0b4a86", bg="#ffffff").pack(anchor="w")
+                 font=(theme.FONT, 15, "bold"), fg="#0b4a86", bg="#ffffff").pack(anchor="w")
         tk.Label(header,
                  text=("Sucht parallel in Kunden, gespeicherten Analysen und Artikeln. "
                        "Doppelklick auf einen Treffer oeffnet die passende Seite."),
-                 font=("Arial", 9), fg="#666", bg="#ffffff").pack(anchor="w", pady=(2, 6))
+                 font=(theme.FONT, 9), fg="#666", bg="#ffffff").pack(anchor="w", pady=(2, 6))
 
         body = tk.Frame(win, bg="#ffffff")
         body.pack(fill="both", expand=True, padx=4, pady=(0, 14))
@@ -5083,7 +5132,7 @@ LIMIT 500
         header_bar = tk.Frame(inner, bg="#f0f4fa", highlightbackground="#c5d3e8", highlightthickness=1)
         header_bar.pack(fill="x", padx=18, pady=(14, 0))
         begruessung = f"🏠  Guten Tag, {self.bearbeiter or 'Bearbeiter'}!"
-        tk.Label(header_bar, text=begruessung, font=("Arial", 15, "bold"), fg="#0b4a86", bg="#f0f4fa").pack(side="left", padx=16, pady=10)
+        tk.Label(header_bar, text=begruessung, font=(theme.FONT, 15, "bold"), fg="#0b4a86", bg="#f0f4fa").pack(side="left", padx=16, pady=10)
         tk.Button(
             header_bar,
             text="⚙️  Dashboard anpassen",
@@ -5092,7 +5141,7 @@ LIMIT 500
             fg="white",
             activebackground="#0b4a86",
             relief="flat",
-            font=("Arial", 10, "bold"),
+            font=(theme.FONT, 10, "bold"),
             padx=14,
             pady=6,
         ).pack(side="right", padx=14, pady=8)
@@ -5116,7 +5165,7 @@ LIMIT 500
 
         # --- Schnellzugriff ---
         if active_tiles:
-            tk.Label(inner, text="Schnellzugriff", font=("Arial", 11, "bold"), fg="#555", bg="#ffffff").pack(anchor="w", padx=22, pady=(10, 2))
+            tk.Label(inner, text="Schnellzugriff", font=(theme.FONT, 11, "bold"), fg="#555", bg="#ffffff").pack(anchor="w", padx=22, pady=(10, 2))
             tile_frame = tk.Frame(inner, bg="#ffffff")
             tile_frame.pack(fill="x", padx=14, pady=(0, 18))
             cols_count = 4
@@ -5134,20 +5183,20 @@ LIMIT 500
                 f.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
                 f.rowconfigure(2, weight=1)
                 f.columnconfigure(0, weight=1)
-                tk.Label(f, text=icon, font=("Arial", 26), bg="#f8fbff", fg=color
+                tk.Label(f, text=icon, font=(theme.FONT, 26), bg="#f8fbff", fg=color
                          ).grid(row=0, column=0, pady=(12, 4))
-                tk.Label(f, text=title, font=("Arial", 11, "bold"), bg="#f8fbff",
+                tk.Label(f, text=title, font=(theme.FONT, 11, "bold"), bg="#f8fbff",
                          fg="#123").grid(row=1, column=0)
                 tk.Label(f, text=desc, wraplength=180, justify="center",
-                         bg="#f8fbff", fg="#555", font=("Arial", 9)
+                         bg="#f8fbff", fg="#555", font=(theme.FONT, 9)
                          ).grid(row=2, column=0, padx=10, pady=6, sticky="n")
                 tk.Button(f, text="Öffnen  →", command=cmd,
                           bg=color, fg="white", activebackground=color,
-                          relief="flat", font=("Arial", 10, "bold"),
+                          relief="flat", font=(theme.FONT, 10, "bold"),
                           padx=14, pady=7
                           ).grid(row=3, column=0, sticky="ew", padx=14, pady=(4, 12))
         else:
-            tk.Label(inner, text="Keine Kacheln aktiv. Bitte '⚙️ Dashboard anpassen' nutzen.", fg="#888", bg="#ffffff", font=("Arial", 10)).pack(pady=20)
+            tk.Label(inner, text="Keine Kacheln aktiv. Bitte '⚙️ Dashboard anpassen' nutzen.", fg="#888", bg="#ffffff", font=(theme.FONT, 10)).pack(pady=20)
 
         self.status.set(f"Startseite bereit.  {len(active_tiles)} Schnellzugriff-Kacheln  |  {len(active_info)} Info-Bereiche aktiv.")
 
@@ -5166,17 +5215,17 @@ LIMIT 500
         current_path = str(DB_PATH)
         override = self._get_meta_value("db_path_override", "")
 
-        tk.Label(body, text="Aktiver Datenbankpfad:", bg="#ffffff", fg="#0b4a86", font=("Arial", 11, "bold")).grid(row=0, column=0, sticky="nw", padx=0, pady=(0, 4))
+        tk.Label(body, text="Aktiver Datenbankpfad:", bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 11, "bold")).grid(row=0, column=0, sticky="nw", padx=0, pady=(0, 4))
         tk.Label(body, text=current_path, bg="#ffffff", fg="#333", wraplength=700, justify="left").grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 16))
 
-        tk.Label(body, text="Status:", bg="#ffffff", fg="#0b4a86", font=("Arial", 11, "bold")).grid(row=2, column=0, sticky="w", pady=(0, 12))
+        tk.Label(body, text="Status:", bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 11, "bold")).grid(row=2, column=0, sticky="w", pady=(0, 12))
         if override:
             status_text = f"Override aktiv: {override}"
             status_color = "#11823b"
         else:
             status_text = "Standard-Pfad (kein Override gesetzt)"
             status_color = "#666"
-        tk.Label(body, text=status_text, bg="#ffffff", fg=status_color, font=("Arial", 10)).grid(row=2, column=1, sticky="w", pady=(0, 12))
+        tk.Label(body, text=status_text, bg="#ffffff", fg=status_color, font=(theme.FONT, 10)).grid(row=2, column=1, sticky="w", pady=(0, 12))
 
         sep = tk.Frame(body, bg="#d8e2ee", height=1)
         sep.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 16))
@@ -5192,11 +5241,11 @@ LIMIT 500
             "  \u2022  Alle Nutzer ben\u00f6tigen Schreibrechte auf den Ordner\n"
             "  \u2022  Gleichzeitiger Zugriff wird durch SQLite-Locking gehandhabt\n\n"
             "Zum Aktivieren: Update einspielen und hier den Zielordner ausw\u00e4hlen."
-        ), bg="#fff8e1", fg="#5a3800", justify="left", anchor="w", padx=14, pady=12, font=("Arial", 10)).pack(fill="x")
+        ), bg="#fff8e1", fg="#5a3800", justify="left", anchor="w", padx=14, pady=12, font=(theme.FONT, 10)).pack(fill="x")
 
         # Vorschau: Pfad wählen (noch deaktiviert)
         path_var = tk.StringVar(value=override or current_path)
-        tk.Label(body, text="Zielordner (Vorschau):", bg="#ffffff", fg="#0b4a86", font=("Arial", 11, "bold")).grid(row=5, column=0, sticky="w", pady=(8, 4))
+        tk.Label(body, text="Zielordner (Vorschau):", bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 11, "bold")).grid(row=5, column=0, sticky="w", pady=(8, 4))
         pf = tk.Frame(body, bg="#ffffff")
         pf.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         pf.columnconfigure(0, weight=1)
@@ -5205,7 +5254,7 @@ LIMIT 500
         tk.Button(pf, text="Ordner auswählen (inaktiv)", state="disabled", padx=12, pady=5).grid(row=0, column=1)
 
         tk.Label(body, text="Diese Einstellung ist mit dem aktuellen Programmstand noch nicht aktiv.\nSie wird durch ein zuk\u00fcnftiges Update freigeschaltet.",
-                 bg="#ffffff", fg="#888", font=("Arial", 9), justify="left").grid(row=7, column=0, columnspan=2, sticky="w", pady=(4, 0))
+                 bg="#ffffff", fg="#888", font=(theme.FONT, 9), justify="left").grid(row=7, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         self.status.set("Datenbankpfad-Konfiguration – bereit für zukünftiges Cloud-Update.")
 
@@ -5233,7 +5282,7 @@ LIMIT 500
         af_top = tk.Frame(ampel_frame, bg="#ffffff")
         af_top.grid(row=0, column=0, sticky="ew", pady=(8,4))
         filter_var = tk.StringVar(value="alle")
-        tk.Label(af_top, text="Filter:", bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).pack(side="left")
+        tk.Label(af_top, text="Filter:", bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 10, "bold")).pack(side="left")
         for val, label, color in [("alle","Alle","#555"),("gruen","🟢 Grün (<6M)","#11823b"),("gelb","🟡 Gelb (6-9M)","#8b6914"),("rot","🔴 Rot (>9M / nie)","#c00")]:
             tk.Radiobutton(af_top, text=label, variable=filter_var, value=val,
                            bg="#ffffff", fg=color, command=lambda: reload_ampel(filter_var.get())).pack(side="left", padx=6)
@@ -5311,7 +5360,7 @@ LIMIT 500
 
         df_top = tk.Frame(dup_frame, bg="#ffffff")
         df_top.grid(row=0, column=0, sticky="ew", pady=(8,4))
-        tk.Label(df_top, text="Duplikate nach Namen, PLZ oder Kundennummer.", bg="#ffffff", fg="#555", font=("Arial", 9)).pack(side="left", padx=8)
+        tk.Label(df_top, text="Duplikate nach Namen, PLZ oder Kundennummer.", bg="#ffffff", fg="#555", font=(theme.FONT, 9)).pack(side="left", padx=8)
         tk.Button(df_top, text="🔄 Aktualisieren", command=lambda: reload_duplikate(), padx=10, pady=4).pack(side="right", padx=8)
 
         d_cols = ("id1","name1","plz1","id2","name2","plz2","grund")
@@ -5376,7 +5425,7 @@ LIMIT 500
             self._kunden_zusammenfuehren_dialog(k1, k2, callback=reload_duplikate)
 
         tk.Button(dup_frame, text="🔀 Zusammenführen", command=zusammenfuehren,
-                  bg="#8b5a00", fg="white", relief="flat", font=("Arial", 10, "bold"),
+                  bg="#8b5a00", fg="white", relief="flat", font=(theme.FONT, 10, "bold"),
                   padx=12, pady=5).grid(row=2, column=0, sticky="w", padx=8, pady=(0,8))
 
         # Nav-Eintrag: Report in Nav-Tree (falls noch nicht vorhanden)
@@ -5393,8 +5442,8 @@ LIMIT 500
         win.transient(self)
         win.grab_set()
 
-        tk.Label(win, text="🔀  Kunden zusammenführen", font=("Arial", 14, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(16,4))
-        tk.Label(win, text="Wähle für jedes Feld welcher Wert behalten werden soll. Der nicht gewählte Eintrag wird gelöscht.", font=("Arial", 9), fg="#666", bg="#f5f7fb", justify="left").pack(anchor="w", padx=20, pady=(0,10))
+        tk.Label(win, text="🔀  Kunden zusammenführen", font=(theme.FONT, 14, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(16,4))
+        tk.Label(win, text="Wähle für jedes Feld welcher Wert behalten werden soll. Der nicht gewählte Eintrag wird gelöscht.", font=(theme.FONT, 9), fg="#666", bg="#f5f7fb", justify="left").pack(anchor="w", padx=20, pady=(0,10))
 
         felder = ["kundennummer","kundenname","plz","ort","strasse","kundentyp","inhaber",
                   "ansprechpartner","ansprechpartner2","telefon","email","status","notizen"]
@@ -5408,15 +5457,15 @@ LIMIT 500
         form.columnconfigure(1, weight=1)
         form.columnconfigure(2, weight=1)
 
-        tk.Label(form, text="Feld", bg="#e8edf5", font=("Arial",9,"bold")).grid(row=0,column=0,sticky="ew",padx=6,pady=4)
-        tk.Label(form, text=f"Eintrag 1 (ID {k1['id']})", bg="#e8edf5", font=("Arial",9,"bold")).grid(row=0,column=1,sticky="ew",padx=6,pady=4)
-        tk.Label(form, text=f"Eintrag 2 (ID {k2['id']})", bg="#e8edf5", font=("Arial",9,"bold")).grid(row=0,column=2,sticky="ew",padx=6,pady=4)
+        tk.Label(form, text="Feld", bg="#e8edf5", font=(theme.FONT,9,"bold")).grid(row=0,column=0,sticky="ew",padx=6,pady=4)
+        tk.Label(form, text=f"Eintrag 1 (ID {k1['id']})", bg="#e8edf5", font=(theme.FONT,9,"bold")).grid(row=0,column=1,sticky="ew",padx=6,pady=4)
+        tk.Label(form, text=f"Eintrag 2 (ID {k2['id']})", bg="#e8edf5", font=(theme.FONT,9,"bold")).grid(row=0,column=2,sticky="ew",padx=6,pady=4)
 
         choices = {}
         for r, f in enumerate(felder, start=1):
             v1 = str(k1.get(f,"") or "")
             v2 = str(k2.get(f,"") or "")
-            tk.Label(form, text=f_labels.get(f,f), bg="#ffffff", fg="#0b4a86", font=("Arial",9,"bold")).grid(row=r,column=0,sticky="w",padx=8,pady=3)
+            tk.Label(form, text=f_labels.get(f,f), bg="#ffffff", fg="#0b4a86", font=(theme.FONT,9,"bold")).grid(row=r,column=0,sticky="w",padx=8,pady=3)
             var = tk.StringVar(value="1")
             choices[f] = var
             rb1 = tk.Radiobutton(form, text=v1[:50] or "–", variable=var, value="1", bg="#ffffff", anchor="w", wraplength=280)
@@ -5460,7 +5509,7 @@ LIMIT 500
 
         tk.Button(bar, text="Abbrechen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8,0))
         tk.Button(bar, text="🔀  Zusammenführen", command=do_merge, bg="#8b5a00", fg="white",
-                  relief="flat", font=("Arial",11,"bold"), padx=16, pady=7).pack(side="right")
+                  relief="flat", font=(theme.FONT,11,"bold"), padx=16, pady=7).pack(side="right")
 
     def show_placeholder_page(self, title):
         self.clear_page()
@@ -5476,7 +5525,7 @@ LIMIT 500
             bg="#ffffff",
             fg="#333",
             justify="left",
-            font=("Arial", 11),
+            font=(theme.FONT, 11),
         ).pack(anchor="w", pady=(4, 16))
         try:
             add_roadmap_item(
@@ -5534,7 +5583,37 @@ LIMIT 500
             if "board_y" not in cols_m:
                 con.execute("ALTER TABLE tbl_mitarbeiter ADD COLUMN board_y INTEGER DEFAULT 40")
             con.commit()
+        self._ensure_mitarbeiter_phase1_tables()
         self._roadmap_mark_center_erledigt()
+
+    # Phase 1 (2026-06-23): frei definierbare Zusatzfelder + Vorgesetzten-Matrix
+    # als Grundlage fuer das spaetere Organigramm. Bewusst an tbl_mitarbeiter
+    # (id-basiert) gehaengt; die login-basierten Profile bleiben unberuehrt.
+    ARTEN_VORGESETZTER = ("disziplinarisch", "fachlich", "Vertretung")
+
+    def _ensure_mitarbeiter_phase1_tables(self):
+        """Legt die Zusatzfeld- und Vorgesetzten-Tabellen an (idempotent)."""
+        with sqlite3.connect(DB_PATH) as con:
+            # Frei definierbare Felddefinitionen (EAV-Pattern, kein DB-Umbau pro Wunsch)
+            con.execute("""\nCREATE TABLE IF NOT EXISTS tbl_mitarbeiter_feld (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,\nfeld_name TEXT NOT NULL,
+                    feld_typ TEXT DEFAULT 'Text',\noptionen TEXT,
+                    reihenfolge INTEGER DEFAULT 0,\naktiv INTEGER DEFAULT 1,
+                    erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP\n)
+            """)
+            # Werte je Mitarbeiter (id aus tbl_mitarbeiter) und Feld
+            con.execute("""\nCREATE TABLE IF NOT EXISTS tbl_mitarbeiter_wert (
+                    mitarbeiter_id INTEGER NOT NULL,\nfeld_id INTEGER NOT NULL,
+                    wert TEXT,\nPRIMARY KEY (mitarbeiter_id, feld_id)\n)
+            """)
+            # Vorgesetzten-Matrix: mehrere Vorgesetzte je Person, je mit Art.
+            # ist_primaer markiert die EINE Beziehung, die den Hauptbaum bildet.
+            con.execute("""\nCREATE TABLE IF NOT EXISTS tbl_mitarbeiter_vorgesetzter (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,\nmitarbeiter_id INTEGER NOT NULL,
+                    vorgesetzter_id INTEGER NOT NULL,\nart TEXT DEFAULT 'disziplinarisch',
+                    ist_primaer INTEGER DEFAULT 0,\nerstellt_am TEXT DEFAULT CURRENT_TIMESTAMP\n)
+            """)
+            con.commit()
 
     def _roadmap_mark_center_erledigt(self):
         try:
@@ -5568,13 +5647,13 @@ LIMIT 500
         win.transient(self)
         win.grab_set()
         win.columnconfigure(0, weight=1)
-        tk.Label(win, text=title, font=("Arial", 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 8))
+        tk.Label(win, text=title, font=(theme.FONT, 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 8))
         form = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
         form.pack(fill="both", expand=True, padx=22, pady=(0, 12))
         form.columnconfigure(1, weight=1)
         vars_ = {}
         for r, (key, label, kind) in enumerate(fields):
-            tk.Label(form, text=label, bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=r, column=0, sticky="nw", padx=14, pady=8)
+            tk.Label(form, text=label, bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 10, "bold")).grid(row=r, column=0, sticky="nw", padx=14, pady=8)
             var = tk.StringVar(value=str(initial.get(key, "") or ""))
             vars_[key] = var
             if kind == "text":
@@ -5705,7 +5784,7 @@ LIMIT 500
         profil_bar.grid(row=0, column=0, sticky="ew", padx=18, pady=(0, 8))
         profil_bar.columnconfigure(0, weight=1)
 
-        tk.Label(profil_bar, text="👤  Mitarbeiterprofile", font=("Arial", 11, "bold"),
+        tk.Label(profil_bar, text="👤  Mitarbeiterprofile", font=(theme.FONT, 11, "bold"),
                  fg="#0b4a86", bg="#f0f4fa").grid(row=0, column=0, sticky="w", padx=14, pady=(10, 4))
 
         cards_frame = tk.Frame(profil_bar, bg="#f0f4fa")
@@ -5735,11 +5814,11 @@ LIMIT 500
                 card.grid(row=0, column=col_idx, sticky="ns", padx=6, pady=4, ipadx=8, ipady=6)
                 name = f"{p['vorname']} {p['nachname']}".strip() or str(p["login"])
                 badge = " ✏️ (Ich)" if is_own else " 👁"
-                tk.Label(card, text=f"👤  {name}{badge}", font=("Arial", 10, "bold"),
+                tk.Label(card, text=f"👤  {name}{badge}", font=(theme.FONT, 10, "bold"),
                          fg="#0b4a86" if is_own else "#333", bg=bg).pack(anchor="w")
                 if p["abteilung"] or p["position"]:
                     info = " · ".join(filter(None, [str(p["abteilung"] or ""), str(p["position"] or "")]))
-                    tk.Label(card, text=info, font=("Arial", 8), fg="#666", bg=bg).pack(anchor="w")
+                    tk.Label(card, text=info, font=(theme.FONT, 8), fg="#666", bg=bg).pack(anchor="w")
                 login_val = str(p["login"])
                 readonly = not is_own
                 card.bind("<Button-1>", lambda e, l=login_val, r=readonly: self.show_mitarbeiterprofil_dialog(l, r))
@@ -5751,7 +5830,7 @@ LIMIT 500
             if not own_exists and not self._is_admin_login():
                 card = tk.Frame(cards_frame, bg="#fff8e1", highlightbackground="#efd39a", highlightthickness=2, cursor="hand2")
                 card.grid(row=0, column=len(sorted_profiles), sticky="ns", padx=6, pady=4, ipadx=8, ipady=6)
-                tk.Label(card, text="➕  Mein Profil anlegen", font=("Arial", 10, "bold"), fg="#8b5a00", bg="#fff8e1").pack(anchor="w")
+                tk.Label(card, text="➕  Mein Profil anlegen", font=(theme.FONT, 10, "bold"), fg="#8b5a00", bg="#fff8e1").pack(anchor="w")
                 card.bind("<Button-1>", lambda e: self._open_mitarbeiterprofil_pflicht_dialog())
 
         reload_profil_bar()
@@ -5937,7 +6016,7 @@ LIMIT 500
                 y = row["board_y"] if "board_y" in row.keys() and row["board_y"] is not None else 40 + (index // 4) * 190
                 w, h = 240, 145
                 rect = canvas.create_rectangle(x, y, x+w, y+h, fill="#fff7c2", outline="#d6bd48", width=2)
-                txt = canvas.create_text(x+12, y+12, text=card_text(row), anchor="nw", width=w-24, font=("Arial", 10))
+                txt = canvas.create_text(x+12, y+12, text=card_text(row), anchor="nw", width=w-24, font=(theme.FONT, 10))
                 card_items[emp_id] = (rect, txt, row)
                 for item in (rect, txt):
                     canvas.tag_bind(item, "<ButtonPress-1>", lambda e, eid=emp_id: start_drag(e, eid))
@@ -5993,7 +6072,9 @@ LIMIT 500
         self._ensure_center_tables()
         self._ensure_mitarbeiterprofil_table()
         self.clear_page()
-        self._page_header("Mitarbeiter", "Alle Mitarbeiter auf einen Blick. Eigene Karte bearbeitbar.")
+        self._mitarbeiter_icon = theme.load_icon(ASSETS_DIR / "Kunden.ico", 40)
+        self._page_header("Mitarbeiter", "Alle Mitarbeiter auf einen Blick. Eigene Karte bearbeitbar.",
+                          icon=self._mitarbeiter_icon)
 
         body = tk.Frame(self.page, bg="#ffffff")
         body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
@@ -6072,7 +6153,7 @@ LIMIT 500
 
             if not mitarbeiter:
                 tk.Label(cards_outer, text="Noch keine Mitarbeiterdaten vorhanden.\nMitarbeiterprofile k\u00f6nnen unter 'Mein Profil' angelegt werden.",
-                         bg="#ffffff", fg="#888", font=("Arial", 10), justify="center").pack(pady=40)
+                         bg="#ffffff", fg="#888", font=(theme.FONT, 10), justify="center").pack(pady=40)
                 return
 
             cols_count = 4
@@ -6089,13 +6170,13 @@ LIMIT 500
                 # Initialen-Avatar
                 initials = "".join(p[0].upper() for p in m["name"].split()[:2] if p)
                 avatar_bg = "#0b4a86" if is_own else "#6b4fb3"
-                av = tk.Label(card, text=initials or "?", font=("Arial", 20, "bold"),
+                av = tk.Label(card, text=initials or "?", font=(theme.FONT, 20, "bold"),
                               fg="white", bg=avatar_bg, width=3, relief="flat")
                 av.pack(pady=(12, 6))
 
-                tk.Label(card, text=m["name"], font=("Arial", 11, "bold"), fg="#123", bg=bg).pack()
+                tk.Label(card, text=m["name"], font=(theme.FONT, 11, "bold"), fg="#123", bg=bg).pack()
                 if is_own:
-                    tk.Label(card, text="(Ich)", font=("Arial", 8), fg="#0b4a86", bg=bg).pack()
+                    tk.Label(card, text="(Ich)", font=(theme.FONT, 8), fg="#0b4a86", bg=bg).pack()
 
                 # Daten anzeigen
                 info_lines = []
@@ -6107,21 +6188,29 @@ LIMIT 500
                 if m.get("vertretung"):info_lines.append(f"🔄  {m['vertretung']}")
 
                 for line in info_lines[:5]:
-                    tk.Label(card, text=line, font=("Arial", 9), fg="#444", bg=bg, anchor="w").pack(anchor="w", padx=4)
+                    tk.Label(card, text=line, font=(theme.FONT, 9), fg="#444", bg=bg, anchor="w").pack(anchor="w", padx=4)
 
                 # Button
-                if is_own or self._is_admin_login():
+                if m.get("quelle") == "mitarbeiter" and m.get("id"):
+                    # Manuell gepflegter Mitarbeiter (id-basiert): Detail-Dialog mit
+                    # Zusatzfeldern + Vorgesetzten (Phase 1, Organigramm-Grundlage).
+                    emp_id = int(m["id"])
+                    tk.Button(card, text="✏️  Bearbeiten",
+                              command=lambda eid=emp_id: self._mitarbeiter_detail_dialog(eid, on_saved=reload),
+                              bg="#0b4a86", fg="white", relief="flat", font=(theme.FONT, 9, "bold"),
+                              padx=10, pady=4).pack(fill="x", padx=8, pady=(8, 4))
+                elif is_own or self._is_admin_login():
                     btn_text = "✏️  Bearbeiten" if is_own else "✏️  Admin"
                     login_val = m.get("login") or ""
                     tk.Button(card, text=btn_text,
                               command=lambda l=login_val: self.show_mitarbeiterprofil_dialog(l, readonly=False),
-                              bg="#0b4a86", fg="white", relief="flat", font=("Arial", 9, "bold"),
+                              bg="#0b4a86", fg="white", relief="flat", font=(theme.FONT, 9, "bold"),
                               padx=10, pady=4).pack(fill="x", padx=8, pady=(8, 4))
                 else:
                     login_val = m.get("login") or ""
                     tk.Button(card, text="👁  Ansehen",
                               command=lambda l=login_val: self.show_mitarbeiterprofil_dialog(l, readonly=True),
-                              bg="#888", fg="white", relief="flat", font=("Arial", 9),
+                              bg="#888", fg="white", relief="flat", font=(theme.FONT, 9),
                               padx=10, pady=4).pack(fill="x", padx=8, pady=(8, 4))
 
         _render_cards()
@@ -6138,15 +6227,343 @@ LIMIT 500
                 return
             data["bearbeiter"] = self.bearbeiter
             with sqlite3.connect(DB_PATH) as con:
-                con.execute("""INSERT INTO tbl_mitarbeiter(vorname,name,abteilung,position,telefon,mobil,email,vertretung_1,bearbeiter)
+                cur = con.execute("""INSERT INTO tbl_mitarbeiter(vorname,name,abteilung,position,telefon,mobil,email,vertretung_1,bearbeiter)
                     VALUES(:vorname,:name,:abteilung,:position,:telefon,:mobil,:email,:vertretung_1,:bearbeiter)""", data)
+                new_id = cur.lastrowid
                 con.commit()
+            # Direkt in den Detail-Dialog: Zusatzfelder + Vorgesetzte pflegen.
+            self._mitarbeiter_detail_dialog(int(new_id), on_saved=reload)
             reload()
 
         tk.Button(toolbar, text="➕ Mitarbeiter anlegen", command=neuer_eintrag,
                   bg="#0b4a86", fg="white", relief="flat", padx=14, pady=6).pack(side="left", padx=(0, 8))
+        tk.Button(toolbar, text="🗂 Felder verwalten",
+                  command=lambda: self._mitarbeiter_felder_dialog(on_saved=reload),
+                  padx=12, pady=6).pack(side="left", padx=(0, 8))
         tk.Button(toolbar, text="🔄 Aktualisieren", command=reload, padx=12, pady=6).pack(side="left")
         self.status.set("Mitarbeiter-Center bereit.")
+
+    # ── Phase 1: Zusatzfelder-Verwaltung + Mitarbeiter-Detail (Vorgesetzte) ──
+    def _mitarbeiter_felder_dialog(self, on_saved=None):
+        """Frei definierbare Zusatzfelder anlegen/bearbeiten/loeschen."""
+        self._ensure_mitarbeiter_phase1_tables()
+        win = tk.Toplevel(self)
+        win.title("Zusatzfelder verwalten")
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+        win.geometry("640x520")
+        win.columnconfigure(0, weight=1)
+        win.rowconfigure(1, weight=1)
+        tk.Label(win, text="🗂  Zusatzfelder", font=(theme.FONT, 16, "bold"),
+                 fg="#0b4a86", bg="#f5f7fb").grid(row=0, column=0, sticky="w", padx=18, pady=(16, 8))
+
+        cols = ("feld_name", "feld_typ", "optionen", "reihenfolge")
+        heads = {"feld_name": "Feldname", "feld_typ": "Typ", "optionen": "Auswahl-Optionen", "reihenfolge": "Reihenfolge"}
+        tree = ttk.Treeview(win, columns=cols, show="headings", selectmode="browse")
+        for c in cols:
+            tree.heading(c, text=heads[c])
+            tree.column(c, width=140, anchor="w")
+        tree.grid(row=1, column=0, sticky="nsew", padx=18)
+        row_map = {}
+
+        def reload_fields():
+            for iid in tree.get_children(""):
+                tree.delete(iid)
+            row_map.clear()
+            with sqlite3.connect(DB_PATH) as con:
+                con.row_factory = sqlite3.Row
+                rows = con.execute(
+                    "SELECT * FROM tbl_mitarbeiter_feld WHERE COALESCE(aktiv,1)=1 ORDER BY reihenfolge, id"
+                ).fetchall()
+            for row in rows:
+                iid = tree.insert("", "end", values=[row[c] for c in cols])
+                row_map[iid] = dict(row)
+
+        def feld_dialog(initial=None):
+            initial = initial or {}
+            d = tk.Toplevel(win)
+            d.title("Feld bearbeiten" if initial else "Neues Feld")
+            d.configure(bg="#f5f7fb")
+            d.transient(win)
+            d.grab_set()
+            d.geometry("440x340")
+            d.columnconfigure(1, weight=1)
+            tk.Label(d, text="Feldname", bg="#f5f7fb", fg="#0b4a86", font=(theme.FONT, 10, "bold")).grid(row=0, column=0, sticky="w", padx=14, pady=10)
+            name_var = tk.StringVar(value=str(initial.get("feld_name", "") or ""))
+            tk.Entry(d, textvariable=name_var).grid(row=0, column=1, sticky="ew", padx=14, pady=10)
+            tk.Label(d, text="Typ", bg="#f5f7fb", fg="#0b4a86", font=(theme.FONT, 10, "bold")).grid(row=1, column=0, sticky="w", padx=14, pady=10)
+            typ_var = tk.StringVar(value=str(initial.get("feld_typ", "Text") or "Text"))
+            ttk.Combobox(d, textvariable=typ_var, values=("Text", "Zahl", "Datum", "Auswahl"),
+                         state="readonly").grid(row=1, column=1, sticky="ew", padx=14, pady=10)
+            tk.Label(d, text="Optionen (nur bei\nAuswahl, mit ; trennen)", bg="#f5f7fb", fg="#0b4a86", font=(theme.FONT, 9)).grid(row=2, column=0, sticky="w", padx=14, pady=10)
+            opt_var = tk.StringVar(value=str(initial.get("optionen", "") or ""))
+            tk.Entry(d, textvariable=opt_var).grid(row=2, column=1, sticky="ew", padx=14, pady=10)
+            tk.Label(d, text="Reihenfolge", bg="#f5f7fb", fg="#0b4a86", font=(theme.FONT, 10, "bold")).grid(row=3, column=0, sticky="w", padx=14, pady=10)
+            reihen_var = tk.StringVar(value=str(initial.get("reihenfolge", "0") or "0"))
+            tk.Entry(d, textvariable=reihen_var).grid(row=3, column=1, sticky="ew", padx=14, pady=10)
+
+            def save():
+                name = name_var.get().strip()
+                if not name:
+                    messagebox.showinfo("Zusatzfeld", "Bitte einen Feldnamen eingeben.")
+                    return
+                try:
+                    reihen = int(reihen_var.get().strip() or "0")
+                except ValueError:
+                    reihen = 0
+                with sqlite3.connect(DB_PATH) as con:
+                    if initial.get("id"):
+                        con.execute("UPDATE tbl_mitarbeiter_feld SET feld_name=?, feld_typ=?, optionen=?, reihenfolge=? WHERE id=?",
+                                    (name, typ_var.get(), opt_var.get().strip(), reihen, initial["id"]))
+                    else:
+                        con.execute("INSERT INTO tbl_mitarbeiter_feld(feld_name, feld_typ, optionen, reihenfolge) VALUES(?,?,?,?)",
+                                    (name, typ_var.get(), opt_var.get().strip(), reihen))
+                    con.commit()
+                d.destroy()
+                reload_fields()
+
+            bar = tk.Frame(d, bg="#f5f7fb")
+            bar.grid(row=4, column=0, columnspan=2, sticky="ew", padx=14, pady=14)
+            tk.Button(bar, text="Abbrechen", command=d.destroy, padx=14, pady=7).pack(side="right", padx=(8, 0))
+            tk.Button(bar, text="Speichern", command=save, bg="#0b4a86", fg="white", relief="flat", padx=18, pady=8).pack(side="right")
+            win.wait_window(d)
+
+        def add_field():
+            feld_dialog()
+
+        def edit_field():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Zusatzfeld", "Bitte zuerst ein Feld auswählen.")
+                return
+            feld_dialog(row_map.get(sel[0]))
+
+        def delete_field():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Zusatzfeld", "Bitte zuerst ein Feld auswählen.")
+                return
+            row = row_map.get(sel[0])
+            if not messagebox.askyesno("Zusatzfeld", f"Feld '{row.get('feld_name')}' löschen?\n(Bereits erfasste Werte bleiben in der Datenbank, werden aber nicht mehr angezeigt.)"):
+                return
+            with sqlite3.connect(DB_PATH) as con:
+                con.execute("UPDATE tbl_mitarbeiter_feld SET aktiv=0 WHERE id=?", (row["id"],))
+                con.commit()
+            reload_fields()
+
+        bar = tk.Frame(win, bg="#f5f7fb")
+        bar.grid(row=2, column=0, sticky="ew", padx=18, pady=12)
+        tk.Button(bar, text="➕ Neu", command=add_field, bg="#0b4a86", fg="white", relief="flat", padx=14, pady=7).pack(side="left", padx=(0, 8))
+        tk.Button(bar, text="Bearbeiten", command=edit_field, padx=14, pady=7).pack(side="left", padx=8)
+        tk.Button(bar, text="Löschen", command=delete_field, padx=14, pady=7).pack(side="left", padx=8)
+        tk.Button(bar, text="Schließen", command=win.destroy, padx=14, pady=7).pack(side="right")
+        reload_fields()
+        self.wait_window(win)
+        if callable(on_saved):
+            on_saved()
+
+    def _mitarbeiter_detail_dialog(self, emp_id, on_saved=None):
+        """Detail-Dialog für einen tbl_mitarbeiter-Datensatz mit Reitern:
+        Stammdaten · Zusatzfelder · Vorgesetzte (Organigramm-Grundlage)."""
+        self._ensure_mitarbeiter_phase1_tables()
+        with sqlite3.connect(DB_PATH) as con:
+            con.row_factory = sqlite3.Row
+            row = con.execute("SELECT * FROM tbl_mitarbeiter WHERE id=?", (emp_id,)).fetchone()
+        if not row:
+            messagebox.showinfo("Mitarbeiter", "Datensatz nicht gefunden.")
+            return
+        row = dict(row)
+        name_disp = f"{row.get('vorname','') or ''} {row.get('name','') or ''}".strip() or f"Mitarbeiter #{emp_id}"
+
+        win = tk.Toplevel(self)
+        win.title(f"Mitarbeiter: {name_disp}")
+        win.configure(bg="#f5f7fb")
+        win.transient(self)
+        win.grab_set()
+        win.geometry("720x600")
+        win.columnconfigure(0, weight=1)
+        win.rowconfigure(1, weight=1)
+        tk.Label(win, text=f"👤  {name_disp}", font=(theme.FONT, 16, "bold"),
+                 fg="#0b4a86", bg="#f5f7fb").grid(row=0, column=0, sticky="w", padx=18, pady=(16, 8))
+
+        nb = ttk.Notebook(win)
+        nb.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 8))
+
+        # ── Reiter 1: Stammdaten ────────────────────────────────────────────
+        tab_stamm = tk.Frame(nb, bg="#ffffff")
+        nb.add(tab_stamm, text="Stammdaten")
+        tab_stamm.columnconfigure(1, weight=1)
+        stamm_fields = [("vorname", "Vorname"), ("name", "Nachname"), ("abteilung", "Abteilung"),
+                        ("position", "Position"), ("telefon", "Telefon"), ("mobil", "Mobil"),
+                        ("email", "E-Mail"), ("onedrive_pfad", "Datenpfad")]
+        stamm_vars = {}
+        for r, (key, label) in enumerate(stamm_fields):
+            tk.Label(tab_stamm, text=label, bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 10, "bold")).grid(row=r, column=0, sticky="w", padx=14, pady=7)
+            var = tk.StringVar(value=str(row.get(key, "") or ""))
+            stamm_vars[key] = var
+            tk.Entry(tab_stamm, textvariable=var).grid(row=r, column=1, sticky="ew", padx=14, pady=7)
+
+        # ── Reiter 2: Zusatzfelder ──────────────────────────────────────────
+        tab_extra = tk.Frame(nb, bg="#ffffff")
+        nb.add(tab_extra, text="Zusatzfelder")
+        tab_extra.columnconfigure(1, weight=1)
+        with sqlite3.connect(DB_PATH) as con:
+            con.row_factory = sqlite3.Row
+            felder = con.execute("SELECT * FROM tbl_mitarbeiter_feld WHERE COALESCE(aktiv,1)=1 ORDER BY reihenfolge, id").fetchall()
+            werte = {w["feld_id"]: w["wert"] for w in con.execute(
+                "SELECT feld_id, wert FROM tbl_mitarbeiter_wert WHERE mitarbeiter_id=?", (emp_id,)).fetchall()}
+        extra_vars = {}
+        if not felder:
+            tk.Label(tab_extra, text="Noch keine Zusatzfelder definiert.\nÜber 'Felder verwalten' im Mitarbeiter-Center anlegen.",
+                     bg="#ffffff", fg="#888", font=(theme.FONT, 10), justify="left").grid(row=0, column=0, columnspan=2, sticky="w", padx=14, pady=20)
+        else:
+            for r, f in enumerate(felder):
+                fid = f["id"]
+                tk.Label(tab_extra, text=str(f["feld_name"]), bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 10, "bold")).grid(row=r, column=0, sticky="w", padx=14, pady=7)
+                var = tk.StringVar(value=str(werte.get(fid, "") or ""))
+                extra_vars[fid] = var
+                if f["feld_typ"] == "Auswahl":
+                    opts = [o.strip() for o in str(f["optionen"] or "").split(";") if o.strip()]
+                    ttk.Combobox(tab_extra, textvariable=var, values=opts, state="readonly").grid(row=r, column=1, sticky="ew", padx=14, pady=7)
+                else:
+                    tk.Entry(tab_extra, textvariable=var).grid(row=r, column=1, sticky="ew", padx=14, pady=7)
+
+        # ── Reiter 3: Vorgesetzte ───────────────────────────────────────────
+        tab_vg = tk.Frame(nb, bg="#ffffff")
+        nb.add(tab_vg, text="Vorgesetzte")
+        tab_vg.columnconfigure(0, weight=1)
+        tab_vg.rowconfigure(1, weight=1)
+        tk.Label(tab_vg, text="Mehrere Vorgesetzte möglich. Genau einer sollte als „primär“ markiert sein – daraus entsteht das Organigramm.",
+                 bg="#ffffff", fg="#555", font=(theme.FONT, 9), wraplength=640, justify="left").grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 6))
+        vg_cols = ("vorgesetzter", "art", "primaer")
+        vg_heads = {"vorgesetzter": "Vorgesetzter", "art": "Art", "primaer": "Primär"}
+        vg_tree = ttk.Treeview(tab_vg, columns=vg_cols, show="headings", selectmode="browse", height=6)
+        for c in vg_cols:
+            vg_tree.heading(c, text=vg_heads[c])
+            vg_tree.column(c, width=180 if c == "vorgesetzter" else 110, anchor="w")
+        vg_tree.grid(row=1, column=0, sticky="nsew", padx=14)
+        vg_map = {}
+
+        def load_kandidaten():
+            with sqlite3.connect(DB_PATH) as con:
+                con.row_factory = sqlite3.Row
+                rows = con.execute("SELECT id, vorname, name FROM tbl_mitarbeiter WHERE id<>? ORDER BY name, vorname", (emp_id,)).fetchall()
+            return {f"{(r['vorname'] or '').strip()} {(r['name'] or '').strip()}".strip() or f"#{r['id']}": r["id"] for r in rows}
+
+        def reload_vg():
+            for iid in vg_tree.get_children(""):
+                vg_tree.delete(iid)
+            vg_map.clear()
+            with sqlite3.connect(DB_PATH) as con:
+                con.row_factory = sqlite3.Row
+                rows = con.execute("""
+                    SELECT v.id, v.art, v.ist_primaer, v.vorgesetzter_id,
+                           m.vorname, m.name
+                    FROM tbl_mitarbeiter_vorgesetzter v
+                    LEFT JOIN tbl_mitarbeiter m ON m.id = v.vorgesetzter_id
+                    WHERE v.mitarbeiter_id=? ORDER BY v.ist_primaer DESC, v.id""", (emp_id,)).fetchall()
+            for row_v in rows:
+                vg_name = f"{(row_v['vorname'] or '').strip()} {(row_v['name'] or '').strip()}".strip() or f"#{row_v['vorgesetzter_id']}"
+                iid = vg_tree.insert("", "end", values=[vg_name, row_v["art"], "★" if row_v["ist_primaer"] else ""])
+                vg_map[iid] = dict(row_v)
+
+        def vg_add():
+            kandidaten = load_kandidaten()
+            if not kandidaten:
+                messagebox.showinfo("Vorgesetzte", "Es gibt noch keine anderen Mitarbeiter, die als Vorgesetzte zugeordnet werden könnten.")
+                return
+            d = tk.Toplevel(win)
+            d.title("Vorgesetzten zuordnen")
+            d.configure(bg="#f5f7fb")
+            d.transient(win)
+            d.grab_set()
+            d.geometry("440x280")
+            d.columnconfigure(1, weight=1)
+            tk.Label(d, text="Vorgesetzter", bg="#f5f7fb", fg="#0b4a86", font=(theme.FONT, 10, "bold")).grid(row=0, column=0, sticky="w", padx=14, pady=10)
+            vg_var = tk.StringVar()
+            ttk.Combobox(d, textvariable=vg_var, values=list(kandidaten.keys()), state="readonly").grid(row=0, column=1, sticky="ew", padx=14, pady=10)
+            tk.Label(d, text="Art", bg="#f5f7fb", fg="#0b4a86", font=(theme.FONT, 10, "bold")).grid(row=1, column=0, sticky="w", padx=14, pady=10)
+            art_var = tk.StringVar(value=self.ARTEN_VORGESETZTER[0])
+            ttk.Combobox(d, textvariable=art_var, values=list(self.ARTEN_VORGESETZTER), state="readonly").grid(row=1, column=1, sticky="ew", padx=14, pady=10)
+            primaer_var = tk.BooleanVar(value=False)
+            tk.Checkbutton(d, text="Als primär markieren (bildet das Organigramm)", variable=primaer_var, bg="#f5f7fb").grid(row=2, column=0, columnspan=2, sticky="w", padx=14, pady=10)
+
+            def save():
+                sel_name = vg_var.get().strip()
+                if not sel_name or sel_name not in kandidaten:
+                    messagebox.showinfo("Vorgesetzte", "Bitte einen Vorgesetzten auswählen.")
+                    return
+                vid = kandidaten[sel_name]
+                with sqlite3.connect(DB_PATH) as con:
+                    if primaer_var.get():
+                        con.execute("UPDATE tbl_mitarbeiter_vorgesetzter SET ist_primaer=0 WHERE mitarbeiter_id=?", (emp_id,))
+                    con.execute("INSERT INTO tbl_mitarbeiter_vorgesetzter(mitarbeiter_id, vorgesetzter_id, art, ist_primaer) VALUES(?,?,?,?)",
+                                (emp_id, vid, art_var.get(), 1 if primaer_var.get() else 0))
+                    con.commit()
+                d.destroy()
+                reload_vg()
+
+            bar = tk.Frame(d, bg="#f5f7fb")
+            bar.grid(row=3, column=0, columnspan=2, sticky="ew", padx=14, pady=14)
+            tk.Button(bar, text="Abbrechen", command=d.destroy, padx=14, pady=7).pack(side="right", padx=(8, 0))
+            tk.Button(bar, text="Speichern", command=save, bg="#0b4a86", fg="white", relief="flat", padx=18, pady=8).pack(side="right")
+            win.wait_window(d)
+
+        def vg_set_primaer():
+            sel = vg_tree.selection()
+            if not sel:
+                messagebox.showinfo("Vorgesetzte", "Bitte zuerst eine Zuordnung auswählen.")
+                return
+            rel = vg_map.get(sel[0])
+            with sqlite3.connect(DB_PATH) as con:
+                con.execute("UPDATE tbl_mitarbeiter_vorgesetzter SET ist_primaer=0 WHERE mitarbeiter_id=?", (emp_id,))
+                con.execute("UPDATE tbl_mitarbeiter_vorgesetzter SET ist_primaer=1 WHERE id=?", (rel["id"],))
+                con.commit()
+            reload_vg()
+
+        def vg_delete():
+            sel = vg_tree.selection()
+            if not sel:
+                messagebox.showinfo("Vorgesetzte", "Bitte zuerst eine Zuordnung auswählen.")
+                return
+            rel = vg_map.get(sel[0])
+            with sqlite3.connect(DB_PATH) as con:
+                con.execute("DELETE FROM tbl_mitarbeiter_vorgesetzter WHERE id=?", (rel["id"],))
+                con.commit()
+            reload_vg()
+
+        vg_bar = tk.Frame(tab_vg, bg="#ffffff")
+        vg_bar.grid(row=2, column=0, sticky="ew", padx=14, pady=10)
+        tk.Button(vg_bar, text="➕ Zuordnen", command=vg_add, bg="#0b4a86", fg="white", relief="flat", padx=12, pady=6).pack(side="left", padx=(0, 8))
+        tk.Button(vg_bar, text="★ Als primär", command=vg_set_primaer, padx=12, pady=6).pack(side="left", padx=8)
+        tk.Button(vg_bar, text="Entfernen", command=vg_delete, padx=12, pady=6).pack(side="left", padx=8)
+        reload_vg()
+
+        def save_all():
+            with sqlite3.connect(DB_PATH) as con:
+                con.execute("""UPDATE tbl_mitarbeiter SET vorname=?, name=?, abteilung=?, position=?,
+                               telefon=?, mobil=?, email=?, onedrive_pfad=?, geaendert_am=CURRENT_TIMESTAMP, bearbeiter=?
+                               WHERE id=?""",
+                            (stamm_vars["vorname"].get().strip(), stamm_vars["name"].get().strip(),
+                             stamm_vars["abteilung"].get().strip(), stamm_vars["position"].get().strip(),
+                             stamm_vars["telefon"].get().strip(), stamm_vars["mobil"].get().strip(),
+                             stamm_vars["email"].get().strip(), stamm_vars["onedrive_pfad"].get().strip(),
+                             self.bearbeiter, emp_id))
+                for fid, var in extra_vars.items():
+                    con.execute("""INSERT INTO tbl_mitarbeiter_wert(mitarbeiter_id, feld_id, wert) VALUES(?,?,?)
+                                   ON CONFLICT(mitarbeiter_id, feld_id) DO UPDATE SET wert=excluded.wert""",
+                                (emp_id, fid, var.get().strip()))
+                con.commit()
+            win.destroy()
+            if callable(on_saved):
+                on_saved()
+
+        footer = tk.Frame(win, bg="#f5f7fb")
+        footer.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 16))
+        tk.Button(footer, text="Abbrechen", command=win.destroy, padx=16, pady=8).pack(side="right", padx=(8, 0))
+        tk.Button(footer, text="Speichern", command=save_all, bg="#0b4a86", fg="white", relief="flat", padx=22, pady=9).pack(side="right")
+        self.wait_window(win)
 
     def _ensure_kunden_center_extended(self):
         """Erweitert tbl_kunden_center um neue Pflichtfelder falls noch nicht vorhanden."""
@@ -6166,8 +6583,8 @@ LIMIT 500
             ]:
                 if col not in existing:
                     con.execute(f"ALTER TABLE tbl_kunden_center ADD COLUMN {col} {typedef}")
-            # Kunden-Typ vereinheitlichen: altes 'ZF' -> 'ZW' (nur dieses Feld;
-            # die Analyse-Datenquelle 'ZF' bleibt unveraendert).
+            # Kunden-Typ vereinheitlichen: altes 'ZF' -> 'ZW'. (Die Analyse-Datenquelle
+            # wird parallel in db.ensure_runtime_migrations ebenfalls auf 'ZW' migriert.)
             con.execute("UPDATE tbl_kunden_center SET kundentyp='ZW' WHERE kundentyp='ZF'")
             con.commit()
 
@@ -6209,7 +6626,7 @@ LIMIT 500
         vars_["kundentyp"] = typ_var
 
         tk.Label(head, text="Typ:", bg="#f5f7fb", fg="#0b4a86",
-                 font=("Arial", 11, "bold")).pack(side="left")
+                 font=(theme.FONT, 11, "bold")).pack(side="left")
         typ_btns = {}
 
         def _set_typ(val):
@@ -6222,19 +6639,19 @@ LIMIT 500
 
         for val in ("PK", "ZW"):
             b = tk.Button(head, text=val, width=6, relief="flat", cursor="hand2",
-                          bg="#e8eef5", fg="#11304d", font=("Arial", 11, "bold"),
+                          bg="#e8eef5", fg="#11304d", font=(theme.FONT, 11, "bold"),
                           activebackground="#d8e2ee", command=lambda v=val: _set_typ(v))
             b.pack(side="left", padx=(8, 0))
             typ_btns[val] = b
 
         tk.Label(head, text="Kundennummer *", bg="#f5f7fb", fg="#c00",
-                 font=("Arial", 11, "bold")).pack(side="left", padx=(22, 6))
+                 font=(theme.FONT, 11, "bold")).pack(side="left", padx=(22, 6))
         knr_var = tk.StringVar(value=str(initial.get("kundennummer", "") or ""))
         vars_["kundennummer"] = knr_var
-        tk.Entry(head, textvariable=knr_var, width=16, font=("Arial", 11)).pack(side="left")
+        tk.Entry(head, textvariable=knr_var, width=16, font=(theme.FONT, 11)).pack(side="left")
 
         tk.Label(head, text="MSK:", bg="#f5f7fb", fg="#0b4a86",
-                 font=("Arial", 11, "bold")).pack(side="left", padx=(16, 6))
+                 font=(theme.FONT, 11, "bold")).pack(side="left", padx=(16, 6))
         msk_var = tk.StringVar()
         vars_["msk_kundennummer"] = msk_var
         tk.Entry(head, textvariable=msk_var, width=16, state="readonly",
@@ -6254,14 +6671,14 @@ LIMIT 500
 
         def _mk_section(parent, rowref, text, top=10):
             tk.Label(parent, text=text, bg="#ffffff", fg="#0b4a86",
-                     font=("Arial", 11, "bold")).grid(row=rowref[0], column=0, columnspan=2,
+                     font=(theme.FONT, 11, "bold")).grid(row=rowref[0], column=0, columnspan=2,
                                                       sticky="w", pady=(top, 2))
             rowref[0] += 1
 
         def _mk_field(parent, rowref, key, label, required=False):
             fg = "#c00" if required else "#11304d"
             tk.Label(parent, text=label, bg="#ffffff", fg=fg,
-                     font=("Arial", 9, "bold")).grid(row=rowref[0], column=0, sticky="w", pady=3, padx=(0, 8))
+                     font=(theme.FONT, 9, "bold")).grid(row=rowref[0], column=0, sticky="w", pady=3, padx=(0, 8))
             var = tk.StringVar(value=str(initial.get(key, "") or ""))
             vars_[key] = var
             tk.Entry(parent, textvariable=var).grid(row=rowref[0], column=1, sticky="ew", pady=3)
@@ -6270,7 +6687,7 @@ LIMIT 500
 
         def _mk_combo(parent, rowref, key, label, values, default=""):
             tk.Label(parent, text=label, bg="#ffffff", fg="#11304d",
-                     font=("Arial", 9, "bold")).grid(row=rowref[0], column=0, sticky="w", pady=3, padx=(0, 8))
+                     font=(theme.FONT, 9, "bold")).grid(row=rowref[0], column=0, sticky="w", pady=3, padx=(0, 8))
             var = tk.StringVar(value=(str(initial.get(key, "") or "") or default))
             vars_[key] = var
             ttk.Combobox(parent, textvariable=var, values=values, state="readonly").grid(
@@ -6298,13 +6715,13 @@ LIMIT 500
         _mk_field(colL, rL, "strasse", "Straße")
         _mk_field(colL, rL, "hausnummer", "Hausnummer")
         tk.Label(colL, text="PLZ *", bg="#ffffff", fg="#c00",
-                 font=("Arial", 9, "bold")).grid(row=rL[0], column=0, sticky="w", pady=3, padx=(0, 8))
+                 font=(theme.FONT, 9, "bold")).grid(row=rL[0], column=0, sticky="w", pady=3, padx=(0, 8))
         _plz_box = tk.Frame(colL, bg="#ffffff")
         _plz_box.grid(row=rL[0], column=1, sticky="ew", pady=3)
         plz_var = tk.StringVar(value=str(initial.get("plz", "") or ""))
         vars_["plz"] = plz_var
         tk.Entry(_plz_box, textvariable=plz_var, width=10).pack(side="left")
-        _plz_status = tk.Label(_plz_box, text="", bg="#ffffff", font=("Arial", 8))
+        _plz_status = tk.Label(_plz_box, text="", bg="#ffffff", font=(theme.FONT, 8))
         _plz_status.pack(side="left", padx=(6, 0))
         rL[0] += 1
         _mk_field(colL, rL, "ort", "Ort")
@@ -6368,7 +6785,7 @@ LIMIT 500
         quart_bv = tk.BooleanVar(value=_truthy(initial.get("quartalsverguetung")))
         tk.Checkbutton(colR, text="Quartalsvergütung Partnerprogramm", variable=quart_bv,
                        bg="#ffffff", fg="#11304d", activebackground="#ffffff",
-                       font=("Arial", 9, "bold"), anchor="w",
+                       font=(theme.FONT, 9, "bold"), anchor="w",
                        command=lambda: quart_touched.__setitem__(0, True)).grid(
             row=rR[0], column=0, columnspan=2, sticky="w", pady=(6, 3))
         rR[0] += 1
@@ -6442,13 +6859,13 @@ LIMIT 500
             dlg.transient(win)
             dlg.grab_set()
             tk.Label(dlg, text="Artikel", bg="#f5f7fb", fg="#0b4a86",
-                     font=("Arial", 10, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(12, 4))
+                     font=(theme.FONT, 10, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(12, 4))
             disp = [f"{a}  ({p})" for p, a in nmg_artikel]
             art_var = tk.StringVar()
             cb = ttk.Combobox(dlg, textvariable=art_var, values=disp, width=44, state="readonly")
             cb.grid(row=0, column=1, padx=12, pady=(12, 4))
             tk.Label(dlg, text="Rabatt %", bg="#f5f7fb", fg="#0b4a86",
-                     font=("Arial", 10, "bold")).grid(row=1, column=0, sticky="w", padx=12, pady=4)
+                     font=(theme.FONT, 10, "bold")).grid(row=1, column=0, sticky="w", padx=12, pady=4)
             rab_var = tk.StringVar()
             tk.Entry(dlg, textvariable=rab_var, width=10).grid(row=1, column=1, sticky="w", padx=12, pady=4)
 
@@ -6598,7 +7015,7 @@ LIMIT 500
         vk_sb = tk.Scrollbar(tab_vk, orient="vertical", command=vk_tree.yview)
         vk_sb.grid(row=0, column=1, sticky="ns", pady=8)
         vk_tree.configure(yscrollcommand=vk_sb.set)
-        vk_info = tk.Label(tab_vk, text="", bg="#ffffff", fg="#555", font=("Arial", 9))
+        vk_info = tk.Label(tab_vk, text="", bg="#ffffff", fg="#555", font=(theme.FONT, 9))
         vk_info.grid(row=1, column=0, columnspan=2, sticky="w", padx=10, pady=(0, 6))
 
         def load_verkaufte():
@@ -6741,7 +7158,7 @@ LIMIT 500
 
         tk.Button(bar, text="Abbrechen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8, 12), pady=6)
         tk.Button(bar, text="✔  Speichern", command=save_kunde, bg="#0b4a86", fg="white",
-                  relief="flat", font=("Arial", 11, "bold"), padx=18, pady=7).pack(side="right", pady=6)
+                  relief="flat", font=(theme.FONT, 11, "bold"), padx=18, pady=7).pack(side="right", pady=6)
 
 
     def show_nmg_rabatte_uebersicht(self):
@@ -6793,7 +7210,7 @@ LIMIT 500
         tv.configure(yscrollcommand=sb.set)
 
         info_var = tk.StringVar(value="")
-        tk.Label(tab_tab, textvariable=info_var, bg="#ffffff", fg="#555", font=("Arial", 9)).grid(row=2, column=0, sticky="w", padx=10, pady=(0, 8))
+        tk.Label(tab_tab, textvariable=info_var, bg="#ffffff", fg="#555", font=(theme.FONT, 9)).grid(row=2, column=0, sticky="w", padx=10, pady=(0, 8))
 
         def reload_table():
             for iid in tv.get_children():
@@ -6833,20 +7250,20 @@ LIMIT 500
             with sqlite3.connect(DB_PATH) as con:
                 stats = current_stats(con)
                 snaps = list_snapshots(con, limit=10)
-            tk.Label(stats_inner, text="Aktueller Stand", font=("Arial", 13, "bold"), bg="#f8fbff", fg="#0b4a86").pack(anchor="w", padx=18, pady=(16, 6))
+            tk.Label(stats_inner, text="Aktueller Stand", font=(theme.FONT, 13, "bold"), bg="#f8fbff", fg="#0b4a86").pack(anchor="w", padx=18, pady=(16, 6))
             grid = tk.Frame(stats_inner, bg="#f8fbff")
             grid.pack(anchor="w", padx=18, pady=4)
             def row(lbl, val):
                 r = len(grid.grid_slaves(column=0))
-                tk.Label(grid, text=lbl, bg="#f8fbff", fg="#444", font=("Arial", 11)).grid(row=r, column=0, sticky="w", padx=(0, 18), pady=2)
-                tk.Label(grid, text=val, bg="#f8fbff", fg="#123", font=("Arial", 11, "bold")).grid(row=r, column=1, sticky="w", pady=2)
+                tk.Label(grid, text=lbl, bg="#f8fbff", fg="#444", font=(theme.FONT, 11)).grid(row=r, column=0, sticky="w", padx=(0, 18), pady=2)
+                tk.Label(grid, text=val, bg="#f8fbff", fg="#123", font=(theme.FONT, 11, "bold")).grid(row=r, column=1, sticky="w", pady=2)
             row("Anzahl Eintraege:", str(stats["anzahl"]))
             row("Hoechster Rabatt:", f"{(stats['max'] or 0) * 100:.1f} %" if stats["max"] is not None else "-")
             row("Niedrigster Rabatt:", f"{(stats['min'] or 0) * 100:.1f} %" if stats["min"] is not None else "-")
             row("Durchschnitt:", f"{(stats['avg'] or 0) * 100:.1f} %" if stats["avg"] is not None else "-")
             row("Letzte Aktualisierung:", str(stats["letzte_aktualisierung"] or "-"))
 
-            tk.Label(stats_inner, text=f"Snapshots ({len(snaps)})", font=("Arial", 13, "bold"), bg="#f8fbff", fg="#0b4a86").pack(anchor="w", padx=18, pady=(24, 6))
+            tk.Label(stats_inner, text=f"Snapshots ({len(snaps)})", font=(theme.FONT, 13, "bold"), bg="#f8fbff", fg="#0b4a86").pack(anchor="w", padx=18, pady=(24, 6))
             if not snaps:
                 tk.Label(stats_inner, text="Noch keine Snapshots vorhanden. Der erste entsteht beim naechsten PK-Rabatte-Import.", bg="#f8fbff", fg="#666", justify="left", wraplength=600).pack(anchor="w", padx=18, pady=4)
             else:
@@ -6865,7 +7282,7 @@ LIMIT 500
         diff_top = tk.Frame(tab_diff, bg="#ffffff")
         diff_top.pack(fill="x", padx=10, pady=(10, 4))
         diff_info = tk.StringVar(value="")
-        tk.Label(diff_top, textvariable=diff_info, bg="#ffffff", fg="#0b4a86", font=("Arial", 11, "bold")).pack(anchor="w")
+        tk.Label(diff_top, textvariable=diff_info, bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 11, "bold")).pack(anchor="w")
         tk.Button(diff_top, text="Neu laden", command=lambda: render_diff()).pack(anchor="w", pady=(4, 0))
 
         diff_lists = tk.Frame(tab_diff, bg="#ffffff")
@@ -6874,7 +7291,7 @@ LIMIT 500
         diff_lists.rowconfigure(1, weight=1)
 
         def make_list(parent, col, title, headers):
-            tk.Label(parent, text=title, font=("Arial", 11, "bold"), bg="#ffffff", fg="#0b4a86").grid(row=0, column=col, sticky="w", padx=4, pady=(0, 4))
+            tk.Label(parent, text=title, font=(theme.FONT, 11, "bold"), bg="#ffffff", fg="#0b4a86").grid(row=0, column=col, sticky="w", padx=4, pady=(0, 4))
             t = ttk.Treeview(parent, columns=headers, show="headings", height=15)
             for h in headers:
                 t.heading(h, text=h)
@@ -6972,11 +7389,13 @@ LIMIT 500
             ("\U0001f464", "Mitarbeiter", "Mitarbeiterdaten, Profile, Vertretungen.", self.show_mitarbeiter_center, "#6b4fb3"),
             ("\u2705", "ToDo", "Aufgaben, offene Punkte und Notizen.", self.show_todo_center, "#11823b"),
             ("\U0001f6d2", "Kasse", "Verkauf an Apotheken + Wareneingang.", self.open_kasse_app, "#8b5a00"),
+            ("\U0001f4d1", "Auswertungen", "Verkäufe, Kunden, Artikel frei auswerten und exportieren.", self.open_auswertungen_app, "#0b6e6e"),
             ("\U0001f50d", _T("Vergleichs-Suche"), _T("PZN oder Artikelname schnell in allen Wissens-Tabellen finden."), self.open_vergleichssuche_window, "#0b6e6e"),
             # V1.1 SP9: Globale Suche als App-Kachel.
             ("\U0001f50d", "Globale Suche", "Kunden, Analysen und Artikel uebergreifend finden.", self.open_globale_suche_window, "#0b4a86"),
             # V1.1 SP19: NMG-Rabatte-Uebersicht.
             ("\U0001f4b0", "NMG-Rabatte", "Aktuelle Rabatte sehen, Diff zum letzten Import, Verlauf pro PZN.", self.show_nmg_rabatte_uebersicht, "#6b4fb3"),
+            ("❓", "Hilfe", "Bebildertes Handbuch: was wie funktioniert.", self.open_hilfe_app, "#208acd"),
         ]
         # V1.1 SP11: gleichgrosse Kacheln. rowconfigure(weight=1) + minsize,
         # grid statt pack innerhalb der Kachel, Beschreibung mit wraplength.
@@ -6992,17 +7411,17 @@ LIMIT 500
             f.grid(row=r, column=c, sticky="nsew", padx=10, pady=10)
             f.rowconfigure(2, weight=1)   # Beschreibung zieht sich, Rest fix
             f.columnconfigure(0, weight=1)
-            tk.Label(f, text=icon, font=("Arial", 32), bg="#f8fbff", fg=color
+            tk.Label(f, text=icon, font=(theme.FONT, 32), bg="#f8fbff", fg=color
                      ).grid(row=0, column=0, pady=(18, 4))
-            tk.Label(f, text=title, font=("Arial", 13, "bold"), bg="#f8fbff",
+            tk.Label(f, text=title, font=(theme.FONT, 13, "bold"), bg="#f8fbff",
                      fg="#123").grid(row=1, column=0)
             tk.Label(f, text=desc, justify="center", bg="#f8fbff", fg="#555",
-                     font=("Arial", 9), wraplength=190
+                     font=(theme.FONT, 9), wraplength=190
                      ).grid(row=2, column=0, padx=14, pady=8, sticky="n")
             # Einheitlicher Oeffnen-Button (gleiche Hoehe + Schrift in allen Kacheln).
             tk.Button(f, text="Öffnen  →", command=cmd,
                       bg=color, fg="white", activebackground=color,
-                      relief="flat", font=("Arial", 10, "bold"),
+                      relief="flat", font=(theme.FONT, 10, "bold"),
                       padx=14, pady=7
                       ).grid(row=3, column=0, sticky="ew", padx=18, pady=(4, 16))
         self.status.set("Apps bereit.")
@@ -7037,13 +7456,13 @@ LIMIT 500
         header = tk.Frame(win, bg="#ffffff")
         header.pack(fill="x", padx=14, pady=(10, 4))
         tk.Label(header, text=_T("Vergleichs-Suche"),
-                 font=("Arial", 15, "bold"), fg="#0b4a86", bg="#ffffff").pack(anchor="w")
+                 font=(theme.FONT, 15, "bold"), fg="#0b4a86", bg="#ffffff").pack(anchor="w")
         tk.Label(header,
                  text=_T("PZN, Artikelname, Wirkstoff, Hersteller oder Staerke eingeben (ab 3 Zeichen)."),
-                 font=("Arial", 9), fg="#666", bg="#ffffff").pack(anchor="w", pady=(2, 0))
+                 font=(theme.FONT, 9), fg="#666", bg="#ffffff").pack(anchor="w", pady=(2, 0))
         tk.Label(header,
                  text=_T("Filter mit # ergaenzen: #nmg  #austausch  #schulbank  #wirkstoff   ·   #<hersteller> (z.B. #hexal, #ratio)   ·   UND-Logik"),
-                 font=("Arial", 9), fg="#0b6e6e", bg="#ffffff").pack(anchor="w", pady=(1, 0))
+                 font=(theme.FONT, 9), fg="#0b6e6e", bg="#ffffff").pack(anchor="w", pady=(1, 0))
 
         body = tk.Frame(win, bg="#ffffff")
         body.pack(fill="both", expand=True, padx=18, pady=(4, 14))
@@ -7053,7 +7472,7 @@ LIMIT 500
         toolbar = tk.Frame(body, bg="#ffffff")
         toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         tk.Label(toolbar, text=_T("Suche") + ":", bg="#ffffff",
-                 fg="#0b4a86", font=("Arial", 10, "bold")).pack(side="left")
+                 fg="#0b4a86", font=(theme.FONT, 10, "bold")).pack(side="left")
         search_var = tk.StringVar()
         # V1.1 SP7: Pre-Search uebernehmen, falls aus der globalen Suche
         # heraus geoeffnet (do_search wird nach Aufbau noch unten getriggert).
@@ -7061,9 +7480,9 @@ LIMIT 500
         if _vergleich_pre:
             search_var.set(_vergleich_pre)
             self._vergleichssuche_pre_query = ""
-        search_entry = tk.Entry(toolbar, textvariable=search_var, width=42, font=("Arial", 11))
+        search_entry = tk.Entry(toolbar, textvariable=search_var, width=42, font=(theme.FONT, 11))
         search_entry.pack(side="left", padx=(6, 12))
-        status_label = tk.Label(toolbar, text="", bg="#ffffff", fg="#666", font=("Arial", 9))
+        status_label = tk.Label(toolbar, text="", bg="#ffffff", fg="#666", font=(theme.FONT, 9))
         status_label.pack(side="left")
         search_entry.focus_set()
 
@@ -7106,7 +7525,7 @@ LIMIT 500
         # Kopfzeile mit selektierter PZN + Artikelname.
         detail_head = tk.Label(
             right, text=_T("Bitte Treffer auswaehlen."),
-            bg="#f0f5fa", fg="#0b4a86", font=("Arial", 11, "bold"),
+            bg="#f0f5fa", fg="#0b4a86", font=(theme.FONT, 11, "bold"),
             anchor="w", padx=10, pady=8,
         )
         detail_head.grid(row=0, column=0, columnspan=2, sticky="ew")
@@ -7132,16 +7551,16 @@ LIMIT 500
         ]
         for key, label, row_i, col_i in info_fields:
             tk.Label(info_card, text=label + ":", bg="#fcfdff", fg="#666",
-                     font=("Arial", 9), anchor="w").grid(
+                     font=(theme.FONT, 9), anchor="w").grid(
                 row=row_i, column=col_i, sticky="w", padx=(0, 6), pady=2)
             val = tk.Label(info_card, text="–", bg="#fcfdff", fg="#123",
-                           font=("Arial", 10, "bold"), anchor="w")
+                           font=(theme.FONT, 10, "bold"), anchor="w")
             val.grid(row=row_i, column=col_i + 1, sticky="ew", padx=(0, 14), pady=2)
             info_labels[key] = val
 
         # Treeview fuer Austauschartikel (PZN | Artikel | DF | PCK | Hersteller | Quelle).
         alt_label = tk.Label(right, text=_T("Austauschartikel"),
-                             bg="#ffffff", fg="#0b4a86", font=("Arial", 11, "bold"),
+                             bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 11, "bold"),
                              anchor="w", padx=10, pady=4)
         alt_label.grid(row=2, column=0, columnspan=2, sticky="nw", pady=(6, 0))
 
@@ -7171,7 +7590,7 @@ LIMIT 500
         alt_tree.configure(yscrollcommand=sb_alt.set)
 
         alt_status = tk.Label(right, text="", bg="#ffffff", fg="#666",
-                              font=("Arial", 9), anchor="w", padx=10)
+                              font=(theme.FONT, 9), anchor="w", padx=10)
         alt_status.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 0))
 
         row_map: dict[str, dict] = {}
@@ -7357,7 +7776,9 @@ LIMIT 500
         self._ensure_center_tables()
         self._ensure_kunden_center_extended()
         self.clear_page()
-        self._page_header("Kunden", "Apotheken verwalten · Analysen einsehen · per E-Mail versenden.")
+        self._kunden_icon = theme.load_icon(ASSETS_DIR / "Kunden.ico", 40)
+        self._page_header("Kunden", "Apotheken verwalten · Analysen einsehen · per E-Mail versenden.",
+                          icon=self._kunden_icon)
 
         body = tk.Frame(self.page, bg="#ffffff")
         body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
@@ -7373,7 +7794,7 @@ LIMIT 500
         if pre:
             search_var.set(pre)
             self._kunden_center_pre_search = ""
-        tk.Label(toolbar, text="Suche:", bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).pack(side="left")
+        tk.Label(toolbar, text="Suche:", bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 10, "bold")).pack(side="left")
         search_entry = tk.Entry(toolbar, textvariable=search_var, width=28)
         search_entry.pack(side="left", padx=(6, 12))
 
@@ -7521,6 +7942,60 @@ LIMIT 500
             messagebox.showerror("NMG Kasse", f"Kasse konnte nicht gestartet werden:\n{exc}",
                                  parent=self)
 
+    def open_auswertungen_app(self):
+        """Auswertungs-/Report-Modul als EIGENEN Prozess starten (NMGone.exe
+        --report bzw. start.py --report). Eigenes Taskleisten-Icon (AUMID
+        NMG.Report), DB wird via WAL geteilt. Liest Kundendaten nur."""
+        import subprocess
+        proc = getattr(self, "_report_proc", None)
+        if proc is not None and proc.poll() is None:
+            messagebox.showinfo(
+                "NMG Auswertungen",
+                "Das Auswertungsmodul läuft bereits in einem eigenen Fenster.\n"
+                "Bitte über die Taskleiste nach vorn holen.", parent=self)
+            return
+        try:
+            flags = 0
+            if sys.platform == "win32":
+                flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable, "--report"]
+            else:
+                start_py = Path(__file__).resolve().parent.parent / "start.py"
+                cmd = [sys.executable, str(start_py), "--report"]
+            self._report_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
+        except Exception as exc:
+            messagebox.showerror("NMG Auswertungen",
+                                 f"Auswertungsmodul konnte nicht gestartet werden:\n{exc}",
+                                 parent=self)
+
+    def open_hilfe_app(self):
+        """Hilfe-/Handbuch-Modul als EIGENEN Prozess starten (NMGone.exe --hilfe
+        bzw. start.py --hilfe). Eigenes Taskleisten-Icon (AUMID NMG.Hilfe). Das
+        Modul zeigt nur das bebilderte Handbuch und aendert keine Daten."""
+        import subprocess
+        proc = getattr(self, "_hilfe_proc", None)
+        if proc is not None and proc.poll() is None:
+            messagebox.showinfo(
+                "NMGone Hilfe",
+                "Die Hilfe läuft bereits in einem eigenen Fenster.\n"
+                "Bitte über die Taskleiste nach vorn holen.", parent=self)
+            return
+        try:
+            flags = 0
+            if sys.platform == "win32":
+                flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable, "--hilfe"]
+            else:
+                start_py = Path(__file__).resolve().parent.parent / "start.py"
+                cmd = [sys.executable, str(start_py), "--hilfe"]
+            self._hilfe_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
+        except Exception as exc:
+            messagebox.showerror("NMGone Hilfe",
+                                 f"Hilfe konnte nicht gestartet werden:\n{exc}",
+                                 parent=self)
+
     def show_todo_center(self):
         cols = ("id", "titel", "bereich", "verantwortlich", "faellig_am", "status", "prioritaet")
         heads = {"id":"ID", "titel":"ToDo", "bereich":"Bereich", "verantwortlich":"Verantwortlich", "faellig_am":"Fällig", "status":"Status", "prioritaet":"Priorität"}
@@ -7591,7 +8066,7 @@ LIMIT 500
 
     def _ensure_kunden_tables(self):
         with sqlite3.connect(DB_PATH) as con:
-            for table in ("tbl_pk_kunden", "tbl_zf_kunden"):
+            for table in ("tbl_pk_kunden", "tbl_zw_kunden"):
                 con.execute(f"""\nCREATE TABLE IF NOT EXISTS {table} (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,\nkundennummer TEXT,
                         kundenname TEXT,\napotheke TEXT,
@@ -7606,7 +8081,7 @@ LIMIT 500
 
     def _save_kunde_for_auswertung(self, kundentyp, kundennummer, kundenname, apotheke):
         self._ensure_kunden_tables()
-        table = "tbl_zf_kunden" if kundentyp == "ZF" else "tbl_pk_kunden"
+        table = "tbl_zw_kunden" if kundentyp in ("ZW", "ZF") else "tbl_pk_kunden"
         nummer = (kundennummer or "").strip()
         name = (kundenname or "").strip()
         apo = (apotheke or name or nummer or "").strip()
@@ -7638,7 +8113,7 @@ LIMIT 500
                 for col_name in ("kundentyp", "kundennummer", "kundenname"):
                     if col_name not in cols:
                         con.execute(f"ALTER TABLE tbl_auswertungen ADD COLUMN {col_name} TEXT")
-                datenquelle = "ZF" if kundentyp == "ZF" else "NMG"
+                datenquelle = "ZW" if kundentyp in ("ZW", "ZF") else "NMG"
                 row = con.execute("SELECT id FROM tbl_auswertungen ORDER BY id DESC LIMIT 1").fetchone()
                 if row:
                     con.execute("""\nUPDATE tbl_auswertungen
@@ -7681,16 +8156,16 @@ LIMIT 500
         win.configure(bg="#f5f7fb")
         win.transient(self)
         win.grab_set()
-        tk.Label(win, text="Auswertung einem Kunden zuordnen", font=("Arial", 14, "bold"),
+        tk.Label(win, text="Auswertung einem Kunden zuordnen", font=(theme.FONT, 14, "bold"),
                  fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(16, 4))
-        tk.Label(win, text=f"Auswertung: {apotheke_name}", font=("Arial", 10), fg="#555",
+        tk.Label(win, text=f"Auswertung: {apotheke_name}", font=(theme.FONT, 10), fg="#555",
                  bg="#f5f7fb").pack(anchor="w", padx=20, pady=(0, 8))
         tk.Label(win, text="Kunden suchen und zuordnen – oder Abbrechen für keine Zuordnung.",
-                 font=("Arial", 9), fg="#888", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(0, 10))
+                 font=(theme.FONT, 9), fg="#888", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(0, 10))
         sf = tk.Frame(win, bg="#f5f7fb")
         sf.pack(fill="x", padx=20, pady=(0, 6))
         sv = tk.StringVar()
-        tk.Label(sf, text="Suche:", bg="#f5f7fb", font=("Arial", 10, "bold")).pack(side="left")
+        tk.Label(sf, text="Suche:", bg="#f5f7fb", font=(theme.FONT, 10, "bold")).pack(side="left")
         tk.Entry(sf, textvariable=sv, width=35).pack(side="left", padx=(6, 8))
         cols = ("kundennummer", "kundenname", "plz", "ort", "status")
         heads = {"kundennummer": "Kundennr.", "kundenname": "Apothekenname", "plz": "PLZ", "ort": "Ort", "status": "Status"}
@@ -7745,13 +8220,13 @@ LIMIT 500
             if callback: callback()
         tk.Button(bar, text="Abbrechen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8,0))
         tk.Button(bar, text="Übernehmen", command=uebernehmen, bg="#0b4a86", fg="white",
-                  relief="flat", font=("Arial", 11, "bold"), padx=16, pady=7).pack(side="right")
+                  relief="flat", font=(theme.FONT, 11, "bold"), padx=16, pady=7).pack(side="right")
 
     def show_neue_auswertung_page(self):
         self._ensure_kunden_tables()
         self.clear_page()
         self._page_header(
-            "Neue Auswertung",
+            "Bedarfsanalyse",
             "Kundentyp, Kundendaten und Rohdaten in einer Ansicht erfassen."
         )
 
@@ -7760,7 +8235,9 @@ LIMIT 500
         body.columnconfigure(1, weight=1)
 
         last_type = self._get_meta_value("neue_auswertung_kundentyp", "PK")
-        if last_type not in ("PK", "ZF"):
+        if last_type == "ZF":      # Alt-Token -> ZW
+            last_type = "ZW"
+        if last_type not in ("PK", "ZW"):
             last_type = "PK"
 
         kundentyp_var = tk.StringVar(value=last_type)
@@ -7774,30 +8251,42 @@ LIMIT 500
         form.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 14), ipady=8)
         form.columnconfigure(1, weight=1)
 
-        tk.Label(form, text="1. Kundentyp", bg="#f8fbff", fg="#0b4a86", font=("Arial", 12, "bold")).grid(row=0, column=0, sticky="w", padx=14, pady=(14, 6))
+        tk.Label(form, text="1. Kundentyp", bg="#f8fbff", fg="#0b4a86", font=(theme.FONT, 12, "bold")).grid(row=0, column=0, sticky="w", padx=14, pady=(14, 6))
         type_frame = tk.Frame(form, bg="#f8fbff")
         type_frame.grid(row=0, column=1, sticky="w", padx=14, pady=(14, 6))
         tk.Radiobutton(type_frame, text="Partnerkondition", variable=kundentyp_var, value="PK", bg="#f8fbff").pack(side="left", padx=(0, 18))
-        tk.Radiobutton(type_frame, text="Zukunftswerk", variable=kundentyp_var, value="ZF", bg="#f8fbff").pack(side="left")
+        tk.Radiobutton(type_frame, text="Zukunftswerk", variable=kundentyp_var, value="ZW", bg="#f8fbff").pack(side="left")
 
         # Kundennummer optional – für spätere Zuordnung
-        tk.Label(form, text="2. Kundennummer (optional)", bg="#f8fbff", fg="#0b4a86", font=("Arial", 12, "bold")).grid(row=1, column=0, sticky="w", padx=14, pady=7)
+        tk.Label(form, text="2. Kundennummer (optional)", bg="#f8fbff", fg="#0b4a86", font=(theme.FONT, 12, "bold")).grid(row=1, column=0, sticky="w", padx=14, pady=7)
         entry_knr = tk.Entry(form, textvariable=kundennummer_var, width=28)
         entry_knr.grid(row=1, column=1, sticky="ew", padx=14, pady=7)
-        tk.Label(form, text="Kann leer bleiben – Zuordnung nach Auswertung möglich", bg="#f8fbff", fg="#888", font=("Arial", 9)).grid(row=1, column=2, sticky="w", padx=(0,14), pady=7)
+        tk.Label(form, text="Kann leer bleiben – Zuordnung nach Auswertung möglich", bg="#f8fbff", fg="#888", font=(theme.FONT, 9)).grid(row=1, column=2, sticky="w", padx=(0,14), pady=7)
         labels = [
             ("3. Kundenname / Apotheke", kundenname_var, "z. B. Rosen Apotheke Forst"),
             ("4. Auswertungsname", apotheke_var, "Name für Ausgabeordner und Analyse"),
         ]
         for idx, (label, var, hint) in enumerate(labels, start=2):
-            tk.Label(form, text=label, bg="#f8fbff", fg="#0b4a86", font=("Arial", 12, "bold")).grid(row=idx, column=0, sticky="w", padx=14, pady=7)
+            tk.Label(form, text=label, bg="#f8fbff", fg="#0b4a86", font=(theme.FONT, 12, "bold")).grid(row=idx, column=0, sticky="w", padx=14, pady=7)
             entry = tk.Entry(form, textvariable=var, width=54)
             entry.grid(row=idx, column=1, sticky="ew", padx=14, pady=7)
-            tk.Label(form, text=hint, bg="#f8fbff", fg="#666", font=("Arial", 9)).grid(row=idx, column=2, sticky="w", padx=(0, 14), pady=7)
+            tk.Label(form, text=hint, bg="#f8fbff", fg="#666", font=(theme.FONT, 9)).grid(row=idx, column=2, sticky="w", padx=(0, 14), pady=7)
 
         def choose_raw_file():
             file = filedialog.askopenfilename(title="Rohdaten auswählen", filetypes=SUPPORTED_DATA_FILETYPES)
             if not file:
+                return
+            # Sofortige, klare Rueckmeldung bei unbekanntem Format - statt erst
+            # nach dem Start im Hintergrund auf einen Fehler zu laufen.
+            suffix = Path(file).suffix.lower()
+            if suffix not in SUPPORTED_DATA_EXTENSIONS:
+                erlaubt = ", ".join(sorted(SUPPORTED_DATA_EXTENSIONS))
+                messagebox.showwarning(
+                    "Format nicht unterstützt",
+                    f"Die Datei „{Path(file).name}“ hat das Format „{suffix or '(kein)'}“, "
+                    f"das nicht eingelesen werden kann.\n\nErlaubte Formate: {erlaubt}."
+                )
+                self.status.set(f"Format nicht unterstützt: {suffix or Path(file).name}")
                 return
             rohdatei_var.set(file)
             if not apotheke_var.get().strip():
@@ -7806,14 +8295,14 @@ LIMIT 500
                 kundenname_var.set(Path(file).stem.replace("_", " "))
             self.status.set(f"Rohdaten ausgewählt: {Path(file).name}")
 
-        tk.Label(form, text="5. Rohdaten", bg="#f8fbff", fg="#0b4a86", font=("Arial", 12, "bold")).grid(row=4, column=0, sticky="w", padx=14, pady=7)
+        tk.Label(form, text="5. Rohdaten", bg="#f8fbff", fg="#0b4a86", font=(theme.FONT, 12, "bold")).grid(row=4, column=0, sticky="w", padx=14, pady=7)
         file_frame = tk.Frame(form, bg="#f8fbff")
         file_frame.grid(row=4, column=1, columnspan=2, sticky="ew", padx=14, pady=7)
         file_frame.columnconfigure(0, weight=1)
         tk.Entry(file_frame, textvariable=rohdatei_var, state="readonly").grid(row=0, column=0, sticky="ew", padx=(0, 8))
         tk.Button(file_frame, text="Datei auswählen", command=choose_raw_file, padx=12, pady=5).grid(row=0, column=1)
 
-        tk.Label(form, text="6. Auswertungsvorlage", bg="#f8fbff", fg="#0b4a86", font=("Arial", 12, "bold")).grid(row=5, column=0, sticky="w", padx=14, pady=7)
+        tk.Label(form, text="6. Auswertungsvorlage", bg="#f8fbff", fg="#0b4a86", font=(theme.FONT, 12, "bold")).grid(row=5, column=0, sticky="w", padx=14, pady=7)
         template_frame = tk.Frame(form, bg="#f8fbff")
         template_frame.grid(row=5, column=1, columnspan=2, sticky="ew", padx=14, pady=7)
         template_frame.columnconfigure(0, weight=1)
@@ -7829,14 +8318,14 @@ LIMIT 500
         def start_analysis():
             file = rohdatei_var.get().strip()
             if not file:
-                messagebox.showinfo("Neue Auswertung", "Bitte zuerst eine Rohdaten-Datei auswählen.")
+                messagebox.showinfo("Bedarfsanalyse", "Bitte zuerst eine Rohdaten-Datei auswählen.")
                 return
             kundentyp = kundentyp_var.get()
             kundennummer = kundennummer_var.get().strip()
             kundenname = kundenname_var.get().strip()
             analyse_name = _safe_name(apotheke_var.get().strip() or kundenname or Path(file).stem.replace("_", " "))
             if not analyse_name:
-                messagebox.showinfo("Neue Auswertung", "Bitte Kundenname oder Auswertungsname eingeben.")
+                messagebox.showinfo("Bedarfsanalyse", "Bitte Kundenname oder Auswertungsname eingeben.")
                 return
 
             self._set_meta_value("neue_auswertung_kundentyp", kundentyp)
@@ -7879,7 +8368,7 @@ LIMIT 500
             fg="white",
             activebackground="#0b4a86",
             relief="flat",
-            font=("Arial", 12, "bold"),
+            font=(theme.FONT, 12, "bold"),
             padx=20,
             pady=10
         ).pack(side="left")
@@ -7905,7 +8394,7 @@ LIMIT 500
             text="Abweichungsanalyse",
             bg="#f8fbff",
             fg="#0b4a86",
-            font=("Arial", 16, "bold")
+            font=(theme.FONT, 16, "bold")
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=14, pady=(14, 4))
         tk.Label(
             abw,
@@ -7936,7 +8425,7 @@ LIMIT 500
             win.transient(self)
             win.grab_set()
 
-            tk.Label(win, text="Programm-Auswertung aus Datenbank wählen", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 6))
+            tk.Label(win, text="Programm-Auswertung aus Datenbank wählen", font=(theme.FONT, 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 6))
             tk.Label(win, text="Die Ausgabedatei der gewählten gespeicherten Analyse wird für die Abweichungsanalyse verwendet.", bg="#f5f7fb", fg="#333").pack(anchor="w", padx=22, pady=(0, 10))
 
             frame = tk.Frame(win, bg="#f5f7fb")
@@ -8005,16 +8494,16 @@ LIMIT 500
             except Exception as exc:
                 messagebox.showerror("Abweichungsanalyse", str(exc))
 
-        tk.Label(abw, text="1. Programm-Auswertung", bg="#f8fbff", fg="#0b4a86", font=("Arial", 12, "bold")).grid(row=2, column=0, sticky="w", padx=14, pady=7)
+        tk.Label(abw, text="1. Programm-Auswertung", bg="#f8fbff", fg="#0b4a86", font=(theme.FONT, 12, "bold")).grid(row=2, column=0, sticky="w", padx=14, pady=7)
         prog_frame = tk.Frame(abw, bg="#f8fbff")
         prog_frame.grid(row=2, column=1, columnspan=2, sticky="ew", padx=14, pady=7)
         prog_frame.columnconfigure(0, weight=1)
         tk.Entry(prog_frame, textvariable=programm_auswertung_var, state="readonly").grid(row=0, column=0, sticky="ew", padx=(0, 8))
         tk.Button(prog_frame, text="Gespeicherte auswählen", command=choose_saved_programm, padx=10, pady=5).grid(row=0, column=1, padx=(0, 6))
         tk.Button(prog_frame, text="Datei auswählen", command=choose_programm_file, padx=10, pady=5).grid(row=0, column=2)
-        tk.Label(abw, textvariable=selected_programm_info, bg="#f8fbff", fg="#666", font=("Arial", 9)).grid(row=3, column=1, columnspan=2, sticky="w", padx=14, pady=(0, 6))
+        tk.Label(abw, textvariable=selected_programm_info, bg="#f8fbff", fg="#666", font=(theme.FONT, 9)).grid(row=3, column=1, columnspan=2, sticky="w", padx=14, pady=(0, 6))
 
-        tk.Label(abw, text="2. Manuelle Anpassung", bg="#f8fbff", fg="#0b4a86", font=("Arial", 12, "bold")).grid(row=4, column=0, sticky="w", padx=14, pady=7)
+        tk.Label(abw, text="2. Manuelle Anpassung", bg="#f8fbff", fg="#0b4a86", font=(theme.FONT, 12, "bold")).grid(row=4, column=0, sticky="w", padx=14, pady=7)
         man_frame = tk.Frame(abw, bg="#f8fbff")
         man_frame.grid(row=4, column=1, columnspan=2, sticky="ew", padx=14, pady=7)
         man_frame.columnconfigure(0, weight=1)
@@ -8031,7 +8520,7 @@ LIMIT 500
             fg="white",
             activebackground="#8b5a00",
             relief="flat",
-            font=("Arial", 12, "bold"),
+            font=(theme.FONT, 12, "bold"),
             padx=18,
             pady=9
         ).pack(side="left")
@@ -8102,8 +8591,8 @@ LIMIT 500
                 col = idx % 2
                 f = tk.Frame(body, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1)
                 f.grid(row=row, column=col, sticky="nsew", padx=10, pady=10, ipadx=8, ipady=8)
-                tk.Label(f, text=icon, font=("Arial", 34), bg="#f8fbff", fg=color).pack(pady=(20, 6))
-                tk.Label(f, text=title, font=("Arial", 15, "bold"), bg="#f8fbff", fg="#123").pack()
+                tk.Label(f, text=icon, font=(theme.FONT, 34), bg="#f8fbff", fg=color).pack(pady=(20, 6))
+                tk.Label(f, text=title, font=(theme.FONT, 15, "bold"), bg="#f8fbff", fg="#123").pack()
                 tk.Label(f, text=desc, wraplength=260, justify="center", bg="#f8fbff", fg="#333").pack(padx=18, pady=12)
                 tk.Button(
                     f,
@@ -8113,7 +8602,7 @@ LIMIT 500
                     fg="white",
                     activebackground=color,
                     relief="flat",
-                    font=("Arial", 12, "bold"),
+                    font=(theme.FONT, 12, "bold"),
                     padx=18,
                     pady=8
                 ).pack(fill="x", padx=24, pady=(8, 18))
@@ -8191,7 +8680,7 @@ LIMIT 500
             text="Übernommen und Abgelehnt bleiben 7 Tage sichtbar und wandern danach in die Historie.",
             bg="#ffffff",
             fg="#333",
-            font=("Arial", 10)
+            font=(theme.FONT, 10)
         ).pack(side="left", padx=14)
 
         columns = ("id", "pzn_alt", "artikel_alt", "pzn_nmg", "freitext_austausch", "status", "bearbeiter", "erstellt_am", "bearbeitet_am")
@@ -9228,11 +9717,11 @@ LIMIT 500
         win.transient(self)
         win.grab_set()
 
-        tk.Label(win, text="Lernvorschlag hinzufügen", font=("Arial", 20, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=24, pady=(22, 4))
+        tk.Label(win, text="Lernvorschlag hinzufügen", font=(theme.FONT, 20, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=24, pady=(22, 4))
         tk.Label(
             win,
             text="Abgegebene PZN erfassen. Artikelnamen werden automatisch aus der Datenbank gefüllt, wenn vorhanden.",
-            font=("Arial", 10), fg="#333", bg="#f5f7fb"
+            font=(theme.FONT, 10), fg="#333", bg="#f5f7fb"
         ).pack(anchor="w", padx=24, pady=(0, 14))
 
         form = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
@@ -9247,9 +9736,9 @@ LIMIT 500
         hint_var = tk.StringVar(value="Austauschbar gegen ist optional, sobald eine PZN NMG eingetragen ist.")
 
         def add_row(row, label, var, readonly=False):
-            tk.Label(form, text=label, bg="#ffffff", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=row, column=0, sticky="w", padx=18, pady=(14 if row == 0 else 8, 4))
+            tk.Label(form, text=label, bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 10, "bold")).grid(row=row, column=0, sticky="w", padx=18, pady=(14 if row == 0 else 8, 4))
             state = "readonly" if readonly else "normal"
-            entry = tk.Entry(form, textvariable=var, state=state, font=("Arial", 11))
+            entry = tk.Entry(form, textvariable=var, state=state, font=(theme.FONT, 11))
             entry.grid(row=row, column=1, sticky="ew", padx=18, pady=(14 if row == 0 else 8, 4))
             return entry
 
@@ -9297,7 +9786,7 @@ LIMIT 500
         buttons = tk.Frame(win, bg="#f5f7fb")
         buttons.pack(fill="x", padx=24, pady=(0, 20))
         tk.Button(buttons, text="Abbrechen", command=win.destroy, padx=16, pady=8).pack(side="right", padx=(8, 0))
-        tk.Button(buttons, text="Speichern", command=save, bg="#0b4a86", fg="white", activebackground="#0b4a86", relief="flat", font=("Arial", 11, "bold"), padx=22, pady=9).pack(side="right")
+        tk.Button(buttons, text="Speichern", command=save, bg="#0b4a86", fg="white", activebackground="#0b4a86", relief="flat", font=(theme.FONT, 11, "bold"), padx=22, pady=9).pack(side="right")
 
         e_pzn_alt.focus_set()
         win.bind("<Return>", lambda _event: save())
@@ -9411,7 +9900,7 @@ LIMIT 500
         self._tile(row3, 0, "📥", "Manuelle Analysen", "Manuelle PK-/ZW-Analysen importieren.", "Import", self.import_manuelle_analysen, "#11823b")
 
     def _ask_manual_analysis_type(self):
-        """Fragt gezielt, ob manuelle Analysen als PK oder ZF importiert werden sollen."""
+        """Fragt gezielt, ob manuelle Analysen als PK oder ZW importiert werden sollen."""
         win = tk.Toplevel(self)
         win.resizable(True, True)
         win.title("Manuelle Analysen importieren")
@@ -9421,13 +9910,13 @@ LIMIT 500
         win.grab_set()
         choice = tk.StringVar(value="PK")
 
-        tk.Label(win, text="Analyseart auswählen", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(20, 6))
+        tk.Label(win, text="Analyseart auswählen", font=(theme.FONT, 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(20, 6))
         tk.Label(win, text="Sind die manuellen Analysen PK- oder ZW-Analysen?", bg="#f5f7fb", fg="#333").pack(anchor="w", padx=22, pady=(0, 14))
 
         box = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
         box.pack(fill="x", padx=22, pady=(0, 14))
-        tk.Radiobutton(box, text="PK / Partnerkondition", variable=choice, value="PK", bg="#ffffff", font=("Arial", 11)).pack(anchor="w", padx=16, pady=(14, 6))
-        tk.Radiobutton(box, text="ZW / Zukunftswerk", variable=choice, value="ZF", bg="#ffffff", font=("Arial", 11)).pack(anchor="w", padx=16, pady=(6, 14))
+        tk.Radiobutton(box, text="PK / Partnerkondition", variable=choice, value="PK", bg="#ffffff", font=(theme.FONT, 11)).pack(anchor="w", padx=16, pady=(14, 6))
+        tk.Radiobutton(box, text="ZW / Zukunftswerk", variable=choice, value="ZW", bg="#ffffff", font=(theme.FONT, 11)).pack(anchor="w", padx=16, pady=(6, 14))
 
         result = {"value": None}
         def ok():
@@ -9650,7 +10139,7 @@ LIMIT 500
         win.columnconfigure(0, weight=1)
         win.rowconfigure(2, weight=1)
 
-        tk.Label(win, text="Admin – einzelne oder alle Auswertungen löschen", font=("Arial", 17, "bold"), fg="#0b4a86", bg="#f5f7fb").grid(row=0, column=0, sticky="w", padx=18, pady=(16, 4))
+        tk.Label(win, text="Admin – einzelne oder alle Auswertungen löschen", font=(theme.FONT, 17, "bold"), fg="#0b4a86", bg="#f5f7fb").grid(row=0, column=0, sticky="w", padx=18, pady=(16, 4))
         tk.Label(win, text="Es werden nur Datenbankeinträge gelöscht. Ausgabedateien bleiben erhalten. Vor dem Löschen wird automatisch ein Backup erstellt.", bg="#f5f7fb", fg="#333", justify="left").grid(row=1, column=0, sticky="w", padx=18, pady=(0, 10))
 
         frame = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
@@ -9736,7 +10225,7 @@ LIMIT 500
 
         tk.Button(buttons, text="Alle markieren", command=select_all, padx=12, pady=7).pack(side="left")
         tk.Button(buttons, text="Auswahl aufheben", command=clear_selection, padx=12, pady=7).pack(side="left", padx=(8, 0))
-        tk.Button(buttons, text="Ausgewählte löschen", command=delete_selected, bg="#9b1c1c", fg="white", relief="flat", font=("Arial", 10, "bold"), padx=16, pady=8).pack(side="right")
+        tk.Button(buttons, text="Ausgewählte löschen", command=delete_selected, bg="#9b1c1c", fg="white", relief="flat", font=(theme.FONT, 10, "bold"), padx=16, pady=8).pack(side="right")
         tk.Button(buttons, text="Schließen", command=win.destroy, padx=12, pady=7).pack(side="right", padx=(0, 8))
 
     def show_import_page(self, title, command):
@@ -9800,7 +10289,7 @@ LIMIT 500
             fg="#0b4a86",
             justify="left",
             anchor="w",
-            font=("Arial", 10, "bold"),
+            font=(theme.FONT, 10, "bold"),
             padx=12,
             pady=10,
             highlightbackground="#d8e2ee",
@@ -9878,7 +10367,7 @@ LIMIT 500
             bg="#0b4a86",
             fg="white",
             relief="flat",
-            font=("Arial", 10, "bold"),
+            font=(theme.FONT, 10, "bold"),
             padx=14,
             pady=7
         ).pack(side="left")
@@ -9890,7 +10379,7 @@ LIMIT 500
             bg="#0b6e6e",
             fg="white",
             relief="flat",
-            font=("Arial", 10, "bold"),
+            font=(theme.FONT, 10, "bold"),
             padx=14,
             pady=7
         ).pack(side="left", padx=(8, 0))
@@ -9905,7 +10394,7 @@ LIMIT 500
             bg="#8b5a00",
             fg="white",
             relief="flat",
-            font=("Arial", 10, "bold"),
+            font=(theme.FONT, 10, "bold"),
             padx=14,
             pady=7
         ).pack(side="left", padx=(8, 0))
@@ -9922,7 +10411,7 @@ LIMIT 500
                 bg="#9b1c1c",
                 fg="white",
                 relief="flat",
-                font=("Arial", 10, "bold"),
+                font=(theme.FONT, 10, "bold"),
                 padx=14,
                 pady=7
             ).pack(side="left", padx=(8, 0))
@@ -9982,7 +10471,7 @@ LIMIT 500
         win.columnconfigure(0, weight=1)
 
         tk.Label(win, text="Auswertungen im Zeitraum endgueltig loeschen",
-                 font=("Arial", 14, "bold"), fg="#9b1c1c", bg="#f5f7fb").pack(
+                 font=(theme.FONT, 14, "bold"), fg="#9b1c1c", bg="#f5f7fb").pack(
             anchor="w", padx=20, pady=(18, 4))
         tk.Label(win,
                  text=("Alle Auswertungen im Datumsbereich werden aus der Datenbank "
@@ -9995,16 +10484,16 @@ LIMIT 500
         form = tk.Frame(win, bg="#f5f7fb")
         form.pack(padx=20, pady=(0, 10), anchor="w")
         tk.Label(form, text="Datum von:",
-                 bg="#f5f7fb", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky="w", pady=4)
+                 bg="#f5f7fb", fg="#0b4a86", font=(theme.FONT, 10, "bold")).grid(row=0, column=0, sticky="w", pady=4)
         von_var = tk.StringVar()
-        _make_date_entry(form, von_var, width=14, font=("Arial", 11)).grid(row=0, column=1, padx=(8, 0))
+        _make_date_entry(form, von_var, width=14, font=(theme.FONT, 11)).grid(row=0, column=1, padx=(8, 0))
         tk.Label(form, text="Datum bis:",
-                 bg="#f5f7fb", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=1, column=0, sticky="w", pady=4)
+                 bg="#f5f7fb", fg="#0b4a86", font=(theme.FONT, 10, "bold")).grid(row=1, column=0, sticky="w", pady=4)
         bis_var = tk.StringVar()
-        _make_date_entry(form, bis_var, width=14, font=("Arial", 11)).grid(row=1, column=1, padx=(8, 0))
+        _make_date_entry(form, bis_var, width=14, font=(theme.FONT, 11)).grid(row=1, column=1, padx=(8, 0))
 
         vorschau_lbl = tk.Label(win, text="", bg="#f5f7fb", fg="#0b4a86",
-                                font=("Arial", 10, "bold"))
+                                font=(theme.FONT, 10, "bold"))
         vorschau_lbl.pack(anchor="w", padx=20, pady=(8, 0))
 
         def vorschau():
@@ -10093,10 +10582,10 @@ LIMIT 500
                   padx=14, pady=6).pack(side="right")
         tk.Button(btn_bar, text="🔐 LOESCHEN  →", command=do_delete,
                   bg="#9b1c1c", fg="white", relief="flat",
-                  font=("Arial", 10, "bold"), padx=16, pady=7).pack(side="right", padx=(0, 8))
+                  font=(theme.FONT, 10, "bold"), padx=16, pady=7).pack(side="right", padx=(0, 8))
         tk.Button(btn_bar, text="Vorschau zaehlen", command=vorschau,
                   bg="#0b4a86", fg="white", relief="flat",
-                  font=("Arial", 10, "bold"), padx=14, pady=6).pack(side="right", padx=(0, 8))
+                  font=(theme.FONT, 10, "bold"), padx=14, pady=6).pack(side="right", padx=(0, 8))
 
     def _archivieren_zeitraum_dialog(self):
         """Dialog: von/bis-Datum -> Vorschau -> Confirm -> ZIP erstellen,
@@ -10111,7 +10600,7 @@ LIMIT 500
         win.columnconfigure(0, weight=1)
 
         tk.Label(win, text="Auswertungen im Zeitraum archivieren",
-                 font=("Arial", 14, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(
+                 font=(theme.FONT, 14, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(
             anchor="w", padx=20, pady=(18, 4))
         tk.Label(win,
                  text=("Alle Auswertungen im Datumsbereich werden in ein ZIP-Backup "
@@ -10124,16 +10613,16 @@ LIMIT 500
         form = tk.Frame(win, bg="#f5f7fb")
         form.pack(padx=20, pady=(0, 10), anchor="w")
         tk.Label(form, text="Datum von:",
-                 bg="#f5f7fb", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky="w", pady=4)
+                 bg="#f5f7fb", fg="#0b4a86", font=(theme.FONT, 10, "bold")).grid(row=0, column=0, sticky="w", pady=4)
         von_var = tk.StringVar()
-        _make_date_entry(form, von_var, width=14, font=("Arial", 11)).grid(row=0, column=1, padx=(8, 0))
+        _make_date_entry(form, von_var, width=14, font=(theme.FONT, 11)).grid(row=0, column=1, padx=(8, 0))
         tk.Label(form, text="Datum bis:",
-                 bg="#f5f7fb", fg="#0b4a86", font=("Arial", 10, "bold")).grid(row=1, column=0, sticky="w", pady=4)
+                 bg="#f5f7fb", fg="#0b4a86", font=(theme.FONT, 10, "bold")).grid(row=1, column=0, sticky="w", pady=4)
         bis_var = tk.StringVar()
-        _make_date_entry(form, bis_var, width=14, font=("Arial", 11)).grid(row=1, column=1, padx=(8, 0))
+        _make_date_entry(form, bis_var, width=14, font=(theme.FONT, 11)).grid(row=1, column=1, padx=(8, 0))
 
         vorschau_lbl = tk.Label(win, text="", bg="#f5f7fb", fg="#0b4a86",
-                                font=("Arial", 10, "bold"))
+                                font=(theme.FONT, 10, "bold"))
         vorschau_lbl.pack(anchor="w", padx=20, pady=(8, 0))
 
         def vorschau():
@@ -10186,10 +10675,10 @@ LIMIT 500
                   padx=14, pady=6).pack(side="right")
         tk.Button(btn_bar, text="Archivieren  →", command=do_archive,
                   bg="#9b1c1c", fg="white", relief="flat",
-                  font=("Arial", 10, "bold"), padx=16, pady=7).pack(side="right", padx=(0, 8))
+                  font=(theme.FONT, 10, "bold"), padx=16, pady=7).pack(side="right", padx=(0, 8))
         tk.Button(btn_bar, text="Vorschau zaehlen", command=vorschau,
                   bg="#0b4a86", fg="white", relief="flat",
-                  font=("Arial", 10, "bold"), padx=14, pady=6).pack(side="right", padx=(0, 8))
+                  font=(theme.FONT, 10, "bold"), padx=14, pady=6).pack(side="right", padx=(0, 8))
 
     def _archive_verwalten_dialog(self):
         """Dialog: Liste aller ZIP-Archive. Pro ZIP eine zweite Liste mit
@@ -10207,13 +10696,13 @@ LIMIT 500
         win.rowconfigure(1, weight=1)
 
         tk.Label(win, text="Archive verwalten",
-                 font=("Arial", 14, "bold"), fg="#0b4a86", bg="#ffffff").grid(
+                 font=(theme.FONT, 14, "bold"), fg="#0b4a86", bg="#ffffff").grid(
             row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(14, 6))
 
         # Linke Liste: ZIPs
         zip_frame = tk.LabelFrame(win, text=" Archiv-ZIPs ",
                                   bg="#ffffff", fg="#0b4a86",
-                                  font=("Arial", 10, "bold"))
+                                  font=(theme.FONT, 10, "bold"))
         zip_frame.grid(row=1, column=0, sticky="nsew", padx=(14, 6), pady=(0, 6))
         zip_frame.rowconfigure(0, weight=1)
         zip_frame.columnconfigure(0, weight=1)
@@ -10232,7 +10721,7 @@ LIMIT 500
         # Rechte Liste: Inhalt des selektierten ZIPs
         inh_frame = tk.LabelFrame(win, text=" Inhalt (Doppelklick = Excel oeffnen) ",
                                   bg="#ffffff", fg="#0b4a86",
-                                  font=("Arial", 10, "bold"))
+                                  font=(theme.FONT, 10, "bold"))
         inh_frame.grid(row=1, column=1, sticky="nsew", padx=(6, 14), pady=(0, 6))
         inh_frame.rowconfigure(0, weight=1)
         inh_frame.columnconfigure(0, weight=1)
@@ -10351,14 +10840,14 @@ LIMIT 500
         btn_bar.grid(row=2, column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 14))
         tk.Button(btn_bar, text="Aktualisieren", command=reload_zips,
                   bg="#0b4a86", fg="white", relief="flat",
-                  font=("Arial", 10, "bold"), padx=12, pady=6).pack(side="left")
+                  font=(theme.FONT, 10, "bold"), padx=12, pady=6).pack(side="left")
         tk.Button(btn_bar, text="Archiv-Ordner oeffnen",
                   command=lambda: _open_folder(ensure_archiv_dir()),
                   padx=12, pady=6).pack(side="left", padx=(8, 0))
         tk.Button(btn_bar, text="🔐 Archiv endgueltig loeschen",
                   command=loeschen_zip,
                   bg="#9b1c1c", fg="white", relief="flat",
-                  font=("Arial", 10, "bold"), padx=12, pady=6).pack(side="right")
+                  font=(theme.FONT, 10, "bold"), padx=12, pady=6).pack(side="right")
         tk.Button(btn_bar, text="Schliessen", command=win.destroy,
                   padx=12, pady=6).pack(side="right", padx=(0, 8))
 
@@ -10455,7 +10944,7 @@ LIMIT 500
         tk.Label(
             win,
             text="Admin – Datenbankinhalte leeren",
-            font=("Arial", 18, "bold"),
+            font=(theme.FONT, 18, "bold"),
             fg="#0b4a86",
             bg="#f5f7fb"
         ).grid(row=0, column=0, sticky="w", padx=22, pady=(20, 6))
@@ -10501,7 +10990,7 @@ LIMIT 500
                 bg="#ffffff",
                 anchor="w",
                 justify="left",
-                font=("Arial", 10)
+                font=(theme.FONT, 10)
             ).grid(row=idx, column=0, sticky="ew", padx=14, pady=(10 if idx == 0 else 4, 4))
 
         warn = tk.Label(
@@ -10588,7 +11077,7 @@ LIMIT 500
             bg="#9b1c1c",
             fg="white",
             relief="flat",
-            font=("Arial", 10, "bold"),
+            font=(theme.FONT, 10, "bold"),
             padx=18,
             pady=9
         ).pack(side="right")
@@ -10645,7 +11134,7 @@ LIMIT 500
         body.rowconfigure(1, weight=1)
 
         info = (
-            "Regel: Maximal 3 Auswertungsvorlagen. In 'Neue Auswertung' kann die Vorlage ausgewählt werden.\n"
+            "Regel: Maximal 3 Auswertungsvorlagen. In 'Bedarfsanalyse' kann die Vorlage ausgewählt werden.\n"
             "Die Auswahl wird gespeichert. Daten aus der Vorlage werden nicht übernommen; nur Optik, Kopfzeile und Tabellenformat."
         )
         tk.Label(body, text=info, justify="left", bg="#ffffff", fg="#333").grid(row=0, column=0, sticky="w", pady=(0, 10))
@@ -10786,7 +11275,7 @@ LIMIT 500
             self.status.set(f"Auswertungsvorlage Slot {slot} entfernt.")
             self.show_auswertungsvorlage_page()
 
-        tk.Button(actions, text="Vorlage hochladen/ersetzen", command=upload_template, bg="#0b4a86", fg="white", relief="flat", font=("Arial", 11, "bold"), padx=16, pady=8).pack(side="left", padx=(0, 8))
+        tk.Button(actions, text="Vorlage hochladen/ersetzen", command=upload_template, bg="#0b4a86", fg="white", relief="flat", font=(theme.FONT, 11, "bold"), padx=16, pady=8).pack(side="left", padx=(0, 8))
         tk.Button(actions, text="Als Standard verwenden", command=set_default, padx=14, pady=8).pack(side="left", padx=8)
         tk.Button(actions, text="Vorlage entfernen", command=delete_template, padx=14, pady=8).pack(side="left", padx=8)
         tk.Button(actions, text="Vorlagenordner öffnen", command=lambda: _open_folder(self._auswertungsvorlagen_dir()), padx=14, pady=8).pack(side="left", padx=8)
@@ -10827,7 +11316,7 @@ LIMIT 500
             justify="left",
             bg="#ffffff",
             fg="#222",
-            font=("Arial", 11)
+            font=(theme.FONT, 11)
         ).pack(anchor="w", pady=(0, 16))
 
         tk.Button(
@@ -10837,7 +11326,7 @@ LIMIT 500
             bg="#0b4a86",
             fg="white",
             relief="flat",
-            font=("Arial", 12, "bold"),
+            font=(theme.FONT, 12, "bold"),
             padx=18,
             pady=9
         ).pack(anchor="w")
@@ -10924,7 +11413,7 @@ LIMIT 500
             justify="left",
             bg="#ffffff",
             fg="#222",
-            font=("Arial", 11)
+            font=(theme.FONT, 11)
         ).pack(anchor="w", pady=(0, 16))
 
         tk.Button(
@@ -10934,7 +11423,7 @@ LIMIT 500
             bg="#0b4a86",
             fg="white",
             relief="flat",
-            font=("Arial", 12, "bold"),
+            font=(theme.FONT, 12, "bold"),
             padx=18,
             pady=9
         ).pack(anchor="w")
@@ -11339,12 +11828,12 @@ LIMIT 500
         win.transient(self)
         win.grab_set()
 
-        tk.Label(win, text=title, font=("Arial", 14, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(16, 4))
-        tk.Label(win, text=f"Datei: {Path(filepath).name}", font=("Arial", 9), fg="#555", bg="#f5f7fb").pack(anchor="w", padx=20)
+        tk.Label(win, text=title, font=(theme.FONT, 14, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(16, 4))
+        tk.Label(win, text=f"Datei: {Path(filepath).name}", font=(theme.FONT, 9), fg="#555", bg="#f5f7fb").pack(anchor="w", padx=20)
         if beschreibung:
-            tk.Label(win, text=beschreibung, font=("Arial", 9), fg="#888", bg="#f5f7fb", justify="left", wraplength=640).pack(anchor="w", padx=20, pady=(2, 0))
+            tk.Label(win, text=beschreibung, font=(theme.FONT, 9), fg="#888", bg="#f5f7fb", justify="left", wraplength=640).pack(anchor="w", padx=20, pady=(2, 0))
         tk.Label(win, text="Spalten aus der Datei den Feldern zuordnen. Pflichtfelder (*) müssen belegt sein.",
-                 font=("Arial", 9), fg="#666", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(4, 10))
+                 font=(theme.FONT, 9), fg="#666", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(4, 10))
 
         form = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
         form.pack(fill="both", expand=True, padx=20, pady=(0, 10))
@@ -11358,7 +11847,7 @@ LIMIT 500
         for r, (col_name, aliases, _, required) in enumerate(all_fields):
             label_text = f"{aliases[0]} {'*' if required else ''}".strip()
             color = "#c00" if required else "#0b4a86"
-            tk.Label(form, text=label_text, bg="#ffffff", fg=color, font=("Arial", 10, "bold"),
+            tk.Label(form, text=label_text, bg="#ffffff", fg=color, font=(theme.FONT, 10, "bold"),
                      anchor="w").grid(row=r, column=0, sticky="w", padx=12, pady=5)
             var = tk.StringVar()
             if col_name in current_mapping:
@@ -11395,7 +11884,7 @@ LIMIT 500
         bar.pack(fill="x", padx=20, pady=(0, 14))
         tk.Button(bar, text="Abbrechen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8, 0))
         tk.Button(bar, text="✔  Importieren", command=save, bg="#0b4a86", fg="white",
-                  relief="flat", font=("Arial", 11, "bold"), padx=16, pady=7).pack(side="right")
+                  relief="flat", font=(theme.FONT, 11, "bold"), padx=16, pady=7).pack(side="right")
         self.wait_window(win)
         return result["mapping"]
 
@@ -11775,7 +12264,7 @@ LIMIT 500
         win.transient(self)
         win.grab_set()
 
-        tk.Label(win, text="Neuer Wunsch", font=("Arial", 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 8))
+        tk.Label(win, text="Neuer Wunsch", font=(theme.FONT, 18, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 8))
 
         form = tk.Frame(win, bg="#f5f7fb")
         form.pack(fill="both", expand=True, padx=22, pady=8)
@@ -11822,24 +12311,20 @@ LIMIT 500
         tk.Button(buttons, text="Speichern", command=save, bg="#0b4a86", fg="white", relief="flat", padx=18, pady=9).pack(side="right")
 
     def show_help_center(self):
+        """Die Hilfe ist ein eigenes Fenster (bebildertes Handbuch). Diese
+        eingebettete Seite startet sie und verweist darauf."""
+        self.open_hilfe_app()
         self.clear_page()
-        self._page_header("Hilfe-Center", "Direkt im Programm. Keine PDF, kein separates Hilfefenster.")
+        self._page_header("Hilfe", "Das bebilderte Handbuch öffnet sich in einem eigenen Fenster.")
 
         body = tk.Frame(self.page, bg="#ffffff")
         body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
-
-        help_text = (
-            "Erste Schritte\n"
-            "Neue Auswertung\n"
-            "Produktanalyse\n"
-            "Marktanalyse\n"
-            "Schulbank\n"
-            "Daten aktualisieren\n"
-            "Backup & Update\n"
-            "FAQ\n\n"
-            "Die Inhalte werden in Version 4.0 hier im mittleren Arbeitsbereich ausgebaut."
-        )
-        tk.Label(body, text=help_text, justify="left", bg="#ffffff", fg="#222", font=("Arial", 11)).pack(anchor="w")
+        tk.Label(body, text="Die Hilfe wurde in einem eigenen Fenster geöffnet.\n"
+                            "Hol sie bei Bedarf über die Taskleiste nach vorn.",
+                 justify="left", bg="#ffffff", fg="#222", font=(theme.FONT, 11)).pack(anchor="w", pady=(0, 12))
+        tk.Button(body, text="❓  Hilfe öffnen", command=self.open_hilfe_app,
+                  bg="#208acd", fg="white", relief="flat", font=(theme.FONT, 11, "bold"),
+                  padx=18, pady=8, cursor="hand2").pack(anchor="w")
 
 
 
@@ -11901,7 +12386,7 @@ def _show_splash_screen():
         except Exception:
             pass
         welcome_var = tk.StringVar(value=T("Willkommen bei NMGone"))
-        tk.Label(splash_root, textvariable=welcome_var, font=("Arial", 16, "bold"),
+        tk.Label(splash_root, textvariable=welcome_var, font=(theme.FONT, 16, "bold"),
                  fg="#0b4a86", bg="#ffffff").pack(pady=(0, 8))
 
     # Steuerbereich
@@ -11909,7 +12394,7 @@ def _show_splash_screen():
     controls.pack(side="top", fill="x", pady=(8, 0))
 
     lang_label_var = tk.StringVar(value=T("Sprache auswählen"))
-    tk.Label(controls, textvariable=lang_label_var, font=("Arial", 10),
+    tk.Label(controls, textvariable=lang_label_var, font=(theme.FONT, 10),
              fg="#444", bg="#ffffff").pack()
 
     lang_codes = list(LANGUAGES.keys())
@@ -11918,7 +12403,7 @@ def _show_splash_screen():
     lang_var = tk.StringVar(value=lang_display[current_idx])
 
     combo = ttk.Combobox(controls, textvariable=lang_var, values=lang_display,
-                         state="readonly", font=("Arial", 11), width=22, justify="center")
+                         state="readonly", font=(theme.FONT, 11), width=22, justify="center")
     combo.pack(pady=(4, 12))
 
     def _on_lang_change(_event=None):
@@ -11942,13 +12427,13 @@ def _show_splash_screen():
     start_btn = tk.Button(
         controls, text=T("Starten"), command=_on_start,
         bg="#0b4a86", fg="white", relief="flat",
-        font=("Arial", 12, "bold"), padx=32, pady=8, cursor="hand2",
+        font=(theme.FONT, 12, "bold"), padx=32, pady=8, cursor="hand2",
     )
     start_btn.pack(pady=(0, 10))
 
     from .backup import APP_VERSION_DISPLAY
     tk.Label(splash_root, text=f"NMGone {APP_VERSION_DISPLAY}",
-             font=("Arial", 8), fg="#aaa", bg="#ffffff").pack(side="bottom", pady=(0, 6))
+             font=(theme.FONT, 8), fg="#aaa", bg="#ffffff").pack(side="bottom", pady=(0, 6))
 
     splash_root.bind("<Return>", lambda e: _on_start())
     splash_root.bind("<Escape>", lambda e: splash_root.destroy())

@@ -465,7 +465,18 @@ def ensure_runtime_migrations(db_path: Path = DB_PATH) -> None:
                 con.execute("ALTER TABLE tbl_rohdaten_mapping ADD COLUMN bearbeiter TEXT")
         con.execute("UPDATE tbl_auswertungen SET datenquelle='NMG' WHERE datenquelle IS NULL OR datenquelle='' ")
         con.execute("UPDATE tbl_auswertungspositionen SET datenquelle='NMG' WHERE datenquelle IS NULL OR datenquelle='' ")
-        con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('app_feature_zf_import','2.5.0')")
+        con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('app_feature_zw_import','2.5.0')")
+
+        # ZF -> ZW: Die Zukunftswerk-Datenquelle wurde von 'ZF' auf 'ZW' vereinheitlicht
+        # (frueher nur ueber ein Anzeige-Label gemappt). Bestehende Auswertungen mitziehen.
+        con.execute("UPDATE tbl_auswertungen SET datenquelle='ZW' WHERE datenquelle='ZF'")
+        con.execute("UPDATE tbl_auswertungspositionen SET datenquelle='ZW' WHERE datenquelle='ZF'")
+        # Alte Kundentabelle tbl_zf_kunden -> tbl_zw_kunden umbenennen (idempotent und
+        # VOR dem CREATE IF NOT EXISTS, damit vorhandene Daten erhalten bleiben).
+        _has = lambda t: con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (t,)).fetchone() is not None
+        if _has("tbl_zf_kunden") and not _has("tbl_zw_kunden"):
+            con.execute("ALTER TABLE tbl_zf_kunden RENAME TO tbl_zw_kunden")
 
         # Vorbereitung Kundenstamm für neue Auswertung: PK und Zukunftswerk getrennt.
         con.execute("""
@@ -486,7 +497,7 @@ def ensure_runtime_migrations(db_path: Path = DB_PATH) -> None:
             WHERE kundennummer IS NOT NULL AND kundennummer <> ''
         """)
         con.execute("""
-            CREATE TABLE IF NOT EXISTS tbl_zf_kunden (
+            CREATE TABLE IF NOT EXISTS tbl_zw_kunden (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 kundennummer TEXT,
                 kundenname TEXT,
@@ -498,8 +509,8 @@ def ensure_runtime_migrations(db_path: Path = DB_PATH) -> None:
             )
         """)
         con.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_tbl_zf_kunden_kundennummer
-            ON tbl_zf_kunden(kundennummer)
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_tbl_zw_kunden_kundennummer
+            ON tbl_zw_kunden(kundennummer)
             WHERE kundennummer IS NOT NULL AND kundennummer <> ''
         """)
         con.execute("INSERT OR IGNORE INTO meta(key,value) VALUES('neue_auswertung_kundentyp','PK')")
@@ -523,7 +534,7 @@ def init_db(db_path: Path = DB_PATH) -> None:
     with connect(db_path) as con:
         con.executescript(SCHEMA_SQL)
         con.execute("INSERT INTO meta(key,value) VALUES('db_version','1.9')")
-        con.execute("INSERT INTO meta(key,value) VALUES('basis','2.6: Installations- und Update-System + PK/ZF-Datenquellen')")
+        con.execute("INSERT INTO meta(key,value) VALUES('basis','2.6: Installations- und Update-System + PK/ZW-Datenquellen')")
         con.execute("INSERT INTO meta(key,value) VALUES('db_schema_version','1.1')")
 
         # NMG-Stamm aus offizieller APU/HAP-Liste zuerst befüllen.

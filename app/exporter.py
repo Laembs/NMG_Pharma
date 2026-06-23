@@ -8,7 +8,7 @@ from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 from .config import OUTPUT_DIR, DB_PATH
 from .db import init_db
-from .file_loader import load_worksheet
+from .file_loader import load_worksheet, SUPPORTED_DATA_EXTENSIONS
 from .learning_db import clean_hersteller, find_columns, register_hersteller, lookup_hersteller, parse_number, register_basisdaten, lookup_basisdaten, register_ek, lookup_latest_ek
 from .abgleich_protocol import build_trace_index, trace_lookup_source, write_abgleichartikel_protocol
 
@@ -826,11 +826,14 @@ def _read_csv_rows(path: Path):
 
 
 def _load_input_worksheet(input_file: Path):
+    # Erlaubte Formate kommen aus file_loader (eine Wahrheit), damit neue
+    # Formate wie .xls nicht erneut hier vergessen werden.
     suffix = input_file.suffix.lower()
-    if suffix in {'.xlsx', '.xlsm', '.csv', '.txt'}:
+    if suffix in SUPPORTED_DATA_EXTENSIONS:
         return load_worksheet(input_file)
+    erlaubt = ", ".join(sorted(SUPPORTED_DATA_EXTENSIONS))
     raise UnknownInputFormatError(
-        'Nicht unterstütztes Dateiformat. Erlaubt sind: .xlsx, .xlsm, .csv und .txt'
+        f'Nicht unterstütztes Dateiformat. Erlaubt sind: {erlaubt}'
     )
 
 def _read_input_rows(input_file: Path):
@@ -904,18 +907,75 @@ def _read_input_rows(input_file: Path):
 
     return rows, mapping
 
-def create_linden_export(input_file: str | Path, apotheke: str) -> Path:
+def _aggregate_rows_by_pzn(rows):
+    """Fasst Zeilen mit gleicher PZN zusammen und summiert die Menge (Spalte G,
+    Index 6). Die Reihenfolge des ersten Auftretens bleibt erhalten.
+
+    - Zeilen ohne gueltige PZN bleiben unveraendert als Einzelzeilen erhalten.
+    - Negative Mengen (z.B. Retouren) werden mit aufsummiert und verrechnen sich
+      dadurch gegen positive Mengen derselben PZN.
+    - Fehlende Stammfelder (Artikel/DF/Pck/Herst/EK) werden aus spaeteren Zeilen
+      derselben PZN ergaenzt.
+    """
+    aggregated: dict[str, list] = {}
+    order: list[str] = []
+    passthrough: list[list] = []
+    for raw in rows:
+        row = list(raw)
+        pzn = _pzn(row[0] if row else None)
+        if not pzn:
+            passthrough.append(row)
+            continue
+        if pzn not in aggregated:
+            aggregated[pzn] = row + [None] * max(0, 7 - len(row))
+            order.append(pzn)
+        else:
+            base = aggregated[pzn]
+            base[6] = _to_number(base[6], 0) + _to_number(row[6] if len(row) > 6 else 0, 0)
+            for i in range(1, 6):
+                if base[i] in (None, "") and i < len(row) and row[i] not in (None, ""):
+                    base[i] = row[i]
+    result = [aggregated[p] for p in order]
+    result.extend(passthrough)
+    return result
+
+
+def create_vorlage_export(input_file: str | Path, apotheke: str, on_duplicate_prompt=None) -> Path:
     input_file = Path(input_file)
     if not DB_PATH.exists():
         init_db(DB_PATH)
     safe_name = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in apotheke.strip()) or "Apotheke"
     # V1.1 SP12: Strukturiert nach OUTPUT_DIR/PK/<Jahr>/Q<n>/
-    # create_linden_export ist der PK-Auswertungs-Pfad (Apotheken-Excel).
-    # ZF kommt aus import_historical_market_file und erzeugt gar keine Excel.
+    # create_vorlage_export ist der PK-Auswertungs-Pfad (Apotheken-Excel).
+    # ZW kommt aus import_historical_market_file und erzeugt gar keine Excel.
     from .config import jahr_quartal_pfad
     out = jahr_quartal_pfad(OUTPUT_DIR, "PK") / f"Auswertung_{safe_name}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
 
     rows, input_mapping = _read_input_rows(input_file)
+
+    # Dubletten-Erkennung: kommt dieselbe PZN mehrfach vor, fragt die GUI ueber
+    # on_duplicate_prompt, ob die Mengen je PZN summiert werden sollen. Ohne
+    # Callback (z.B. Stapel-/Hintergrundlauf) bleibt das alte Verhalten: jede
+    # Zeile einzeln.
+    if on_duplicate_prompt is not None and rows:
+        counts: dict[str, int] = {}
+        has_negative = False
+        for row in rows:
+            pzn = _pzn(row[0] if row else None)
+            if not pzn:
+                continue
+            counts[pzn] = counts.get(pzn, 0) + 1
+            if _to_number(row[6] if len(row) > 6 else 0, 0) < 0:
+                has_negative = True
+        dups = sorted(p for p, c in counts.items() if c > 1)
+        if dups:
+            info = {"pzns": dups, "count": len(dups), "has_negative": has_negative}
+            try:
+                if on_duplicate_prompt(info):
+                    rows = _aggregate_rows_by_pzn(rows)
+            except Exception:
+                pass
+
     wb = Workbook()
     ws = wb.active
     ws.title = apotheke[:31] if apotheke else "Auswertung"

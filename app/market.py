@@ -21,14 +21,16 @@ def _norm_source(datenquelle: str | None) -> str:
     # Intern bleiben bestehende Altdaten aus Kompatibilitätsgründen als NMG gespeichert.
     if dq == "PK":
         return "NMG"
-    return dq if dq in {"NMG", "ZF", "ALLE"} else "ALLE"
+    if dq == "ZF":  # Alt-Token -> ZW
+        dq = "ZW"
+    return dq if dq in {"NMG", "ZW", "ALLE"} else "ALLE"
 
 
 def _source_label(dq: str) -> str:
-    # Anzeige-Labels: intern bleiben 'NMG'/'ZF', der Nutzer sieht 'PK'/'ZW'.
+    # Anzeige-Labels: PK ist intern weiterhin 'NMG', ZW ist 'ZW' (frueher 'ZF').
     if dq == "NMG":
         return "PK"
-    if dq == "ZF":
+    if dq in ("ZW", "ZF"):
         return "ZW"
     return "PK + ZW"
 
@@ -398,23 +400,24 @@ def datenbankstatus() -> dict:
             "positionen": one("SELECT COUNT(*) FROM tbl_auswertungspositionen"),
             "nicht_nmg_positionen": one("SELECT COUNT(*) FROM tbl_auswertungspositionen WHERE COALESCE(ist_nmg_treffer,0)=0"),
             "pk_positionen": one("SELECT COUNT(*) FROM tbl_auswertungspositionen WHERE COALESCE(ist_nmg_treffer,0)=1"),
-            "zf_auswertungen": one("SELECT COUNT(*) FROM tbl_auswertungen WHERE COALESCE(datenquelle,'NMG')='ZF'"),
+            "zw_auswertungen": one("SELECT COUNT(*) FROM tbl_auswertungen WHERE COALESCE(datenquelle,'NMG') IN ('ZW','ZF')"),
             "pk_auswertungen": one("SELECT COUNT(*) FROM tbl_auswertungen WHERE COALESCE(datenquelle,'NMG')='NMG'"),
         }
 
 
-# ── SP14: Neue Produktanalyse PK/ZF/PK+ZF ────────────────────────────────────
+# ── SP14: Neue Produktanalyse PK/ZW/PK+ZW ────────────────────────────────────
 def _produktanalyse_datenquellen(kundentyp: str) -> list[str]:
-    """Mapping zwischen kundentyp ('PK'/'ZF'/'PK+ZF') und den
+    """Mapping zwischen kundentyp ('PK'/'ZW'/'PK+ZW') und den
     tbl_auswertungen.datenquelle-Werten, die wir filtern muessen.
-    Altdaten haben datenquelle='NMG' obwohl es PK-Auswertungen sind.
+    Altdaten haben datenquelle='NMG' obwohl es PK-Auswertungen sind;
+    'ZF' wird als Alt-Token von 'ZW' weiterhin mitgelesen.
     """
     k = (kundentyp or "").upper().replace(" ", "")
     if k == "PK":
         return ["NMG", "PK"]
-    if k == "ZF":
-        return ["ZF"]
-    return ["NMG", "PK", "ZF"]  # PK+ZF oder ALLE
+    if k in ("ZW", "ZF"):
+        return ["ZW", "ZF"]
+    return ["NMG", "PK", "ZW", "ZF"]  # PK+ZW oder ALLE
 
 
 def _produktanalyse_rows(con: sqlite3.Connection, kundentyp: str, monate: int = 6) -> list[sqlite3.Row]:
@@ -757,10 +760,10 @@ def export_produktanalyse_neu(kundentyp: str = "PK", monate: int = 6) -> Path:
     """SP14/SP15: Produktanalyse nach Spezifikation des Users.
 
     Args:
-        kundentyp: 'PK', 'ZF' oder 'PK+ZF'
+        kundentyp: 'PK', 'ZW' oder 'PK+ZW' ('ZF'/'PK+ZF' werden als Alt-Token akzeptiert)
         monate: Zeitfilter auf tbl_auswertungen.datum (Default 6)
 
-    Bei 'PK+ZF' werden 3 Sheets in derselben Excel erzeugt: PK, ZF, PK+ZF.
+    Bei 'PK+ZW' werden 3 Sheets in derselben Excel erzeugt: PK, ZW, PK+ZW.
     Sonst eine Excel mit einem Sheet.
 
     Liefert den Pfad zur erzeugten Excel-Datei.
@@ -784,11 +787,15 @@ def export_produktanalyse_neu(kundentyp: str = "PK", monate: int = 6) -> Path:
         pass
 
     label = kundentyp.upper().replace(" ", "")
-    if label not in ("PK", "ZF", "PK+ZF"):
+    if label == "ZF":          # Alt-Token -> ZW
+        label = "ZW"
+    elif label == "PK+ZF":
+        label = "PK+ZW"
+    if label not in ("PK", "ZW", "PK+ZW"):
         raise ValueError(f"Unbekannter Kundentyp: {kundentyp}")
 
     # V1.1 SP12: Strukturierter Ablage-Pfad ausgaben/Produktanalyse/<Jahr>/Q<n>/
-    out = jahr_quartal_pfad(OUTPUT_DIR, "Produktanalyse") / f"Produktanalyse_{label.replace('ZF', 'ZW').replace('+', '_und_')}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+    out = jahr_quartal_pfad(OUTPUT_DIR, "Produktanalyse") / f"Produktanalyse_{label.replace('+', '_und_')}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
 
     wb = Workbook()
     # Default-Sheet entfernen, wir fuegen unsere selbst an.
@@ -796,10 +803,10 @@ def export_produktanalyse_neu(kundentyp: str = "PK", monate: int = 6) -> Path:
 
     with sqlite3.connect(DB_PATH) as con:
         sheets_to_make: list[tuple[str, str]] = []  # (sheet_name (Anzeige), kundentyp_filter)
-        if label == "PK+ZF":
-            sheets_to_make = [("PK", "PK"), ("ZW", "ZF"), ("PK + ZW", "PK+ZF")]
+        if label == "PK+ZW":
+            sheets_to_make = [("PK", "PK"), ("ZW", "ZW"), ("PK + ZW", "PK+ZW")]
         else:
-            sheets_to_make = [(label.replace("ZF", "ZW"), label)]
+            sheets_to_make = [(label, label)]
 
         for sheet_name, ktyp in sheets_to_make:
             aw, pos = _produktanalyse_basis_info(con, ktyp, monate)

@@ -19,7 +19,7 @@ from .historical_import import import_historical_market_file
 def _kopiere_in_archivordner(path: Path, analyse_typ: str) -> Path:
     """V1.1 SP12: Kopiert die Original-Datei nach
     IMPORT_DIR/<analyse_typ>/<Jahr>/Q<n>/ und liefert den Ziel-Pfad zurueck.
-    analyse_typ: 'PK' oder 'ZF'. Dateiname bleibt erhalten; bei Konflikt
+    analyse_typ: 'PK' oder 'ZW'. Dateiname bleibt erhalten; bei Konflikt
     wird ein _2, _3, ... angehaengt.
     """
     target_dir = jahr_quartal_pfad(IMPORT_DIR / analyse_typ)
@@ -338,12 +338,14 @@ def import_manual_analysis_files(paths: Iterable[str | Path], analyse_typ: str,
     vor der Verarbeitung aufgerufen, z.B. 'Datei 5 von 96: foo.xlsx'.
     """
     analyse_typ = (analyse_typ or "").upper().strip()
+    if analyse_typ == "ZF":     # Alt-Token -> ZW
+        analyse_typ = "ZW"
     if analyse_typ == "PK":
         datenquelle = "NMG"
-    elif analyse_typ == "ZF":
-        datenquelle = "ZF"
+    elif analyse_typ == "ZW":
+        datenquelle = "ZW"
     else:
-        raise ValueError("Analyseart muss PK oder ZF sein.")
+        raise ValueError("Analyseart muss PK oder ZW sein.")
 
     if not DB_PATH.exists():
         init_db(DB_PATH)
@@ -420,7 +422,7 @@ def import_manual_analysis_files(paths: Iterable[str | Path], analyse_typ: str,
                 result = import_historical_market_file(readable, datenquelle=datenquelle, analyse_name=path.stem)
                 rows_imported = int(result.get("rows", 0) or result.get("imported", 0) or 0)
 
-                # V1.1 SP12: Originaldatei in den passenden PK-/ZF-Ordner unter
+                # V1.1 SP12: Originaldatei in den passenden PK-/ZW-Ordner unter
                 # gespeicherte_analysen kopieren. Auch in tbl_auswertungen den
                 # ausgabedatei-Wert auf den Archiv-Pfad setzen, damit
                 # "Auswertung oeffnen" in der GUI funktioniert.

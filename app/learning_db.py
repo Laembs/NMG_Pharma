@@ -23,7 +23,10 @@ ABSATZ_ALIASES = {
     "abverkäufe 6 monate", "absatz", "abs", "abs pack", "abs packungen",
     "abs abg pack", "menge", "verkaufte menge", "abverkauf",
     "abverkauf letzte 6 monate", "abverkauf 6 monate", "abverkaeufe letzte 6 monate",
-    "abverkäufe letzte 6 monate", "verbrauch 6 monate", "verbrauch letzte 6 monate"
+    "abverkäufe letzte 6 monate", "verbrauch 6 monate", "verbrauch letzte 6 monate",
+    # Verkaufslisten: "Packungen" (plural) = verkaufte Menge, NICHT Packungsgroesse.
+    "packungen", "anzahl", "anzahl packungen", "abgegebene packungen",
+    "packungen abgegeben", "stk", "stueck", "stück"
 }
 ARTIKEL_ALIASES = {
     "artikelname", "artikelbezeichnung", "artikel", "bezeichnung", "name",
@@ -120,7 +123,11 @@ def find_columns(ws, scan_rows=15):
             if "df" not in mapping and (header in DF_ALIASES):
                 mapping["df"] = idx
                 mapping["df_header"] = raw_headers[idx-1]
-            if "packung" not in mapping and (header in PACK_ALIASES or header.startswith("pack")):
+            # "Packungen"/"Anzahl" sind Mengen (Absatz), nicht Packungsgroesse -
+            # daher nicht ueber das startswith("pack") als Pck-Spalte vereinnahmen.
+            if "packung" not in mapping and header not in ABSATZ_ALIASES and (
+                header in PACK_ALIASES or header.startswith("pack")
+            ):
                 mapping["packung"] = idx
                 mapping["packung_header"] = raw_headers[idx-1]
             if "hersteller" not in mapping and (header in HERSTELLER_ALIASES or header.startswith("herst")):

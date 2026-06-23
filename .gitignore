@@ -2,6 +2,8 @@
 data/
 ausgaben/
 backups/
+gespeicherte_analysen/
+whatsapp_config.txt
 *.xlsx
 *.xlsm
 *.csv
@@ -19,6 +21,10 @@ backups/
 
 # === Lokale Claude-Code-State-Files ===
 .claude/
+
+# === Lokale Laufzeit-State-Files ===
+logs/
+language.json
 
 # === Stray empty file ===
 /python

@@ -102,10 +102,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "CZ": "Domů",
     },
     "Neue Auswertung": {
-        "DE": "Neue Auswertung",
-        "EN": "New analysis",
-        "SK": "Nová analýza",
-        "CZ": "Nová analýza",
+        "DE": "Bedarfsanalyse",
+        "EN": "Demand analysis",
+        "SK": "Analýza dopytu",
+        "CZ": "Analýza poptávky",
     },
     "Apps": {
         "DE": "Apps",

@@ -24,19 +24,27 @@ from tkinter import ttk, messagebox, simpledialog, filedialog
 from .config import DB_PATH, ASSETS_DIR, BASE_DIR
 from . import kasse_import
 from . import auftrag
+from . import theme
 
-BG = "#ffffff"           # Inhaltsflaechen (Karten)
-SHELL_BG = "#f5f7fb"     # Fensterhintergrund wie NMGone
-ACCENT = "#0b4a86"
-ACCENT_DARK = "#093d70"  # Hover/aktiv fuer Primaer-Aktionen
-ACCENT_LIGHT = "#e8f1fb" # Akzent-Flaeche (Auswahl, Linien, Strips)
+# Redesign: Palette aus dem zentralen Theme beziehen (gemeinsamer Look mit NMGone).
+BG = theme.CARD          # Inhaltsflaechen (Karten)
+SHELL_BG = theme.BG      # Fensterhintergrund wie NMGone
+ACCENT = theme.PRIMARY
+ACCENT_DARK = theme.PRIMARY_DARK  # Hover/aktiv fuer Primaer-Aktionen
+ACCENT_LIGHT = theme.SELECT_BG    # Akzent-Flaeche (Auswahl, Linien, Strips)
 NAV_SEL = ACCENT_LIGHT   # Auswahl-Highlight wie NMGone
-NAV_HOVER = "#f2f6fb"    # Maus-ueber in der Navigation
-BORDER = "#dbe4f0"       # dezente Rahmenlinie
-HEAD_BG = "#eef3f9"      # Tabellenkopf-Hintergrund
-TEXT = "#11304d"         # Standard-Textfarbe
-MUTED = "#6b7c93"        # Sekundaer-/Hinweistext
-OK_GREEN = "#11823b"     # Bestaetigen/Speichern (gruen)
+NAV_HOVER = "#F2F6FB"    # Maus-ueber in der Navigation
+BORDER = theme.BORDER    # dezente Rahmenlinie
+HEAD_BG = "#EEF3F8"      # Tabellenkopf-Hintergrund
+TEXT = theme.INK         # Standard-Textfarbe
+MUTED = theme.MUTED      # Sekundaer-/Hinweistext
+OK_GREEN = theme.SUCCESS # Bestaetigen/Speichern (gruen)
+
+# Dunkle Sidebar (einheitlich mit NMGone / Report)
+SIDEBAR = theme.SIDEBAR
+SIDEBAR_ACTIVE = theme.SIDEBAR_ACTIVE
+SIDEBAR_TEXT = theme.SIDEBAR_TEXT
+SIDEBAR_MUTED = theme.SIDEBAR_MUTED
 
 
 def _make_card(parent, title=None, subtitle=None):
@@ -50,10 +58,10 @@ def _make_card(parent, title=None, subtitle=None):
         head = tk.Frame(inner, bg=BG)
         head.pack(fill="x", padx=14, pady=(10, 0))
         tk.Label(head, text=title, bg=BG, fg=ACCENT,
-                 font=("Arial", 11, "bold")).pack(side="left")
+                 font=(theme.FONT, 11, "bold")).pack(side="left")
         if subtitle:
             tk.Label(head, text=subtitle, bg=BG, fg=MUTED,
-                     font=("Arial", 9)).pack(side="left", padx=(8, 0))
+                     font=(theme.FONT, 9)).pack(side="left", padx=(8, 0))
         tk.Frame(inner, bg=ACCENT_LIGHT, height=2).pack(fill="x", padx=14, pady=(7, 0))
     body = tk.Frame(inner, bg=BG)
     body.pack(fill="both", expand=True, padx=14, pady=(10, 12))
@@ -529,8 +537,8 @@ class KassePanel(tk.Frame):
             pass
         style.configure("Kasse.Treeview", background=BG, fieldbackground=BG,
                         foreground=TEXT, borderwidth=0, rowheight=28,
-                        font=("Arial", 10))
-        style.configure("Kasse.Treeview.Heading", font=("Arial", 10, "bold"),
+                        font=(theme.FONT, 10))
+        style.configure("Kasse.Treeview.Heading", font=(theme.FONT, 10, "bold"),
                         background=HEAD_BG, foreground=ACCENT, relief="flat",
                         padding=(8, 6), borderwidth=0)
         style.map("Kasse.Treeview",
@@ -548,27 +556,25 @@ class KassePanel(tk.Frame):
         self._setup_style()
         self._current_view = None
 
-        # ---------------- linke Menueleiste (NMGone-Stil) ----------------
-        left = tk.Frame(self, bg=BG, width=248,
-                        highlightbackground=BORDER, highlightthickness=1)
+        # ---------------- linke Menueleiste (dunkle Sidebar wie NMGone) -------
+        left = tk.Frame(self, bg=SIDEBAR, width=248)
         left.grid(row=0, column=0, sticky="ns")
         left.grid_propagate(False)
         left.rowconfigure(2, weight=1)
 
-        logo_box = tk.Frame(left, bg=BG, height=84)
-        logo_box.grid(row=0, column=0, sticky="ew", padx=8, pady=(14, 2))
-        logo_box.grid_propagate(False)
-        logo = self._load_logo()
-        if logo:
-            tk.Label(logo_box, image=logo, bg=BG).pack(expand=True)
+        # Eigenes Kasse-Symbol oben in der Sidebar.
+        logo_box = tk.Frame(left, bg=SIDEBAR)
+        logo_box.grid(row=0, column=0, sticky="ew", padx=16, pady=(18, 0))
+        self._app_icon = theme.load_icon(ASSETS_DIR / "Kasse.ico", 60)
+        if self._app_icon:
+            tk.Label(logo_box, image=self._app_icon, bg=SIDEBAR).pack(anchor="w")
         else:
-            tk.Label(logo_box, text="NMGone", font=("Arial", 17, "bold"),
-                     fg=ACCENT, bg=BG).pack(expand=True)
-        tk.Label(left, text="K A S S E", font=("Arial", 10, "bold"),
-                 fg="#8aa0bb", bg=BG).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 10))
+            tk.Label(logo_box, text="🛒", font=(theme.FONT, 30), bg=SIDEBAR, fg="#FFFFFF").pack(anchor="w")
+        tk.Label(left, text="Kasse", font=(theme.FONT, 18, "bold"),
+                 fg="#FFFFFF", bg=SIDEBAR).grid(row=1, column=0, sticky="w", padx=18, pady=(4, 10))
 
-        nav = tk.Frame(left, bg=BG)
-        nav.grid(row=2, column=0, sticky="new", padx=10)
+        nav = tk.Frame(left, bg=SIDEBAR)
+        nav.grid(row=2, column=0, sticky="new", padx=8)
         self._nav_buttons = {}
         self._nav_bars = {}
         for key, text, icon in (("verkauf", "Verkauf", "🛒"),
@@ -577,29 +583,31 @@ class KassePanel(tk.Frame):
                                  ("artikel", "Artikel", "🔍"),
                                  ("wareneingang", "Wareneingang", "📦"),
                                  ("protokoll", "Protokoll", "📝")):
-            rowf = tk.Frame(nav, bg=BG)
-            rowf.pack(fill="x", pady=2)
-            bar = tk.Frame(rowf, bg=BG, width=4)   # Akzent-Balken (nur aktiv sichtbar)
+            rowf = tk.Frame(nav, bg=SIDEBAR)
+            rowf.pack(fill="x", pady=1)
+            bar = tk.Frame(rowf, bg=SIDEBAR, width=4)   # Akzent-Balken (nur aktiv sichtbar)
             bar.pack(side="left", fill="y")
             b = tk.Button(rowf, text=f"   {icon}   {text}", anchor="w", relief="flat",
-                          bg=BG, fg=TEXT, font=("Arial", 11), bd=0,
-                          activebackground=NAV_HOVER, activeforeground=ACCENT,
+                          bg=SIDEBAR, fg=SIDEBAR_TEXT, font=(theme.FONT, 11), bd=0,
+                          activebackground=SIDEBAR_ACTIVE, activeforeground="#FFFFFF",
                           cursor="hand2", command=lambda k=key: self._show_view(k))
-            b.pack(side="left", fill="x", expand=True, ipady=6)
+            b.pack(side="left", fill="x", expand=True, ipady=7)
             b.bind("<Enter>", lambda _e, k=key: self._nav_hover(k, True))
             b.bind("<Leave>", lambda _e, k=key: self._nav_hover(k, False))
             self._nav_buttons[key] = b
             self._nav_bars[key] = bar
 
-        bottom = tk.Frame(left, bg=BG)
-        bottom.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 6))
+        bottom = tk.Frame(left, bg=SIDEBAR)
+        bottom.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 6))
         tk.Button(bottom, text="🏠  NMGone öffnen", command=self._open_nmgone,
-                  bg="#d8e2ee", fg=ACCENT, relief="flat", font=("Arial", 10, "bold"),
-                  padx=10, pady=6, cursor="hand2").pack(fill="x", pady=(0, 6))
+                  bg=SIDEBAR_ACTIVE, fg="#FFFFFF", relief="flat", font=(theme.FONT, 10, "bold"),
+                  activebackground="#1B5085", activeforeground="#FFFFFF",
+                  padx=10, pady=7, cursor="hand2").pack(fill="x", pady=(0, 6))
         tk.Button(bottom, text="Schließen", command=self._on_close, relief="flat",
-                  bg="#eef1f5", fg="#444", padx=10, pady=4, cursor="hand2").pack(fill="x")
+                  bg="#0E3454", fg=SIDEBAR_TEXT, activebackground="#15466E",
+                  activeforeground="#FFFFFF", padx=10, pady=5, cursor="hand2").pack(fill="x")
         tk.Label(left, text=f"Datenbank:\n{Path(self.db_path).name}", justify="left",
-                 bg=BG, fg="#666", font=("Arial", 9)).grid(row=4, column=0, sticky="w", padx=16, pady=12)
+                 bg=SIDEBAR, fg=SIDEBAR_MUTED, font=(theme.FONT, 9)).grid(row=4, column=0, sticky="w", padx=16, pady=12)
 
         # ---------------- Hauptbereich ----------------
         main = tk.Frame(self, bg=SHELL_BG)
@@ -609,10 +617,10 @@ class KassePanel(tk.Frame):
 
         head = tk.Frame(main, bg=SHELL_BG)
         head.grid(row=0, column=0, sticky="ew", padx=22, pady=(18, 0))
-        self._view_title = tk.Label(head, text="Verkauf", font=("Arial", 18, "bold"),
+        self._view_title = tk.Label(head, text="Verkauf", font=(theme.FONT, 18, "bold"),
                                     fg=ACCENT, bg=SHELL_BG)
         self._view_title.pack(anchor="w")
-        self._view_subtitle = tk.Label(head, text="", font=("Arial", 10),
+        self._view_subtitle = tk.Label(head, text="", font=(theme.FONT, 10),
                                        fg=MUTED, bg=SHELL_BG)
         self._view_subtitle.pack(anchor="w", pady=(1, 0))
         tk.Frame(head, bg=ACCENT_LIGHT, height=3).pack(fill="x", pady=(10, 0))
@@ -642,7 +650,7 @@ class KassePanel(tk.Frame):
         unveraendert)."""
         if key == self._current_view:
             return
-        self._nav_buttons[key].config(bg=NAV_HOVER if on else BG)
+        self._nav_buttons[key].config(bg=SIDEBAR_ACTIVE if on else SIDEBAR)
 
     def _show_view(self, key):
         self._current_view = key
@@ -671,11 +679,11 @@ class KassePanel(tk.Frame):
             self._refresh_log()
         for k, b in self._nav_buttons.items():
             if k == key:
-                b.config(bg=NAV_SEL, fg=ACCENT, font=("Arial", 11, "bold"))
-                self._nav_bars[k].config(bg=ACCENT)
+                b.config(bg=SIDEBAR_ACTIVE, fg="#FFFFFF", font=(theme.FONT, 11, "bold"))
+                self._nav_bars[k].config(bg=theme.ACCENT)
             else:
-                b.config(bg=BG, fg=TEXT, font=("Arial", 11))
-                self._nav_bars[k].config(bg=BG)
+                b.config(bg=SIDEBAR, fg=SIDEBAR_TEXT, font=(theme.FONT, 11))
+                self._nav_bars[k].config(bg=SIDEBAR)
 
     def _open_nmgone(self):
         # Aus NMGone heraus: Hauptfenster nach vorn holen.
@@ -703,28 +711,28 @@ class KassePanel(tk.Frame):
         # Auftrag-Nr nachschlagen (read-only Detailansicht, KEIN neuer Auftrag).
         nrbar = tk.Frame(parent, bg=BG)
         nrbar.pack(fill="x", padx=8, pady=(10, 0))
-        tk.Label(nrbar, text="Auftrag-Nr anzeigen:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        tk.Label(nrbar, text="Auftrag-Nr anzeigen:", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left")
         self._vk_nr_var = tk.StringVar()
         en = tk.Entry(nrbar, textvariable=self._vk_nr_var, width=8)
         en.pack(side="left", padx=(4, 4))
         en.bind("<Return>", lambda _e: self._vk_open_auftrag_nr())
         tk.Button(nrbar, text="Anzeigen", command=self._vk_open_auftrag_nr,
-                  font=("Arial", 8), padx=6, pady=1).pack(side="left")
+                  font=(theme.FONT, 8), padx=6, pady=1).pack(side="left")
         tk.Label(nrbar, text="(nur ansehen – legt keinen Auftrag an)", bg=BG, fg="#999",
-                 font=("Arial", 8)).pack(side="left", padx=(8, 0))
+                 font=(theme.FONT, 8)).pack(side="left", padx=(8, 0))
 
         kopf_card, kopf = _make_card(parent, "Kunde")
         kopf_card.pack(fill="x", padx=8, pady=(10, 6))
 
         khead = tk.Frame(kopf, bg=BG)
         khead.pack(fill="x")
-        tk.Label(khead, text="Kunde suchen:", bg=BG, font=("Arial", 10, "bold")).pack(side="left")
+        tk.Label(khead, text="Kunde suchen:", bg=BG, font=(theme.FONT, 10, "bold")).pack(side="left")
         tk.Button(khead, text="✕ Kunde entfernen", command=self._vk_clear_kunde,
-                  font=("Arial", 8), padx=6, pady=1).pack(side="left", padx=(10, 0))
+                  font=(theme.FONT, 8), padx=6, pady=1).pack(side="left", padx=(10, 0))
         tk.Button(khead, text="📥 Kundenliste importieren", command=self._import_kunden,
-                  font=("Arial", 8), padx=6, pady=1).pack(side="right")
+                  font=(theme.FONT, 8), padx=6, pady=1).pack(side="right")
         tk.Button(khead, text="📊 Gekaufte Artikel", command=self._show_kunde_top,
-                  font=("Arial", 8), padx=6, pady=1).pack(side="right", padx=(0, 6))
+                  font=(theme.FONT, 8), padx=6, pady=1).pack(side="right", padx=(0, 6))
         self.vk_kunde_search = SearchBox(
             kopf,
             fetch=lambda t: [(f"{knr or '—'}  ·  {name}  ·  {plz} {ort}", (knr, name, plz, ort))
@@ -739,7 +747,7 @@ class KassePanel(tk.Frame):
         self.vk_kunde_card.pack(fill="x")
         self.vk_kunde_card_label = tk.Label(self.vk_kunde_card, text="Kein Kunde gewählt.",
                                             bg="#f2f6fb", fg="#888", justify="left", anchor="w",
-                                            font=("Arial", 9, "italic"))
+                                            font=(theme.FONT, 9, "italic"))
         self.vk_kunde_card_label.pack(fill="x", padx=10, pady=8)
 
         # Artikel hinzufuegen
@@ -755,27 +763,27 @@ class KassePanel(tk.Frame):
         line = tk.Frame(addf, bg=BG)
         line.pack(fill="x", pady=(2, 0))
         self.vk_detail_label = tk.Label(line, text="—", bg=BG, fg="#444",
-                                        font=("Arial", 9), anchor="w")
+                                        font=(theme.FONT, 9), anchor="w")
         self.vk_detail_label.pack(side="left", fill="x", expand=True)
 
         line2 = tk.Frame(addf, bg=BG)
         line2.pack(fill="x", pady=(6, 0))
-        tk.Label(line2, text="Charge/Bestand:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        tk.Label(line2, text="Charge/Bestand:", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left")
         self.vk_charge_var = tk.StringVar()
         self.vk_charge_cmb = ttk.Combobox(line2, textvariable=self.vk_charge_var,
                                           width=30, state="readonly")
         self.vk_charge_cmb.pack(side="left", padx=(4, 12))
-        tk.Label(line2, text="Rabatt %:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        tk.Label(line2, text="Rabatt %:", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left")
         self.vk_rabatt_var = tk.StringVar()
         tk.Entry(line2, textvariable=self.vk_rabatt_var, width=6).pack(side="left", padx=(4, 12))
-        tk.Label(line2, text="Menge:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        tk.Label(line2, text="Menge:", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left")
         self.vk_menge_var = tk.StringVar(value="1")
         tk.Entry(line2, textvariable=self.vk_menge_var, width=5).pack(side="left", padx=(4, 12))
 
         # Liefervorgabe PRO Position (je Artikel eigene Vorgabe moeglich).
         line3 = tk.Frame(addf, bg=BG)
         line3.pack(fill="x", pady=(6, 0))
-        tk.Label(line3, text="Liefervorgabe:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        tk.Label(line3, text="Liefervorgabe:", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left")
         self.vk_pos_art_var = tk.StringVar(value="Bestellung")
         ttk.Combobox(line3, textvariable=self.vk_pos_art_var, width=12, state="readonly",
                      values=("Bestellung", "Vorbestellung", "abgesagt")).pack(side="left", padx=(4, 8))
@@ -784,12 +792,12 @@ class KassePanel(tk.Frame):
                      values=("Frei", "10 Uhr", "12 Uhr")).pack(side="left", padx=(0, 4))
         self.vk_pos_uhrzeit_var = tk.StringVar()
         tk.Entry(line3, textvariable=self.vk_pos_uhrzeit_var, width=7).pack(side="left", padx=(0, 2))
-        tk.Label(line3, text="hh:mm", bg=BG, fg="#999", font=("Arial", 8)).pack(side="left", padx=(0, 8))
-        tk.Label(line3, text="Termin:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        tk.Label(line3, text="hh:mm", bg=BG, fg="#999", font=(theme.FONT, 8)).pack(side="left", padx=(0, 8))
+        tk.Label(line3, text="Termin:", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left")
         self.vk_pos_termin_var = tk.StringVar(value=_next_liefertermin())
         tk.Entry(line3, textvariable=self.vk_pos_termin_var, width=11).pack(side="left", padx=(4, 12))
         tk.Button(line3, text="+ Position", command=self._vk_add_position,
-                  bg="#11823b", fg="white", font=("Arial", 9, "bold"),
+                  bg="#11823b", fg="white", font=(theme.FONT, 9, "bold"),
                   padx=10, pady=2).pack(side="left")
 
         # Positionsliste
@@ -826,14 +834,14 @@ class KassePanel(tk.Frame):
         afoot = tk.Frame(parent, bg=BG)
         afoot.pack(fill="x", padx=8, pady=(0, 8))
         tk.Button(afoot, text="🗑 Position löschen", command=lambda: self._vk_remove_position(None),
-                  font=("Arial", 9), padx=8, pady=2).pack(side="left")
+                  font=(theme.FONT, 9), padx=8, pady=2).pack(side="left")
         tk.Label(afoot, text="  (oder Entf · Doppelklick = bearbeiten)",
-                 bg=BG, fg="#999", font=("Arial", 8)).pack(side="left")
+                 bg=BG, fg="#999", font=(theme.FONT, 8)).pack(side="left")
         tk.Button(afoot, text="Verkauf speichern", command=self._vk_save,
-                  bg=ACCENT, fg="white", font=("Arial", 10, "bold"),
+                  bg=ACCENT, fg="white", font=(theme.FONT, 10, "bold"),
                   padx=14, pady=4).pack(side="right")
         self._vk_total_label = tk.Label(afoot, text="Gesamt (netto): 0,00 €", bg=BG,
-                                        fg=ACCENT, font=("Arial", 13, "bold"))
+                                        fg=ACCENT, font=(theme.FONT, 13, "bold"))
         self._vk_total_label.pack(side="right", padx=(0, 18))
 
     def _kunde_details(self, knr):
@@ -890,19 +898,19 @@ class KassePanel(tk.Frame):
         win.transient(top)
         win.geometry("680x460")
         tk.Label(win, text=f"Gekaufte Artikel · {self.vk_kunde.get('kundenname', '')}",
-                 font=("Arial", 13, "bold"), fg=ACCENT, bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
+                 font=(theme.FONT, 13, "bold"), fg=ACCENT, bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
 
         # Zeitraum-Auswahl: 3 / 6 / 12 Monate oder freie Eingabe.
         zrow = tk.Frame(win, bg=BG)
         zrow.pack(fill="x", padx=18, pady=(2, 6))
-        tk.Label(zrow, text="Zeitraum:", font=("Arial", 9, "bold"), bg=BG).pack(side="left")
+        tk.Label(zrow, text="Zeitraum:", font=(theme.FONT, 9, "bold"), bg=BG).pack(side="left")
         zeit_var = tk.StringVar(value="12 Monate")
         ttk.Combobox(zrow, textvariable=zeit_var, width=12, state="readonly",
                      values=("3 Monate", "6 Monate", "12 Monate", "Frei")).pack(side="left", padx=(4, 8))
-        tk.Label(zrow, text="frei (Monate):", font=("Arial", 9), bg=BG).pack(side="left")
+        tk.Label(zrow, text="frei (Monate):", font=(theme.FONT, 9), bg=BG).pack(side="left")
         frei_var = tk.StringVar(value="12")
         tk.Entry(zrow, textvariable=frei_var, width=5).pack(side="left", padx=(4, 8))
-        info_lbl = tk.Label(win, text="", font=("Arial", 9), fg="#555", bg=BG)
+        info_lbl = tk.Label(win, text="", font=(theme.FONT, 9), fg="#555", bg=BG)
         info_lbl.pack(padx=18, anchor="w", pady=(0, 6))
 
         tf = tk.Frame(win, bg=BG)
@@ -972,7 +980,7 @@ class KassePanel(tk.Frame):
     def _render_kunde_card(self, k):
         if not k:
             self.vk_kunde_card_label.config(text="Kein Kunde gewählt.", fg="#888",
-                                            font=("Arial", 9, "italic"))
+                                            font=(theme.FONT, 9, "italic"))
             return
         titel = k.get("kundenname") or k.get("kundennummer") or "—"
         z2 = " · ".join(x for x in [
@@ -987,7 +995,7 @@ class KassePanel(tk.Frame):
         for z in (z2, adr, kontakt):
             if z:
                 txt += "\n" + z
-        self.vk_kunde_card_label.config(text=txt, fg="#11304d", font=("Arial", 9))
+        self.vk_kunde_card_label.config(text=txt, fg="#11304d", font=(theme.FONT, 9))
 
     def _vk_clear_kunde(self):
         """Gewaehlten Kunden im Verkauf mit einem Klick entfernen."""
@@ -1165,16 +1173,16 @@ class KassePanel(tk.Frame):
         win.transient(top)
         win.resizable(False, False)
 
-        tk.Label(win, text=p["artikelname"] or p["pzn"], font=("Arial", 13, "bold"),
+        tk.Label(win, text=p["artikelname"] or p["pzn"], font=(theme.FONT, 13, "bold"),
                  fg=ACCENT, bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
         tk.Label(win, text=f"PZN {p['pzn']}  ·  DF {p['df'] or '—'}  ·  PCK {p['pck'] or '—'}  "
-                          f"·  APU {_eur(p['apu'])}", font=("Arial", 9), fg="#555",
+                          f"·  APU {_eur(p['apu'])}", font=(theme.FONT, 9), fg="#555",
                  bg=BG).pack(padx=18, anchor="w")
         tk.Label(win, text=f"Aktuell gewählt: Charge {p['charge'] or '—'}  ·  Verfall {p['verfall'] or '—'}",
-                 font=("Arial", 9, "italic"), fg="#888", bg=BG).pack(padx=18, pady=(2, 8), anchor="w")
+                 font=(theme.FONT, 9, "italic"), fg="#888", bg=BG).pack(padx=18, pady=(2, 8), anchor="w")
 
         tk.Label(win, text="Verfügbare Chargen dieses Artikels (Doppelklick = übernehmen):",
-                 font=("Arial", 9, "bold"), bg=BG).pack(padx=18, anchor="w")
+                 font=(theme.FONT, 9, "bold"), bg=BG).pack(padx=18, anchor="w")
         tf = tk.Frame(win, bg=BG)
         tf.pack(fill="both", padx=18, pady=(4, 8))
         cols = ("charge", "verfall", "bestand")
@@ -1198,20 +1206,20 @@ class KassePanel(tk.Frame):
 
         mrow = tk.Frame(win, bg=BG)
         mrow.pack(fill="x", padx=18, pady=(0, 6))
-        tk.Label(mrow, text="Menge:", font=("Arial", 9, "bold"), bg=BG).pack(side="left")
+        tk.Label(mrow, text="Menge:", font=(theme.FONT, 9, "bold"), bg=BG).pack(side="left")
         menge_var = tk.StringVar(value=str(p["menge"]))
         tk.Entry(mrow, textvariable=menge_var, width=6).pack(side="left", padx=(6, 0))
 
         lrow = tk.Frame(win, bg=BG)
         lrow.pack(fill="x", padx=18, pady=(0, 8))
-        tk.Label(lrow, text="Liefervorgabe:", font=("Arial", 9, "bold"), bg=BG).pack(side="left")
+        tk.Label(lrow, text="Liefervorgabe:", font=(theme.FONT, 9, "bold"), bg=BG).pack(side="left")
         art_var = tk.StringVar(value=p.get("bestellart", "Bestellung"))
         ttk.Combobox(lrow, textvariable=art_var, width=13, state="readonly",
                      values=("Bestellung", "Vorbestellung", "abgesagt")).pack(side="left", padx=(4, 8))
         lz_var = tk.StringVar(value=p.get("lieferzeit", "") or "10 Uhr")
         ttk.Combobox(lrow, textvariable=lz_var, width=8,
                      values=("10 Uhr", "12 Uhr", "Frei")).pack(side="left", padx=(0, 8))
-        tk.Label(lrow, text="Termin:", font=("Arial", 9, "bold"), bg=BG).pack(side="left")
+        tk.Label(lrow, text="Termin:", font=(theme.FONT, 9, "bold"), bg=BG).pack(side="left")
         termin_var = tk.StringVar(value=p.get("liefertermin", ""))
         tk.Entry(lrow, textvariable=termin_var, width=11).pack(side="left", padx=(4, 0))
 
@@ -1235,7 +1243,7 @@ class KassePanel(tk.Frame):
         btns = tk.Frame(win, bg=BG)
         btns.pack(padx=18, pady=(0, 14), anchor="e")
         tk.Button(btns, text="Übernehmen", command=uebernehmen, bg=ACCENT, fg="white",
-                  font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="right", padx=(8, 0))
+                  font=(theme.FONT, 10, "bold"), padx=12, pady=4).pack(side="right", padx=(8, 0))
         tk.Button(btns, text="Abbrechen", command=win.destroy, padx=12, pady=4).pack(side="right")
         self._restyle_buttons(win)
         win.lift()
@@ -1309,22 +1317,22 @@ class KassePanel(tk.Frame):
         win.transient(top)
         win.resizable(False, False)
         tk.Label(win, text=f"✓ Verkauf #{bestell_id} gespeichert",
-                 font=("Arial", 12, "bold"), fg="#11823b", bg=BG).pack(padx=20, pady=(16, 2))
+                 font=(theme.FONT, 12, "bold"), fg="#11823b", bg=BG).pack(padx=20, pady=(16, 2))
         info = f"{anzahl} Position(en) · Lagerbestand abgebucht."
         if vorbestellungen:
             info += (f"\n{vorbestellungen} davon Vorbestellung(en) – noch nicht abgebucht, "
                      "im Reiter „Vorbestellungen“ bestätigen, wenn Ware da ist.")
-        tk.Label(win, text=info, font=("Arial", 9), fg="#666", bg=BG,
+        tk.Label(win, text=info, font=(theme.FONT, 9), fg="#666", bg=BG,
                  justify="left").pack(padx=20, pady=(0, 12))
 
         btns = tk.Frame(win, bg=BG)
         btns.pack(padx=20, pady=(0, 8))
         tk.Button(btns, text="🖨  Drucken / Vorschau", width=22,
                   command=lambda: self._auftrag_drucken(bestell_id, win),
-                  bg=ACCENT, fg="white", font=("Arial", 10, "bold"), pady=4).grid(row=0, column=0, padx=4, pady=3)
+                  bg=ACCENT, fg="white", font=(theme.FONT, 10, "bold"), pady=4).grid(row=0, column=0, padx=4, pady=3)
         tk.Button(btns, text="📧  Per E-Mail senden", width=22,
                   command=lambda: self._auftrag_mail(bestell_id, win),
-                  bg="#3867b7", fg="white", font=("Arial", 10, "bold"), pady=4).grid(row=1, column=0, padx=4, pady=3)
+                  bg="#3867b7", fg="white", font=(theme.FONT, 10, "bold"), pady=4).grid(row=1, column=0, padx=4, pady=3)
         tk.Button(btns, text="Vorlage bearbeiten", width=22,
                   command=self._auftrag_vorlage_oeffnen, pady=3).grid(row=2, column=0, padx=4, pady=3)
         tk.Button(win, text="Schließen", command=win.destroy, padx=14, pady=3).pack(pady=(2, 14))
@@ -1366,34 +1374,34 @@ class KassePanel(tk.Frame):
     def _build_vorbestellungen(self, parent):
         bar = tk.Frame(parent, bg=BG)
         bar.pack(fill="x", padx=8, pady=(10, 4))
-        self.vb_info = tk.Label(bar, text="", bg=BG, fg=ACCENT, font=("Arial", 11, "bold"))
+        self.vb_info = tk.Label(bar, text="", bg=BG, fg=ACCENT, font=(theme.FONT, 11, "bold"))
         self.vb_info.pack(side="left")
         tk.Button(bar, text="➡ Mehrere in Verkauf übernehmen", command=self._vb_bulk_dialog,
-                  bg="#11823b", fg="white", font=("Arial", 9, "bold"), padx=10, pady=2).pack(
+                  bg="#11823b", fg="white", font=(theme.FONT, 9, "bold"), padx=10, pady=2).pack(
                       side="left", padx=(16, 0))
         tk.Button(bar, text="🔄 Aktualisieren", command=self._refresh_vorbestellungen,
-                  font=("Arial", 9), padx=8, pady=2).pack(side="right")
+                  font=(theme.FONT, 9), padx=8, pady=2).pack(side="right")
 
         srow = tk.Frame(parent, bg=BG)
         srow.pack(fill="x", padx=8, pady=(0, 4))
         tk.Label(srow, text="Suche (Kunde / Artikel / PZN):", bg=BG,
-                 font=("Arial", 9, "bold")).pack(side="left")
+                 font=(theme.FONT, 9, "bold")).pack(side="left")
         self._vb_filter_var = tk.StringVar()
         e = tk.Entry(srow, textvariable=self._vb_filter_var, width=26)
         e.pack(side="left", padx=(6, 8))
         e.bind("<KeyRelease>", lambda _e: self._refresh_vorbestellungen())
         tk.Button(srow, text="✕", command=lambda: (self._vb_filter_var.set(""),
-                  self._refresh_vorbestellungen()), font=("Arial", 8), padx=6).pack(side="left")
-        tk.Label(srow, text="Status:", bg=BG, font=("Arial", 9, "bold")).pack(side="left", padx=(12, 0))
+                  self._refresh_vorbestellungen()), font=(theme.FONT, 8), padx=6).pack(side="left")
+        tk.Label(srow, text="Status:", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left", padx=(12, 0))
         self._vb_status_var = tk.StringVar(value="Offen")
         ttk.Combobox(srow, textvariable=self._vb_status_var, width=11, state="readonly",
                      values=("Offen", "Abgesagt", "Alle")).pack(side="left", padx=(4, 0))
         self._vb_status_var.trace_add("write", lambda *_: self._refresh_vorbestellungen())
         tk.Button(srow, text="📥 Vorbestellungen importieren", command=self._import_vorbestellungen_datei,
-                  font=("Arial", 8), padx=6, pady=1).pack(side="right")
+                  font=(theme.FONT, 8), padx=6, pady=1).pack(side="right")
         tk.Label(parent, text="Disposition: Kunden anrufen, dann Doppelklick → bearbeiten, "
                               "„Als Verkauf bestätigen“ oder stornieren.",
-                 bg=BG, fg="#666", font=("Arial", 9)).pack(anchor="w", padx=8, pady=(0, 4))
+                 bg=BG, fg="#666", font=(theme.FONT, 9)).pack(anchor="w", padx=8, pady=(0, 4))
 
         tf = tk.Frame(parent, bg=BG)
         tf.pack(fill="both", expand=True, padx=8, pady=(0, 8))
@@ -1482,28 +1490,28 @@ class KassePanel(tk.Frame):
         win.configure(bg=BG)
         win.transient(top)
         win.resizable(False, False)
-        tk.Label(win, text=artikel or pzn, font=("Arial", 13, "bold"), fg=ACCENT,
+        tk.Label(win, text=artikel or pzn, font=(theme.FONT, 13, "bold"), fg=ACCENT,
                  bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
         tk.Label(win, text=f"PZN {pzn}  ·  DF {df or '—'}  ·  PCK {pck or '—'}  ·  APU {_eur(apu)}",
-                 font=("Arial", 9), fg="#555", bg=BG).pack(padx=18, anchor="w")
-        tk.Label(win, text=f"Kunde: {apotheke or '—'}", font=("Arial", 9), fg="#555",
+                 font=(theme.FONT, 9), fg="#555", bg=BG).pack(padx=18, anchor="w")
+        tk.Label(win, text=f"Kunde: {apotheke or '—'}", font=(theme.FONT, 9), fg="#555",
                  bg=BG).pack(padx=18, pady=(0, 8), anchor="w")
 
         erow = tk.Frame(win, bg=BG)
         erow.pack(fill="x", padx=18, pady=(0, 6))
-        tk.Label(erow, text="Menge:", font=("Arial", 9, "bold"), bg=BG).pack(side="left")
+        tk.Label(erow, text="Menge:", font=(theme.FONT, 9, "bold"), bg=BG).pack(side="left")
         menge_var = tk.StringVar(value=str(menge))
         tk.Entry(erow, textvariable=menge_var, width=6).pack(side="left", padx=(4, 12))
         lz_var = tk.StringVar(value=lieferzeit or "10 Uhr")
         ttk.Combobox(erow, textvariable=lz_var, width=8,
                      values=("10 Uhr", "12 Uhr", "Frei")).pack(side="left", padx=(0, 8))
-        tk.Label(erow, text="Termin:", font=("Arial", 9, "bold"), bg=BG).pack(side="left")
+        tk.Label(erow, text="Termin:", font=(theme.FONT, 9, "bold"), bg=BG).pack(side="left")
         termin_var = tk.StringVar(value=termin)
         tk.Entry(erow, textvariable=termin_var, width=11).pack(side="left", padx=(4, 0))
 
         tk.Label(win, text="Charge wählen (Doppelklick oder markieren – wird beim Übernehmen "
                           "in den Verkauf mitgenommen):",
-                 font=("Arial", 9, "bold"), bg=BG).pack(padx=18, anchor="w")
+                 font=(theme.FONT, 9, "bold"), bg=BG).pack(padx=18, anchor="w")
         tf = tk.Frame(win, bg=BG)
         tf.pack(fill="both", padx=18, pady=(4, 8))
         ctree = ttk.Treeview(tf, columns=("charge", "verfall", "bestand"), show="headings",
@@ -1568,9 +1576,9 @@ class KassePanel(tk.Frame):
         btns = tk.Frame(win, bg=BG)
         btns.pack(fill="x", padx=18, pady=(0, 14))
         tk.Button(btns, text="➡ In Verkauf übernehmen", command=uebernehmen, bg="#11823b",
-                  fg="white", font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="left")
+                  fg="white", font=(theme.FONT, 10, "bold"), padx=12, pady=4).pack(side="left")
         tk.Button(btns, text="Speichern", command=speichern, bg=ACCENT, fg="white",
-                  font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="left", padx=(8, 0))
+                  font=(theme.FONT, 10, "bold"), padx=12, pady=4).pack(side="left", padx=(8, 0))
         tk.Button(btns, text="Stornieren", command=stornieren, padx=12, pady=4).pack(side="right")
         self._restyle_buttons(win)
         win.lift()
@@ -1645,15 +1653,15 @@ class KassePanel(tk.Frame):
         win.configure(bg=BG)
         win.transient(top)
         win.geometry("820x520")
-        tk.Label(win, text="Vorbestellungen in den Verkauf übernehmen", font=("Arial", 13, "bold"),
+        tk.Label(win, text="Vorbestellungen in den Verkauf übernehmen", font=(theme.FONT, 13, "bold"),
                  fg=ACCENT, bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
         tk.Label(win, text="Übernehmen-Menge je Zeile per Doppelklick ändern (0 = überspringen). "
                           "Es kann immer nur EIN Kunde gleichzeitig übernommen werden.",
-                 font=("Arial", 9), fg="#555", bg=BG).pack(padx=18, anchor="w")
+                 font=(theme.FONT, 9), fg="#555", bg=BG).pack(padx=18, anchor="w")
 
         srow = tk.Frame(win, bg=BG)
         srow.pack(fill="x", padx=18, pady=(6, 4))
-        tk.Label(srow, text="Filter (Kunde / Artikel / PZN):", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        tk.Label(srow, text="Filter (Kunde / Artikel / PZN):", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left")
         filt_var = tk.StringVar()
         tk.Entry(srow, textvariable=filt_var, width=26).pack(side="left", padx=(6, 8))
 
@@ -1738,7 +1746,7 @@ class KassePanel(tk.Frame):
         btns = tk.Frame(win, bg=BG)
         btns.pack(fill="x", padx=18, pady=(0, 14))
         tk.Button(btns, text="➡ Übernehmen", command=_uebernehmen, bg="#11823b", fg="white",
-                  font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="left")
+                  font=(theme.FONT, 10, "bold"), padx=12, pady=4).pack(side="left")
         tk.Button(btns, text="Alle = volle Menge", command=lambda: _set_all(True),
                   padx=10, pady=4).pack(side="left", padx=(8, 0))
         tk.Button(btns, text="Alle = 0", command=lambda: _set_all(False),
@@ -1812,48 +1820,48 @@ class KassePanel(tk.Frame):
     def _build_verkaeufe(self, parent):
         bar = tk.Frame(parent, bg=BG)
         bar.pack(fill="x", padx=8, pady=(10, 4))
-        tk.Label(bar, text="Suche (Kunde / Auftrag-Nr):", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        tk.Label(bar, text="Suche (Kunde / Auftrag-Nr):", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left")
         self._vh_filter_var = tk.StringVar()
         e = tk.Entry(bar, textvariable=self._vh_filter_var, width=24)
         e.pack(side="left", padx=(6, 8))
         e.bind("<KeyRelease>", lambda _e: self._refresh_verkaeufe())
         e.bind("<Return>", lambda _e: self._verkaeufe_open_nr())
         tk.Button(bar, text="Auftrag öffnen", command=self._verkaeufe_open_nr,
-                  font=("Arial", 8), padx=6, pady=1).pack(side="left", padx=(0, 8))
-        tk.Label(bar, text="Status:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+                  font=(theme.FONT, 8), padx=6, pady=1).pack(side="left", padx=(0, 8))
+        tk.Label(bar, text="Status:", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left")
         self._vh_status_var = tk.StringVar(value="Alle")
         ttk.Combobox(bar, textvariable=self._vh_status_var, width=11, state="readonly",
                      values=("Alle", "Aktiv", "Storniert")).pack(side="left", padx=(4, 0))
         self._vh_status_var.trace_add("write", lambda *_: self._refresh_verkaeufe())
         tk.Button(bar, text="📥 Verkäufe importieren", command=self._import_verkaeufe_datei,
-                  font=("Arial", 8), padx=6, pady=1).pack(side="left", padx=(12, 0))
+                  font=(theme.FONT, 8), padx=6, pady=1).pack(side="left", padx=(12, 0))
         tk.Button(bar, text="🔄 Aktualisieren", command=self._refresh_verkaeufe,
-                  font=("Arial", 9), padx=8, pady=2).pack(side="right")
-        self.vh_info = tk.Label(bar, text="", bg=BG, fg=ACCENT, font=("Arial", 9, "bold"))
+                  font=(theme.FONT, 9), padx=8, pady=2).pack(side="right")
+        self.vh_info = tk.Label(bar, text="", bg=BG, fg=ACCENT, font=(theme.FONT, 9, "bold"))
         self.vh_info.pack(side="right", padx=(0, 12))
 
         # Zeitraum-Filter
         zrow = tk.Frame(parent, bg=BG)
         zrow.pack(fill="x", padx=8, pady=(0, 4))
-        tk.Label(zrow, text="Zeitraum:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        tk.Label(zrow, text="Zeitraum:", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left")
         self._vh_zeit_var = tk.StringVar(value="Alle")
         ttk.Combobox(zrow, textvariable=self._vh_zeit_var, width=16, state="readonly",
                      values=("Alle", "Aktueller Monat", "Vormonat", "Aktuelles Quartal",
                              "Aktuelles Jahr", "Frei")).pack(side="left", padx=(4, 12))
         self._vh_zeit_var.trace_add("write", lambda *_: self._refresh_verkaeufe())
-        tk.Label(zrow, text="von:", bg=BG, font=("Arial", 9)).pack(side="left")
+        tk.Label(zrow, text="von:", bg=BG, font=(theme.FONT, 9)).pack(side="left")
         self._vh_von_var = tk.StringVar()
         ev = tk.Entry(zrow, textvariable=self._vh_von_var, width=11)
         ev.pack(side="left", padx=(3, 8))
-        tk.Label(zrow, text="bis:", bg=BG, font=("Arial", 9)).pack(side="left")
+        tk.Label(zrow, text="bis:", bg=BG, font=(theme.FONT, 9)).pack(side="left")
         self._vh_bis_var = tk.StringVar()
         eb = tk.Entry(zrow, textvariable=self._vh_bis_var, width=11)
         eb.pack(side="left", padx=(3, 6))
         tk.Label(zrow, text="(TT.MM.JJJJ – nur bei „Frei“)", bg=BG, fg="#999",
-                 font=("Arial", 8)).pack(side="left")
+                 font=(theme.FONT, 8)).pack(side="left")
         ev.bind("<KeyRelease>", lambda _e: self._vh_zeit_var.get() == "Frei" and self._refresh_verkaeufe())
         eb.bind("<KeyRelease>", lambda _e: self._vh_zeit_var.get() == "Frei" and self._refresh_verkaeufe())
-        tk.Label(zrow, text="MSK:", bg=BG, font=("Arial", 9, "bold")).pack(side="left", padx=(14, 0))
+        tk.Label(zrow, text="MSK:", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left", padx=(14, 0))
         self._vh_msk_var = tk.StringVar(value="Alle")
         ttk.Combobox(zrow, textvariable=self._vh_msk_var, width=14, state="readonly",
                      values=("Alle", "MSK offen", "MSK erfasst")).pack(side="left", padx=(4, 0))
@@ -1862,13 +1870,13 @@ class KassePanel(tk.Frame):
         # MSK-Schnellmarkierung der ausgewaehlten Zeilen.
         mrow = tk.Frame(parent, bg=BG)
         mrow.pack(fill="x", padx=8, pady=(0, 2))
-        tk.Label(mrow, text="Markierte Verkäufe:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        tk.Label(mrow, text="Markierte Verkäufe:", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left")
         tk.Button(mrow, text="✓ In MSK erfasst", command=lambda: self._msk_markieren(True),
-                  bg="#11823b", fg="white", font=("Arial", 9, "bold"), padx=8, pady=2).pack(side="left", padx=(6, 4))
+                  bg="#11823b", fg="white", font=(theme.FONT, 9, "bold"), padx=8, pady=2).pack(side="left", padx=(6, 4))
         tk.Button(mrow, text="↺ MSK offen", command=lambda: self._msk_markieren(False),
-                  font=("Arial", 9), padx=8, pady=2).pack(side="left")
+                  font=(theme.FONT, 9), padx=8, pady=2).pack(side="left")
         tk.Label(mrow, text="(mehrere mit Strg/Shift markierbar · Doppelklick = Details)",
-                 bg=BG, fg="#999", font=("Arial", 8)).pack(side="left", padx=(10, 0))
+                 bg=BG, fg="#999", font=(theme.FONT, 8)).pack(side="left", padx=(10, 0))
 
         tf = tk.Frame(parent, bg=BG)
         tf.pack(fill="both", expand=True, padx=8, pady=(0, 8))
@@ -2050,13 +2058,13 @@ class KassePanel(tk.Frame):
         win.title(f"Verkauf #{bid}")
         win.configure(bg=BG)
         win.transient(top)
-        tk.Label(win, text=f"Verkauf #{bid} · {apotheke}", font=("Arial", 13, "bold"),
+        tk.Label(win, text=f"Verkauf #{bid} · {apotheke}", font=(theme.FONT, 13, "bold"),
                  fg=ACCENT, bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
         tk.Label(win, text=f"Datum {datum} · Status: {status} · Erfasst von: {bearbeiter or '–'}",
-                 font=("Arial", 9), fg="#555", bg=BG).pack(padx=18, anchor="w")
+                 font=(theme.FONT, 9), fg="#555", bg=BG).pack(padx=18, anchor="w")
         msk_txt = (f"MSK: ✓ erfasst von {msk_von or '?'} am {(msk_am or '')[:16].replace('T', ' ')}"
                    if msk else "MSK: ⚠ noch nicht erfasst")
-        tk.Label(win, text=msk_txt, font=("Arial", 9, "bold"),
+        tk.Label(win, text=msk_txt, font=(theme.FONT, 9, "bold"),
                  fg=("#11823b" if msk else "#a35a00"), bg=BG).pack(padx=18, anchor="w", pady=(0, 8))
         tf = tk.Frame(win, bg=BG)
         tf.pack(fill="both", expand=True, padx=18, pady=(0, 8))
@@ -2078,7 +2086,7 @@ class KassePanel(tk.Frame):
             tree.insert("", "end", values=(pzn, art, menge, f"{rab:.0f}", ch, vf, ba))
             if ba == "Bestellung" and apu is not None:
                 gesamt += apu * menge * (1 - rab / 100.0)
-        tk.Label(win, text=f"Gesamt (netto): {_eur(gesamt)}", font=("Arial", 11, "bold"),
+        tk.Label(win, text=f"Gesamt (netto): {_eur(gesamt)}", font=(theme.FONT, 11, "bold"),
                  fg=ACCENT, bg=BG).pack(padx=18, anchor="e")
 
         def stornieren():
@@ -2118,18 +2126,18 @@ class KassePanel(tk.Frame):
         btns.pack(fill="x", padx=18, pady=(4, 14))
         if status != "storniert":
             tk.Button(btns, text="Stornieren", command=stornieren, bg="#a32d2d", fg="white",
-                      font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="left")
+                      font=(theme.FONT, 10, "bold"), padx=12, pady=4).pack(side="left")
             if msk:
                 tk.Button(btns, text="↺ MSK-Markierung aufheben", command=msk_toggle,
                           padx=12, pady=4).pack(side="left", padx=(8, 0))
             else:
                 tk.Button(btns, text="✓ In MSK erfasst", command=msk_toggle, bg="#11823b",
-                          fg="white", font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="left", padx=(8, 0))
+                          fg="white", font=(theme.FONT, 10, "bold"), padx=12, pady=4).pack(side="left", padx=(8, 0))
         # Auftragsbestaetigung jederzeit erneut erzeugen.
         tk.Button(btns, text="🖨 Auftragsbestätigung", command=lambda: self._auftrag_drucken(bid, win),
-                  bg=ACCENT, fg="white", font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="left", padx=(8, 0))
+                  bg=ACCENT, fg="white", font=(theme.FONT, 10, "bold"), padx=12, pady=4).pack(side="left", padx=(8, 0))
         tk.Button(btns, text="📧 Per E-Mail", command=lambda: self._auftrag_mail(bid, win),
-                  bg="#3867b7", fg="white", font=("Arial", 10, "bold"), padx=12, pady=4).pack(side="left", padx=(6, 0))
+                  bg="#3867b7", fg="white", font=(theme.FONT, 10, "bold"), padx=12, pady=4).pack(side="left", padx=(6, 0))
         tk.Button(btns, text="Schließen", command=win.destroy, padx=12, pady=4).pack(side="right")
         self._restyle_buttons(win)
         win.lift()
@@ -2139,21 +2147,21 @@ class KassePanel(tk.Frame):
     def _build_artikel(self, parent):
         bar = tk.Frame(parent, bg=BG)
         bar.pack(fill="x", padx=8, pady=(10, 4))
-        tk.Label(bar, text="Suche (PZN / Artikel):", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        tk.Label(bar, text="Suche (PZN / Artikel):", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left")
         self._art_filter_var = tk.StringVar()
         e = tk.Entry(bar, textvariable=self._art_filter_var, width=28)
         e.pack(side="left", padx=(6, 12))
         e.bind("<KeyRelease>", lambda _e: self._refresh_artikel())
         self._art_nur_bestand = tk.BooleanVar(value=False)
         tk.Radiobutton(bar, text="Alle", variable=self._art_nur_bestand, value=False, bg=BG,
-                       font=("Arial", 9), command=self._refresh_artikel).pack(side="left")
+                       font=(theme.FONT, 9), command=self._refresh_artikel).pack(side="left")
         tk.Radiobutton(bar, text="Nur mit Bestand", variable=self._art_nur_bestand, value=True, bg=BG,
-                       font=("Arial", 9), command=self._refresh_artikel).pack(side="left", padx=(4, 0))
-        self.art_info = tk.Label(bar, text="", bg=BG, fg=ACCENT, font=("Arial", 9, "bold"))
+                       font=(theme.FONT, 9), command=self._refresh_artikel).pack(side="left", padx=(4, 0))
+        self.art_info = tk.Label(bar, text="", bg=BG, fg=ACCENT, font=(theme.FONT, 9, "bold"))
         self.art_info.pack(side="right")
 
         tk.Label(parent, text="Doppelklick auf einen Artikel: alle Chargen und Verfälle anzeigen.",
-                 bg=BG, fg="#666", font=("Arial", 9)).pack(anchor="w", padx=8, pady=(0, 4))
+                 bg=BG, fg="#666", font=(theme.FONT, 9)).pack(anchor="w", padx=8, pady=(0, 4))
         tf = tk.Frame(parent, bg=BG)
         tf.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         cols = ("pzn", "artikel", "df", "pck", "apu", "bestand")
@@ -2209,9 +2217,9 @@ class KassePanel(tk.Frame):
         win.title("Chargen / Verfall")
         win.configure(bg=BG)
         win.transient(top)
-        tk.Label(win, text=art or pzn, font=("Arial", 13, "bold"), fg=ACCENT,
+        tk.Label(win, text=art or pzn, font=(theme.FONT, 13, "bold"), fg=ACCENT,
                  bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
-        tk.Label(win, text=f"PZN {pzn}", font=("Arial", 9), fg="#555", bg=BG).pack(padx=18, anchor="w")
+        tk.Label(win, text=f"PZN {pzn}", font=(theme.FONT, 9), fg="#555", bg=BG).pack(padx=18, anchor="w")
         tf = tk.Frame(win, bg=BG)
         tf.pack(fill="both", expand=True, padx=18, pady=(8, 8))
         tree = ttk.Treeview(tf, columns=("charge", "verfall", "bestand"), show="headings",
@@ -2240,24 +2248,24 @@ class KassePanel(tk.Frame):
         bar = tk.Frame(parent, bg=BG)
         bar.pack(fill="x", padx=8, pady=(10, 4))
         tk.Label(bar, text="Suche (Mitarbeiter / Aktion / Kunde / Auftrag-Nr / Detail):",
-                 bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+                 bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left")
         self._log_filter_var = tk.StringVar()
         e = tk.Entry(bar, textvariable=self._log_filter_var, width=24)
         e.pack(side="left", padx=(6, 8))
         e.bind("<KeyRelease>", lambda _e: self._refresh_log())
-        tk.Label(bar, text="Aktion:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        tk.Label(bar, text="Aktion:", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left")
         self._log_aktion_var = tk.StringVar(value="Alle")
         self._log_aktion_cmb = ttk.Combobox(bar, textvariable=self._log_aktion_var, width=22,
                                             state="readonly", values=("Alle",))
         self._log_aktion_cmb.pack(side="left", padx=(4, 0))
         self._log_aktion_var.trace_add("write", lambda *_: self._refresh_log())
         tk.Button(bar, text="🔄 Aktualisieren", command=self._refresh_log,
-                  font=("Arial", 9), padx=8, pady=2).pack(side="right")
-        self.log_info = tk.Label(bar, text="", bg=BG, fg=ACCENT, font=("Arial", 9, "bold"))
+                  font=(theme.FONT, 9), padx=8, pady=2).pack(side="right")
+        self.log_info = tk.Label(bar, text="", bg=BG, fg=ACCENT, font=(theme.FONT, 9, "bold"))
         self.log_info.pack(side="right", padx=(0, 12))
         tk.Label(parent, text="Wer hat was wann geändert (neueste oben). Spalten sortierbar – "
                               "z. B. nach Mitarbeiter oder Auftrag, um Fehler/Änderungen zu finden.",
-                 bg=BG, fg="#666", font=("Arial", 9)).pack(anchor="w", padx=8, pady=(0, 4))
+                 bg=BG, fg="#666", font=(theme.FONT, 9)).pack(anchor="w", padx=8, pady=(0, 4))
 
         tf = tk.Frame(parent, bg=BG)
         tf.pack(fill="both", expand=True, padx=8, pady=(0, 8))
@@ -2317,7 +2325,7 @@ class KassePanel(tk.Frame):
         rbar.pack(fill="x", padx=8, pady=(10, 0))
         tk.Button(rbar, text="🕓  Vorbestellungs-Report (offene Vorbestellungen / Kunden anrufen)",
                   command=lambda: self._show_view("vorbestellungen"), bg="#d8e2ee", fg=ACCENT,
-                  relief="flat", font=("Arial", 9, "bold"), padx=10, pady=4,
+                  relief="flat", font=(theme.FONT, 9, "bold"), padx=10, pady=4,
                   cursor="hand2").pack(side="left")
 
         form_card, form = _make_card(parent, "Artikel ins Lager buchen", "nur NMG")
@@ -2325,9 +2333,9 @@ class KassePanel(tk.Frame):
 
         whead = tk.Frame(form, bg=BG)
         whead.pack(fill="x")
-        tk.Label(whead, text="Artikel suchen:", bg=BG, font=("Arial", 9, "bold")).pack(side="left")
+        tk.Label(whead, text="Artikel suchen:", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left")
         tk.Button(whead, text="📥 Wareneingangs-Liste importieren", command=self._import_wareneingang,
-                  font=("Arial", 8), padx=6, pady=1).pack(side="right")
+                  font=(theme.FONT, 8), padx=6, pady=1).pack(side="right")
         self.we_search = SearchBox(
             form,
             fetch=lambda t: [(f"{pzn}  ·  {name}", (pzn, name)) for pzn, name in self._search_nmg(t)],
@@ -2335,7 +2343,7 @@ class KassePanel(tk.Frame):
         )
         self.we_search.pack(fill="x", pady=(2, 4))
         self.we_artikel_label = tk.Label(form, text="Kein Artikel gewählt.", bg=BG,
-                                         fg="#999", font=("Arial", 9, "italic"))
+                                         fg="#999", font=(theme.FONT, 9, "italic"))
         self.we_artikel_label.pack(anchor="w")
 
         row = tk.Frame(form, bg=BG)
@@ -2346,10 +2354,10 @@ class KassePanel(tk.Frame):
         # EK wird NICHT abgefragt - er entspricht immer dem APU aus den NMG-Stammdaten.
         for label, var, w in (("Charge", self.we_charge_var, 12), ("Verfall", self.we_verfall_var, 10),
                               ("Menge", self.we_menge_var, 6)):
-            tk.Label(row, text=label + ":", bg=BG, font=("Arial", 9, "bold")).pack(side="left", padx=(0, 4))
+            tk.Label(row, text=label + ":", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left", padx=(0, 4))
             tk.Entry(row, textvariable=var, width=w).pack(side="left", padx=(0, 12))
         tk.Button(row, text="Einbuchen", command=self._wareneingang_buchen,
-                  bg=ACCENT, fg="white", font=("Arial", 10, "bold"),
+                  bg=ACCENT, fg="white", font=(theme.FONT, 10, "bold"),
                   padx=12, pady=3).pack(side="left")
 
         lager_card, lager = _make_card(parent, "Lagerbestand",
@@ -2598,6 +2606,8 @@ def run_standalone():
     root.geometry("1040x660")
     root.minsize(860, 580)
     root.configure(bg=SHELL_BG)
+    theme.apply_theme(root)
+    theme.apply_widget_defaults(root)
     try:
         root.iconbitmap(str(ASSETS_DIR / "kasse.ico"))
     except Exception:

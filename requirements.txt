@@ -1,4 +1,7 @@
 pandas
 openpyxl
+xlrd>=2.0
+fpdf2>=2.7
+pillow
 pyinstaller
 tkcalendar
