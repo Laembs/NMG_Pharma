@@ -5,6 +5,15 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V2.0", "2026-06-23", [
+        "Neuer Meilenstein V2.0 - buendelt mehrere neue Programme unter dem bekannten NMGone-Dach.",
+        "Bedarfsanalyse (ehem. 'Neue Auswertung') mit separatem Kurzbericht: Excel + PDF inkl. Diagrammen fuer die schnelle Uebersicht.",
+        "Mitarbeiter: frei definierbare Custom-Felder (EAV) sowie Vorgesetzten-/Zustaendigkeits-Matrix als Grundlage fuer das Organigramm.",
+        "Hilfe: bebildertes Handbuch direkt im Programm aufrufbar.",
+        "Report-Programm: modeluebergreifende Auswertung saemtlicher NMGone-Logs an einer Stelle.",
+        "Einheitliches Design ueber alle Module (zentrales Theme, dunkle Seitenleiste).",
+        "Biosimilar-Wissensbasis (Gelbe Liste) als Grundlage fuer kuenftige Wirkstoff-Zuordnung.",
+    ]),
     ("V1.2 SP2", "2026-06-22", [
         "Kasse: grafischer Umbau - moderne Oberflaeche im NMGone-Blau. Navigationsleiste mit aktivem Akzent-Balken und Hover-Effekt, Kopfzeile mit Untertitel je Ansicht, Inhalte in klaren Karten statt der alten Rahmen.",
         "Kasse: alle Tabellen einheitlich gestylt (hoehere Zeilen, hervorgehobener Spaltenkopf, blaues Auswahl-Highlight). Reine Optik - Bedienung und Daten unveraendert.",

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Erzeugt die Geschäftsführungs-Präsentation für NMGone (V1.2 SP1)."""
+"""Erzeugt die Geschäftsführungs-Präsentation für NMGone (V2.0)."""
 import os
 from pptx import Presentation
 from pptx.util import Inches, Pt
@@ -149,7 +149,7 @@ text(s, 1.0, 3.65, 11.4, 1.5, [
 ], space_after=4)
 rect(s, 1.0, 5.35, 3.2, 0.045, fill=MIDBLUE)
 text(s, 1.0, 5.65, 11.3, 1.2, [
-    [R("Eigenentwicklung  ·  Stand V1.2 SP1  ·  Juni 2026", 16, RGBColor(0xB9,0xCD,0xE8), bold=True)],
+    [R("Eigenentwicklung  ·  Stand V2.0  ·  Juni 2026", 16, RGBColor(0xB9,0xCD,0xE8), bold=True)],
     [R("Präsentation für die Geschäftsführung", 15, RGBColor(0x9F,0xB6,0xD6))],
 ], space_after=4)
 
@@ -168,7 +168,7 @@ text(s, 0.9, 1.45, 11.5, 1.1, [
 stats = [
     ("14", "Module unter einer\nOberfläche", NAVY),
     ("1", "Installation, eine\ngemeinsame Datenbasis", GREEN),
-    ("V1.2 SP1", "Aktueller Stand –\nKasse inklusive", AMBER),
+    ("V2.0", "Aktueller Stand –\nKasse inklusive", AMBER),
     ("0 €", "laufende Lizenz-\nkosten Dritter", PURPLE),
 ]
 cx, cw, gap = 0.9, 2.65, 0.31
@@ -233,7 +233,7 @@ text(s, 0.9, 0.5, 11.5, 0.85, [[R("Eine Plattform – viele Module", 34, NAVY, b
 text(s, 0.9, 1.32, 11.5, 0.5, [[R("Alle Werkzeuge erreichbar über ein gemeinsames Dashboard", 16, GREY, italic=True)]])
 
 modules = [
-    ("Neue Auswertung", "PK-/ZF-Marktanalysen starten", NAVY),
+    ("Bedarfsanalyse", "PK-/ZW-Marktanalysen starten", NAVY),
     ("Produktanalyse", "Produktchancen erkennen", GREEN),
     ("NMG-Rabatte", "Rabatte, Statistik, Verlauf", PURPLE),
     ("PK-Konditionen", "Kundenindividuelle Rabatte", NAVY),
@@ -423,9 +423,9 @@ c0, c3 = 1.925, 11.408
 ty = 2.95
 rect(s, c0-0.1, ty, (c3 - c0) + 0.2, 0.06, fill=LINE_GREY)
 steps = [
-    ("JETZT", "V1.2 SP1 im Einsatz", "Kasse, Rabatte und Analyse\nproduktiv nutzbar", GREEN),
-    ("GEPLANT", "Mitarbeiter-Programm", "Wer macht was, Organigramm\n& Zuständigkeiten", NAVY),
-    ("GEPLANT", "Report-Programm", "Modulübergreifende\nAuswertung aller Module", PURPLE),
+    ("JETZT", "V2.0 im Einsatz", "Bedarfsanalyse, Mitarbeiter,\nHilfe & Report neu dabei", GREEN),
+    ("IN ARBEIT", "Organigramm-Grafik", "Mitarbeiter-Struktur\nvisuell darstellen", NAVY),
+    ("GEPLANT", "Biosimilar-Wissen", "Wirkstoff-Zuordnung in\nder Bedarfsanalyse", PURPLE),
     ("DAS GROSSE ZIEL", "Cloud-basiertes Arbeiten", "Zentrale Daten, mehrplatz-\nfähig & weltweit  →  Folie 11", TEAL),
 ]
 for i, (when, h, d, col) in enumerate(steps):

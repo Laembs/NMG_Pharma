@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Organigramm-Prototyp – NMGone</title>
+<style>
+  :root{
+    --blau:#0b4a86; --lila:#6b4fb3; --grau:#5f5e5a; --amber:#ba7517;
+    --postit:#fff3b0; --postit-rand:#e6cf66; --bg:#f4f6fb;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:"Segoe UI",Arial,sans-serif;color:#1d2533;background:var(--bg);}
+  header{background:#fff;border-bottom:1px solid #d8e2ee;padding:14px 20px;}
+  header h1{margin:0 0 4px;font-size:20px;color:var(--blau);font-weight:600;}
+  header p{margin:0;font-size:13px;color:#6a7585;}
+  .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+           background:#fff;border-bottom:1px solid #d8e2ee;padding:10px 20px;}
+  .toolbar label{font-size:13px;color:#43506a;font-weight:600;}
+  select,button{font-family:inherit;font-size:13px;border-radius:6px;border:1px solid #cbd6e6;
+                padding:7px 12px;background:#fff;color:#1d2533;cursor:pointer;}
+  button.primary{background:var(--blau);color:#fff;border-color:var(--blau);}
+  button.aktiv{background:var(--lila);color:#fff;border-color:var(--lila);}
+  .legend{display:flex;gap:16px;align-items:center;margin-left:auto;font-size:12px;color:#43506a;}
+  .legend span{display:flex;align-items:center;gap:6px;}
+  .swatch{width:26px;height:0;border-top-width:3px;border-top-style:solid;}
+  .hint{font-size:12px;color:#6a7585;padding:6px 20px;background:#eef3fb;}
+  #board{position:relative;width:100%;height:620px;overflow:auto;background:
+         repeating-linear-gradient(0deg,#eef2f8 0 1px,transparent 1px 26px),
+         repeating-linear-gradient(90deg,#eef2f8 0 1px,transparent 1px 26px),#f9fbff;}
+  #wires{position:absolute;top:0;left:0;width:1600px;height:1100px;pointer-events:none;}
+  #wires line{pointer-events:stroke;cursor:pointer;}
+  .card{position:absolute;width:164px;min-height:74px;background:var(--postit);
+        border:1px solid var(--postit-rand);border-radius:8px;
+        box-shadow:2px 3px 6px rgba(40,40,40,.16);padding:10px 12px 12px;
+        cursor:grab;user-select:none;transition:box-shadow .1s;}
+  .card:hover{box-shadow:3px 5px 10px rgba(40,40,40,.22);}
+  .card.dragging{cursor:grabbing;box-shadow:5px 8px 16px rgba(40,40,40,.30);z-index:50;}
+  .card.quelle{outline:3px solid var(--lila);outline-offset:2px;}
+  .card .nm{font-size:14px;font-weight:600;color:#2a2410;}
+  .card .ro{font-size:12px;color:#6b5d2a;margin-top:2px;}
+  .card .dp{font-size:11px;color:#8a7a3a;margin-top:6px;text-transform:uppercase;letter-spacing:.04em;}
+  .card .handle{position:absolute;right:6px;bottom:6px;width:20px;height:20px;border-radius:50%;
+        background:var(--blau);color:#fff;font-size:14px;line-height:20px;text-align:center;
+        cursor:crosshair;opacity:.85;}
+  .card .handle:hover{opacity:1;}
+</style>
+</head>
+<body>
+<header>
+  <h1>Organigramm-Board · Konzept</h1>
+  <p>Post-it-Karten ziehen · verbinden · Verbindungen lösen · Gesamtansicht oder einzelnen Teilbereich wählen. (Prototyp – ändert nichts an NMGone.)</p>
+</header>
+
+<div class="toolbar">
+  <label for="bereich">Teilbereich:</label>
+  <select id="bereich"><option value="all">Gesamtunternehmen</option></select>
+  <button id="connectBtn">＋ Verbindung ziehen</button>
+  <label for="artSel">Art:</label>
+  <select id="artSel">
+    <option value="disziplinarisch">disziplinarisch (primär)</option>
+    <option value="fachlich">fachlich</option>
+    <option value="vertretung">Vertretung</option>
+  </select>
+  <button id="layoutBtn">Auto-Layout</button>
+  <div class="legend">
+    <span><i class="swatch" style="border-color:#185FA5"></i>disziplinarisch</span>
+    <span><i class="swatch" style="border-color:#BA7517;border-top-style:dashed"></i>fachlich</span>
+    <span><i class="swatch" style="border-color:#5F5E5A;border-top-style:dotted"></i>Vertretung</span>
+  </div>
+</div>
+<div class="hint" id="hint">Tipp: Karte mit der Maus ziehen. „Verbindung ziehen“ aktivieren, dann Start- und Ziel-Karte anklicken. Eine Linie anklicken = Verbindung entfernen.</div>
+
+<div id="board">
+  <svg id="wires" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="pfeil" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M1 1L9 5L1 9" fill="none" stroke="#185FA5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </marker>
+    </defs>
+  </svg>
+</div>
+
+<script>
+const W=164, H=74;
+const STIL = {
+  disziplinarisch:{stroke:"#185FA5", width:3, dash:"",     pfeil:true},
+  fachlich:       {stroke:"#BA7517", width:2, dash:"7 5",  pfeil:false},
+  vertretung:     {stroke:"#5F5E5A", width:2, dash:"2 6",  pfeil:false},
+};
+
+// --- Beispiel-Daten (steht später in der zentralen DB) -------------------
+let emps = [
+  {id:1, name:"Anna Maier",   role:"Geschäftsführung", dept:"Leitung",     x:640, y:30},
+  {id:2, name:"Ben Krause",   role:"Leitung Vertrieb", dept:"Vertrieb",    x:360, y:200},
+  {id:3, name:"Carla Sommer", role:"Leitung Labor",    dept:"Labor",       x:900, y:200},
+  {id:4, name:"David Reuter", role:"Außendienst",      dept:"Vertrieb",    x:180, y:380},
+  {id:5, name:"Eva Lang",     role:"Innendienst",      dept:"Vertrieb",    x:440, y:380},
+  {id:6, name:"Felix Thiel",  role:"Laborant",         dept:"Labor",       x:820, y:380},
+  {id:7, name:"Gina Wolf",    role:"QS / Analytik",    dept:"Labor",       x:1040,y:380},
+  {id:8, name:"Hans Berg",    role:"Buchhaltung",      dept:"Verwaltung",  x:640, y:200},
+];
+let links = [
+  {id:1, child:2, parent:1, art:"disziplinarisch"},
+  {id:2, child:3, parent:1, art:"disziplinarisch"},
+  {id:3, child:8, parent:1, art:"disziplinarisch"},
+  {id:4, child:4, parent:2, art:"disziplinarisch"},
+  {id:5, child:5, parent:2, art:"disziplinarisch"},
+  {id:6, child:6, parent:3, art:"disziplinarisch"},
+  {id:7, child:7, parent:3, art:"disziplinarisch"},
+  {id:8, child:6, parent:7, art:"fachlich"},
+  {id:9, child:4, parent:5, art:"vertretung"},
+];
+let nextLinkId = 100;
+
+const board   = document.getElementById("board");
+const wires   = document.getElementById("wires");
+const bereich = document.getElementById("bereich");
+const artSel  = document.getElementById("artSel");
+const hint    = document.getElementById("hint");
+let connectMode = false, quelleId = null;
+
+// Teilbereiche aus Daten füllen
+[...new Set(emps.map(e=>e.dept))].sort().forEach(d=>{
+  const o=document.createElement("option"); o.value=d; o.textContent=d; bereich.appendChild(o);
+});
+
+function sichtbar(e){ const b=bereich.value; return b==="all" || e.dept===b; }
+function byId(id){ return emps.find(e=>e.id===id); }
+
+function render(){
+  // Karten
+  board.querySelectorAll(".card").forEach(c=>c.remove());
+  emps.filter(sichtbar).forEach(e=>{
+    const card=document.createElement("div");
+    card.className="card"+(e.id===quelleId?" quelle":"");
+    card.style.left=e.x+"px"; card.style.top=e.y+"px";
+    card.dataset.id=e.id;
+    card.innerHTML=`<div class="nm">${e.name}</div><div class="ro">${e.role}</div>`+
+                   `<div class="dp">${e.dept}</div><div class="handle" title="Verbindung von hier ziehen">＋</div>`;
+    board.appendChild(card);
+    macheZiehbar(card,e);
+    card.querySelector(".handle").addEventListener("mousedown",ev=>{
+      ev.stopPropagation(); starteVerbinden(e.id);
+    });
+  });
+  zeichneLinien();
+}
+
+function zeichneLinien(){
+  wires.querySelectorAll("line").forEach(l=>l.remove());
+  links.forEach(lk=>{
+    const k=byId(lk.child), p=byId(lk.parent);
+    if(!k||!p||!sichtbar(k)||!sichtbar(p)) return;
+    const s=STIL[lk.art];
+    const x1=k.x+W/2, y1=k.y, x2=p.x+W/2, y2=p.y+H;   // Kind-Oberkante -> Chef-Unterkante
+    const ln=document.createElementNS("http://www.w3.org/2000/svg","line");
+    ln.setAttribute("x1",x1); ln.setAttribute("y1",y1);
+    ln.setAttribute("x2",x2); ln.setAttribute("y2",y2);
+    ln.setAttribute("stroke",s.stroke); ln.setAttribute("stroke-width",s.width);
+    if(s.dash) ln.setAttribute("stroke-dasharray",s.dash);
+    if(s.pfeil) ln.setAttribute("marker-end","url(#pfeil)");
+    ln.addEventListener("click",()=>{
+      if(confirm(`Verbindung „${k.name} → ${p.name}“ (${lk.art}) entfernen?`)){
+        links=links.filter(x=>x.id!==lk.id); zeichneLinien();
+      }
+    });
+    // unsichtbare dickere Trefferlinie zum leichteren Anklicken
+    const hit=ln.cloneNode();
+    hit.setAttribute("stroke","transparent"); hit.setAttribute("stroke-width",14);
+    hit.removeAttribute("marker-end"); hit.removeAttribute("stroke-dasharray");
+    hit.addEventListener("click",()=>ln.dispatchEvent(new Event("click")));
+    wires.appendChild(hit); wires.appendChild(ln);
+  });
+}
+
+function macheZiehbar(card,e){
+  let sx,sy,ox,oy,moved;
+  card.addEventListener("mousedown",ev=>{
+    if(connectMode){ ev.preventDefault(); return; }
+    moved=false; sx=ev.clientX; sy=ev.clientY; ox=e.x; oy=e.y;
+    card.classList.add("dragging");
+    const move=m=>{
+      const dx=m.clientX-sx, dy=m.clientY-sy;
+      if(Math.abs(dx)>3||Math.abs(dy)>3) moved=true;
+      e.x=Math.max(0,ox+dx); e.y=Math.max(0,oy+dy);
+      card.style.left=e.x+"px"; card.style.top=e.y+"px"; zeichneLinien();
+    };
+    const up=()=>{ document.removeEventListener("mousemove",move);
+      document.removeEventListener("mouseup",up); card.classList.remove("dragging"); };
+    document.addEventListener("mousemove",move);
+    document.addEventListener("mouseup",up);
+  });
+  card.addEventListener("click",ev=>{
+    if(connectMode) waehleFuerVerbindung(e.id);
+  });
+}
+
+function starteVerbinden(id){
+  connectMode=true; quelleId=id; setConnectUI();
+}
+function waehleFuerVerbindung(id){
+  if(quelleId===null){ quelleId=id; render(); hinweis(`Start: ${byId(id).name}. Jetzt Ziel-(Vorgesetzten-)Karte anklicken.`); return; }
+  if(id===quelleId){ return; }
+  const art=artSel.value;
+  links.push({id:nextLinkId++, child:quelleId, parent:id, art});
+  hinweis(`Verbindung angelegt: ${byId(quelleId).name} → ${byId(id).name} (${art}).`);
+  quelleId=null; connectMode=false; setConnectUI(); render();
+}
+
+const connectBtn=document.getElementById("connectBtn");
+connectBtn.addEventListener("click",()=>{
+  connectMode=!connectMode; quelleId=null; setConnectUI(); render();
+});
+function setConnectUI(){
+  connectBtn.classList.toggle("aktiv",connectMode);
+  connectBtn.textContent=connectMode?"✓ Verbinden aktiv – Karten anklicken":"＋ Verbindung ziehen";
+  if(connectMode) hinweis("Verbinden aktiv: Start-Karte (Mitarbeiter) anklicken, dann Ziel-Karte (Vorgesetzter). Art oben wählen.");
+  else hinweis("Tipp: Karte ziehen zum Verschieben · Linie anklicken = Verbindung entfernen.");
+}
+function hinweis(t){ hint.textContent=t; }
+
+// Auto-Layout: einfacher Top-Down-Baum aus disziplinarischen Kanten
+document.getElementById("layoutBtn").addEventListener("click",()=>{
+  const vis=emps.filter(sichtbar);
+  const parentOf={}; links.filter(l=>l.art==="disziplinarisch").forEach(l=>parentOf[l.child]=l.parent);
+  const ids=new Set(vis.map(e=>e.id));
+  const roots=vis.filter(e=>!ids.has(parentOf[e.id])).map(e=>e.id);
+  const ebene={}, kinder={};
+  vis.forEach(e=>kinder[e.id]=[]);
+  vis.forEach(e=>{ const p=parentOf[e.id]; if(ids.has(p)) kinder[p].push(e.id); });
+  let order=[]; function dfs(id,d){ ebene[id]=d; order.push(id); (kinder[id]||[]).forEach(k=>dfs(k,d+1)); }
+  roots.forEach(r=>dfs(r,0));
+  const proEbene={};
+  order.forEach(id=>{ const d=ebene[id]; proEbene[d]=(proEbene[d]||0);
+    const e=byId(id); e.x=60+proEbene[d]*200; e.y=30+d*150; proEbene[d]++; });
+  render();
+});
+
+render();
+</script>
+</body>
+</html>
