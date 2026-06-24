@@ -5,6 +5,15 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V2.0 SP1", "2026-06-24", [
+        "Neue eigenstaendige App 'Mitarbeiter & Personal' - oeffnet sich ueber die Mitarbeiter-Kachel in einem eigenen Fenster und teilt sich die Datenbank mit NMGone.",
+        "Organigramm: Mitarbeiter als verschiebbare Karten, per Linie verbinden und wieder loesen; Beziehungsart (disziplinarisch/fachlich/Vertretung) farblich unterschieden, die primaere Beziehung bildet den Baum; Auto-Layout und Filter nach Teilbereich/Abteilung.",
+        "Abwesenheiten/Urlaub: Team-Kalender in Monats- oder Jahresansicht, Eintragen ueber Kalender-Datumsauswahl; Arten Urlaub, Sonderurlaub (mit Grund), Krankheit, Fortbildung und Sonstiges.",
+        "Urlaubskonto: Urlaubsanspruch je Mitarbeiter, Resturlaub-Berechnung (nur Werktage) und gesetzlicher Hinweis auf den 31.03.-Verfall; ein offener Resturlaub kann der personalverantwortlichen Person zur Entscheidung (verfallen lassen ja/nein) gemeldet werden.",
+        "Arbeitsbereiche: je Mitarbeiter alle Aufgabengebiete nach Kategorien gruppiert; Vertretungsketten (Verantwortlich -> 1./2./3. Vertretung) wahlweise je Mitarbeiter oder je Bereich dargestellt.",
+        "Einstellungen (Zahnrad): Kategorien der Arbeitsbereiche frei anlegen, umbenennen (zieht alle zugeordneten Bereiche mit) und loeschen.",
+        "Neue Mitarbeiterkarte: die Daten des angemeldeten Benutzers werden vorbelegt.",
+    ]),
     ("V2.0", "2026-06-23", [
         "Neuer Meilenstein V2.0 - buendelt mehrere neue Programme unter dem bekannten NMGone-Dach.",
         "Bedarfsanalyse (ehem. 'Neue Auswertung') mit separatem Kurzbericht: Excel + PDF inkl. Diagrammen fuer die schnelle Uebersicht.",

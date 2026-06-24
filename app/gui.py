@@ -1452,7 +1452,7 @@ class NMGApp(tk.Tk):
             "kunden_center": self.show_kunden_center,
             "vergleichssuche": self.open_vergleichssuche_window,
             "globale_suche": self.open_globale_suche_window,
-            "mitarbeiter_center": self.show_mitarbeiter_center,
+            "mitarbeiter_center": self.open_personal_app,
             "todo_center": self.show_todo_center,
             "kasse": self.open_kasse_app,
             "bestell_center": self.open_kasse_app,
@@ -4256,7 +4256,7 @@ LIMIT 500
             ("kasse",            "🛒", "Kasse",                "Verkauf an Apotheken + Wareneingang.",      self.open_kasse_app,                         "#8b5a00"),
             ("auswertungen",     "📑", "Auswertungen",         "Verkäufe, Kunden, Artikel frei auswerten.", self.open_auswertungen_app,                  "#0b6e6e"),
             ("todo",             "✅", "ToDo",                 "Aufgaben und offene Punkte.",               self.show_todo_center,                        "#11823b"),
-            ("mitarbeiter",      "👥", "Mitarbeiter",          "Zuständigkeiten und Datenpfade.",           self.show_mitarbeiter_center,                "#6b4fb3"),
+            ("mitarbeiter",      "👥", "Mitarbeiter",          "Organigramm, Abwesenheiten, Arbeitsbereiche.", self.open_personal_app,                   "#6b4fb3"),
             ("produktanalyse",   "📈", "Produktanalyse",       "Produktchancen erstellen.",                 self.market_opportunities,                   "#11823b"),
             # SP7: Marktanalyse-Tile entfernt.
             ("abweichung",       "🔍", "Abweichungsanalyse",   "Manuelle vs. Programm-Auswertung.",         self.deviation_analysis,                     "#8b5a00"),
@@ -7386,7 +7386,7 @@ LIMIT 500
 
         app_tiles = [
             ("\U0001f465", "Kunden", "Kundenstamm, Analysen, E-Mail-Versand.", self.show_kunden_center, "#0b4a86"),
-            ("\U0001f464", "Mitarbeiter", "Mitarbeiterdaten, Profile, Vertretungen.", self.show_mitarbeiter_center, "#6b4fb3"),
+            ("\U0001f464", "Mitarbeiter", "Organigramm, Abwesenheiten, Arbeitsbereiche.", self.open_personal_app, "#6b4fb3"),
             ("\u2705", "ToDo", "Aufgaben, offene Punkte und Notizen.", self.show_todo_center, "#11823b"),
             ("\U0001f6d2", "Kasse", "Verkauf an Apotheken + Wareneingang.", self.open_kasse_app, "#8b5a00"),
             ("\U0001f4d1", "Auswertungen", "Verkäufe, Kunden, Artikel frei auswerten und exportieren.", self.open_auswertungen_app, "#0b6e6e"),
@@ -7941,6 +7941,32 @@ LIMIT 500
         except Exception as exc:
             messagebox.showerror("NMG Kasse", f"Kasse konnte nicht gestartet werden:\n{exc}",
                                  parent=self)
+
+    def open_personal_app(self):
+        """Mitarbeiter- & Personal-App als EIGENEN Prozess starten (Organigramm,
+        Abwesenheiten/Urlaub, Arbeitsbereiche). Teilt sich die DB mit NMGone.
+        Eigenes Fenster/Taskleisten-Icon, getrennt von NMGone."""
+        import subprocess
+        proc = getattr(self, "_personal_proc", None)
+        if proc is not None and proc.poll() is None:
+            messagebox.showinfo(
+                "Mitarbeiter & Personal",
+                "Die Mitarbeiter-App läuft bereits in einem eigenen Fenster.\n"
+                "Bitte über die Taskleiste nach vorn holen.", parent=self)
+            return
+        try:
+            flags = 0
+            if sys.platform == "win32":
+                flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable, "--personal"]
+            else:
+                start_py = Path(__file__).resolve().parent.parent / "start_personal.py"
+                cmd = [sys.executable, str(start_py)]
+            self._personal_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
+        except Exception as exc:
+            messagebox.showerror("Mitarbeiter & Personal",
+                                 f"App konnte nicht gestartet werden:\n{exc}", parent=self)
 
     def open_auswertungen_app(self):
         """Auswertungs-/Report-Modul als EIGENEN Prozess starten (NMGone.exe
@@ -9898,6 +9924,7 @@ LIMIT 500
         row3.grid(row=4, column=0, columnspan=3, sticky="ew")
         row3.columnconfigure((0, 1, 2), weight=1)
         self._tile(row3, 0, "📥", "Manuelle Analysen", "Manuelle PK-/ZW-Analysen importieren.", "Import", self.import_manuelle_analysen, "#11823b")
+        self._tile(row3, 1, "🧬", "Gelbe Liste (Biosimilars)", "Biosimilar-Wissensbasis aus der Gelben Liste importieren.", "Import", self.import_gelbe_liste, "#0a7d8a")
 
     def _ask_manual_analysis_type(self):
         """Fragt gezielt, ob manuelle Analysen als PK oder ZW importiert werden sollen."""
@@ -10453,6 +10480,51 @@ LIMIT 500
         messagebox.showinfo("Wirkstoff/Staerke-Import", msg)
         # Tabellen-Ansicht neu laden, damit die neue Zeilenzahl sichtbar ist.
         self.show_datenbankuebersicht_page()
+
+    def import_gelbe_liste(self):
+        """Importiert die Biosimilar-Wissensbasis aus der Gelbe-Liste-Excel.
+
+        Excel-Layout: 3 Spalten (Wirkstoff | Arzneimittel | Referenzprodukt),
+        Forward-Fill. Loest Namen anschliessend gegen den Artikelstamm auf.
+        """
+        self._log_action("datenaktualisierung", "Gelbe-Liste-Import geoeffnet")
+        file = filedialog.askopenfilename(
+            title="Gelbe-Liste-Excel (Biosimilars) auswaehlen",
+            filetypes=SUPPORTED_DATA_FILETYPES,
+        )
+        if not file:
+            return
+        try:
+            from .biosimilar_db import import_gelbe_liste_excel, biosimilar_counts
+            stats = self._run_busy(
+                lambda: import_gelbe_liste_excel(file),
+                title="Gelbe-Liste-Import",
+                subtitle="Importiere Biosimilar-Wissensbasis ...",
+            )
+        except Exception as exc:
+            self._log_error("datenaktualisierung", "Gelbe-Liste-Import", exc)
+            messagebox.showerror("Gelbe-Liste-Import", f"Fehler:\n{exc}")
+            return
+
+        counts = biosimilar_counts()
+        msg = (
+            f"Datei: {Path(file).name}\n"
+            f"Stand: {stats.get('stand', '-')}\n\n"
+            f"Wirkstoff-Gruppen: {stats.get('gruppen', 0)} (neu: {stats.get('gruppen_neu', 0)})\n"
+            f"Produkte: {stats.get('produkte', 0)} (neu: {stats.get('produkte_neu', 0)}, "
+            f"entfernt: {stats.get('produkte_entfernt', 0)})\n\n"
+            f"PZN automatisch zugeordnet: {stats.get('pzn_auto', 0)}\n"
+            f"PZN zur Pruefung offen: {stats.get('pzn_offen', 0)}\n"
+            f"Produkte ohne PZN-Kandidat: {stats.get('produkte_ohne_pzn', 0)}\n\n"
+            f"Wissensbasis enthaelt jetzt {counts.get('gruppen', 0)} Wirkstoff-Gruppen "
+            f"und {counts.get('produkte_aktiv', 0)} aktive Produkte."
+        )
+        self._log_action("datenaktualisierung", "Gelbe Liste importiert", msg.replace("\n", " | "))
+        self.status.set(
+            f"Gelbe-Liste-Import: {stats.get('gruppen', 0)} Gruppen, "
+            f"{stats.get('produkte_neu', 0)} neue Produkte."
+        )
+        messagebox.showinfo("Gelbe-Liste-Import", msg)
 
     # V1.1 SP8: Zeitraum-Archivierung + Archiv-Verwaltung ─────────────────────
     def _loeschen_zeitraum_dialog(self):
