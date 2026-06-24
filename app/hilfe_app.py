@@ -44,6 +44,8 @@ TOPICS = [
     ("produktanalyse","📈", "Produktanalyse"),
     ("kunden",        "👥", "Kunden"),
     ("kasse",         "🛒", "Kasse"),
+    ("faktura",       "🧾", "Faktura"),
+    ("personal",      "👤", "Mitarbeiter"),
     ("auswertungen",  "📑", "Auswertungen"),
     ("schulbank",     "🎓", "Schulbank"),
     ("daten",         "🗄", "Daten aktualisieren"),
@@ -155,6 +157,10 @@ HELP_CONTENT = {
             ("p", "Die Kasse ist ein eigenes Programm mit eigenem Taskleisten-Symbol. "
                   "Sie bildet den Weg der Ware ab: Wareneingang buchen, Lagerbestand "
                   "führen und an Apotheken verkaufen."),
+            ("tip", "Beim Wareneingang ist das Feld „EK €“ (Einkaufspreis) mit dem APU "
+                    "vorbelegt und kann überschrieben werden. Daraus errechnet die Kasse "
+                    "überall den Lagerwert (EK × Bestand) – zusätzlich zum Verkaufswert "
+                    "(APU × Bestand). Beim Import wird eine EK-Spalte automatisch übernommen."),
             ("img", "01_kasse.png", "Die Kasse mit Verkaufsmaske."),
             ("h", "Typischer Ablauf"),
             ("step", [
@@ -163,8 +169,123 @@ HELP_CONTENT = {
                 "Artikel/Mengen erfassen, abschließen.",
                 "Der Verkauf landet sofort in den Auswertungen.",
             ]),
+            ("img", "02_wareneingang.png", "Reiter „Wareneingang“: NMG-Ware mit Charge, Verfall und EK ins Lager buchen."),
+            ("h", "Artikel-Übersicht mit Verkaufswert"),
+            ("p", "Im Reiter „Artikel“ zeigt eine Leiste unten den Gesamtbestand und den "
+                  "Verkaufswert (APU × Bestand). Sobald du nach PZN oder Artikel suchst, "
+                  "beziehen sich die Summen nur noch auf die angezeigte Auswahl."),
+            ("h", "Freie Position"),
+            ("p", "Über „➕ Freie Position“ (unter der Positionsliste) erfasst du einen "
+                  "frei benannten Posten mit eigenem Preis, Menge und Rabatt – z. B. einen "
+                  "Botendienst-Zuschlag. Er wird NICHT vom Lager abgebucht, aber gespeichert "
+                  "und erscheint mit Preis auf der Auftragsbestätigung."),
+            ("h", "Wenn der Bestand nicht reicht"),
+            ("p", "Buchst du mehr als auf Lager ist, fragt die Kasse nach: Du kannst die "
+                  "verfügbare Menge sofort als Bestellung liefern und den Rest automatisch "
+                  "als Vorbestellung aufnehmen lassen – oder nur den vorhandenen Bestand "
+                  "abverkaufen."),
+            ("img", "03_vorbestellungen.png", "Reiter „Vorbestellungen“: offene Vorbestellungen disponieren und als Verkauf übernehmen."),
+            ("h", "MSK & Lieferschein"),
+            ("p", "Im Reiter „Verkäufe“ markierst du einen Verkauf als „In MSK erfasst“. "
+                  "Direkt danach bietet die Kasse an, den Lieferschein zu erzeugen und zu "
+                  "öffnen. Über die Detailansicht eines Verkaufs lässt er sich jederzeit "
+                  "erneut drucken."),
+            ("tip", "Lieferschein-Vorlage anpassen: vorlagen/lieferschein.html (eigene "
+                    "Firmendaten/Logo). Der Lieferschein zeigt Charge/Verfall, aber keine Preise."),
+            ("p", "Erzeugst du einen Lieferschein über den Knopf in der Detailansicht, fragt "
+                  "die Kasse zuerst, ob der Auftrag in MSK erfasst wurde – auf „Ja“ wird er "
+                  "gleich entsprechend markiert."),
+            ("h", "Wer hat was mit einem Auftrag gemacht?"),
+            ("p", "In der Detailansicht eines Verkaufs öffnet „🕘 Verlauf“ die komplette "
+                  "Historie (angelegt, MSK erfasst, Lieferschein, Storno, …) mit Mitarbeiter "
+                  "und Zeitpunkt – auch als PDF. Das vollständige Protokoll im Reiter "
+                  "„Protokoll“ lässt sich nach Auftrag-Nr oder Mitarbeiter filtern und als "
+                  "PDF exportieren."),
+            ("h", "Reiter „Auswertung“"),
+            ("ul", [
+                "Umsatz – je Tag/Monat/Jahr mit Anzahl Verkäufe, Anzahl Packungen, "
+                "APU Brutto, Rabatt (Netto) und APU Netto; Zeitraum frei einschränkbar.",
+                "Tagesabschluss – Tag per Kalender wählen; zeigt die Tagesabschluss-Nr "
+                "und die Kennzahlen (Menge der Verkäufe, verkaufte Packungen, APU-, "
+                "Rabatt- und Umsatz-Summe).",
+                "Verfall – Zeitraum wählbar (3/6/9/12 Monate oder Alle, Standard 3 Monate); "
+                "abgelaufene (rot) und bald ablaufende (gelb) Chargen, mit Summe aus "
+                "Bestand und Verkaufswert (APU × Bestand).",
+                "Inventur – Zählliste mit Soll-Bestand und Verkaufswert zum Ausdrucken.",
+            ]),
+            ("p", "Den Tagesabschluss erzeugst du im Reiter „Tagesabschluss“ (oder per "
+                  "Doppelklick auf einen Tag in der Umsatztabelle). Beim Erzeugen des PDFs "
+                  "wird eine laufende Nummer vergeben. Er entsteht jeden Abend um 18 Uhr "
+                  "zusätzlich automatisch (mit Nummer); verpasste Vortage werden beim "
+                  "nächsten Start nachgeholt."),
+            ("img", "04_auswertung.png", "Reiter „Auswertung“: Umsatz, Tagesabschluss, Verfall und Inventur."),
+            ("h", "Defektmeldung (Nichtverfügbarkeit)"),
+            ("p", "Ist ein Artikel nicht vorrätig oder nicht lieferbar, erzeugst du im "
+                  "Reiter „Defektmeldung“ eine Bescheinigung für die Apotheke: Apotheke "
+                  "suchen, Artikel hinzufügen (der aktuelle Bestand wird angezeigt), Grund "
+                  "wählen und „Defektmeldung erzeugen“."),
+            ("warn", "Der genaue Rechtstext der Defektmeldung muss fachlich/rechtlich geprüft "
+                     "und eingetragen werden – das geht im Reiter „Einstellungen“."),
+            ("img", "05_defektmeldung.png", "Reiter „Defektmeldung“: Nichtverfügbarkeit für die Apotheke bescheinigen."),
+            ("h", "Einstellungen"),
+            ("p", "Im Reiter „Einstellungen“ (Zahnrad) pflegst du die Firmendaten (Kopf von "
+                  "Auftragsbestätigung, Lieferschein und Defektmeldung), den Rechtstext der "
+                  "Defektmeldung und die Uhrzeit des automatischen Tagesabschlusses – alles "
+                  "ohne Dateien bearbeiten zu müssen."),
+            ("img", "06_einstellungen.png", "Reiter „Einstellungen“: Firmendaten, Dokument-Texte und Parameter."),
             ("warn", "Stornierte oder abgesagte Verkäufe werden in den Umsatz-Auswertungen "
                      "nicht mitgezählt."),
+        ],
+    },
+    "faktura": {
+        "title": "Faktura",
+        "subtitle": "Rechnungen, Gutschriften & Quartalsvergütung.",
+        "blocks": [
+            ("p", "Die Faktura ist ein eigenes Programm mit eigenem Taskleisten-Symbol. "
+                  "Sie erstellt Rechnungen, Gutschriften und Stornos sowie die "
+                  "Quartalsvergütung – jeweils als fertiges PDF mit deinem Layout."),
+            ("img", "01_start.png", "Die Faktura-Startseite mit der Übersicht."),
+            ("h", "Eine neue Rechnung erstellen"),
+            ("step", [
+                "Links „Neue Rechnung“ öffnen (oder über „Aufträge“ einen Auftrag wählen).",
+                "Kunde wählen und Positionen erfassen (PZN, Menge, APU).",
+                "Belegdaten prüfen (Belegnummer, Datum, Leistungsdatum).",
+                "Als PDF erzeugen – der Beleg wird abgelegt und kann geöffnet werden.",
+            ]),
+            ("img", "02_rechnung_neu.png", "Die Maske „Neue Rechnung“ mit Positionen."),
+            ("h", "Belegnummern & Layout"),
+            ("p", "Unter „Einstellungen“ pflegst du Firmendaten, die Belegnummern und das "
+                  "Layout. Die Nummernkreise sind frei konfigurierbar über Platzhalter: "
+                  "{JJJJ} = Jahr, {MM} = Monat, {NR} = Zähler (z. B. {NR:5} = 5-stellig). "
+                  "Im Layout legst du Akzentfarbe und Logo der Belege fest."),
+            ("img", "03_einstellungen.png", "Einstellungen: Firmendaten und frei konfigurierbare Belegnummern."),
+            ("h", "Quartalsvergütung"),
+            ("p", "Im Bereich „Quartalsvergütung“ erzeugst du die Vergütungsbelege eines "
+                  "Quartals; die zugehörige „Staffel“ legst du unter Konfiguration fest."),
+            ("tip", "Die PDFs entstehen über Edge/Chrome im Hintergrund. Ist kein Browser "
+                    "vorhanden, bleibt eine HTML-Fassung des Belegs erhalten."),
+        ],
+    },
+    "personal": {
+        "title": "Mitarbeiter & Personal",
+        "subtitle": "Organigramm, Abwesenheiten & Arbeitsbereiche.",
+        "blocks": [
+            ("p", "Das Mitarbeiter-Board ist ein eigenes Programm mit drei Ansichten, die "
+                  "du oben umschaltest: Organigramm, Arbeitsbereiche und Abwesenheiten. "
+                  "Alle teilen sich die NMGone-Datenbank."),
+            ("img", "01_organigramm.png", "Organigramm: Mitarbeiterkarten mit Vorgesetzten-Verbindungen."),
+            ("h", "Organigramm"),
+            ("p", "Die Mitarbeiterkarten lassen sich frei anordnen. Über den Verbinden-Modus "
+                  "ziehst du Linien vom Vorgesetzten zum Mitarbeiter; Farben kennzeichnen die "
+                  "Abteilungen."),
+            ("h", "Arbeitsbereiche"),
+            ("p", "Hier ordnest du Mitarbeitern ihre Arbeitsbereiche und Kategorien zu – "
+                  "umschaltbar nach Mitarbeiter oder nach Bereich."),
+            ("img", "02_arbeitsbereiche.png", "Arbeitsbereiche: Zuordnung von Mitarbeitern und Bereichen."),
+            ("h", "Abwesenheiten"),
+            ("p", "Urlaub und andere Abwesenheiten pflegst du im Kalender (Monats- oder "
+                  "Jahresansicht). Der Urlaubsverfall wird mitgeführt."),
+            ("img", "03_abwesenheiten.png", "Abwesenheiten: Urlaubskalender mit Monats- und Jahresansicht."),
         ],
     },
     "auswertungen": {

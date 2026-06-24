@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Lieferschein {{lieferscheinnr}}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #222; margin: 0; padding: 28px; font-size: 13px; }
+  .seite { max-width: 720px; margin: 0 auto; }
+  .kopf { display: flex; justify-content: space-between; align-items: flex-start;
+          border-bottom: 3px solid #0b4a86; padding-bottom: 10px; margin-bottom: 18px; }
+  .absender { font-size: 12px; color: #555; line-height: 1.4; }
+  .absender .firma { font-size: 16px; font-weight: bold; color: #0b4a86; }
+  .titel { font-size: 22px; font-weight: bold; color: #0b4a86; }
+  .meta { display: flex; justify-content: space-between; margin-bottom: 18px; }
+  .meta .kunde { text-align: right; line-height: 1.5; }
+  .lieferung { background: #f2f6fb; border: 1px solid #dde7f1; border-radius: 6px;
+               padding: 8px 12px; margin-bottom: 16px; }
+  table.positionen { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+  table.positionen th { background: #0b4a86; color: #fff; text-align: left; padding: 6px 8px; font-size: 12px; }
+  table.positionen td { border-bottom: 1px solid #e2e2e2; padding: 6px 8px; }
+  table.positionen .r { text-align: right; }
+  table.positionen tfoot td { border-top: 2px solid #0b4a86; font-size: 14px; }
+  .fuss { margin-top: 26px; color: #555; font-size: 12px; line-height: 1.5; border-top: 1px solid #ddd; padding-top: 10px; }
+  .unterschrift { margin-top: 40px; display: flex; justify-content: space-between; }
+  .unterschrift .feld { width: 45%; border-top: 1px solid #999; padding-top: 4px; font-size: 11px; color: #666; }
+  @media print { body { padding: 0; } }
+</style>
+</head>
+<body>
+<div class="seite">
+
+  <!-- Absender/Logo: hier eigene Firmendaten eintragen (Vorlage frei austauschbar) -->
+  <div class="kopf">
+    <div class="absender">
+      <div class="firma">Ihre Firma GmbH</div>
+      Musterstraße 1 · 12345 Musterstadt<br>
+      Tel. 01234 / 56789 · info@ihre-firma.de
+    </div>
+    <div class="titel">Lieferschein</div>
+  </div>
+
+  <div class="meta">
+    <div>
+      <strong>Lieferschein-Nr:</strong> {{lieferscheinnr}}<br>
+      <strong>zum Auftrag:</strong> {{auftragsnr}}<br>
+      <strong>Datum:</strong> {{datum}}
+    </div>
+    <div class="kunde">
+      <strong>{{apotheke}}</strong><br>
+      {{inhaber}}<br>
+      {{strasse}}<br>
+      {{plz}} {{ort}}<br>
+      Kundennr.: {{kundennummer}}
+    </div>
+  </div>
+
+  <div class="lieferung">
+    <strong>Bestellart:</strong> {{bestellart}} &nbsp;·&nbsp;
+    <strong>Lieferung:</strong> {{lieferzeit}} &nbsp;·&nbsp;
+    <strong>Liefertermin:</strong> {{liefertermin}}
+  </div>
+
+  <table class="positionen">
+    <thead>
+      <tr>
+        <th>Pos</th><th>PZN</th><th>Artikel</th><th>PCK</th>
+        <th>Charge</th><th>Verfall</th><th class="r">Menge</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{positionen}}
+    </tbody>
+    <tfoot>
+      <tr><td colspan="6" class="r"><strong>Gesamtmenge</strong></td>
+          <td class="r"><strong>{{gesamt_menge}}</strong></td></tr>
+    </tfoot>
+  </table>
+
+  <div class="unterschrift">
+    <div class="feld">Ware vollständig und einwandfrei erhalten (Datum, Unterschrift)</div>
+    <div class="feld">Bemerkungen</div>
+  </div>
+
+  <div class="fuss">
+    In MSK erfasst von {{msk_von}} am {{msk_am}}. Bitte prüfen Sie die Lieferung
+    bei Erhalt. Dieser Lieferschein wurde maschinell erstellt.
+  </div>
+
+</div>
+</body>
+</html>

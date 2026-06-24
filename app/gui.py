@@ -12,6 +12,8 @@ from datetime import datetime
 
 # Zentrales Design-System (Palette, Schrift, ttk-Styles, Widgets).
 from . import theme
+# Gefuehrte Einfuehrungs-Tour (Wizard) - abschaltbar pro Version/Anwender.
+from . import tour
 
 # V1.1 SP10: tkcalendar fuer Datum-Picker. Optional - falls nicht vorhanden,
 # faellt der Code auf tk.Entry mit YYYY-MM-DD-Format zurueck.
@@ -302,6 +304,10 @@ class NMGApp(tk.Tk):
         # So findet die App auch von Admin per OneDrive vorgelegte Setups
         # offline und bietet sie zur Installation an.
         self.after(2000, self._startup_update_check)
+
+        # Gefuehrte Einfuehrung: startet einmal pro Version automatisch, sofern
+        # nicht vom Anwender oder Build (version.json -> tour_enabled) abgeschaltet.
+        tour.maybe_show(self, "nmgone", tour.nmgone_steps())
 
     @staticmethod
     def _version_tuple(value):

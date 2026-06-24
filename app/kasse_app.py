@@ -3696,4 +3696,5 @@ def run_standalone():
     except Exception:
         pass
     KassePanel(root, on_close=root.destroy).pack(fill="both", expand=True)
+    tour.maybe_show(root, "kasse", tour.kasse_steps())
     root.mainloop()

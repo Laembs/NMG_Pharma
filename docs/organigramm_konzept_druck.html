@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Organigramm &amp; Mitarbeiter – Konzept zum Ausdrucken</title>
+<style>
+  @page { size: A4; margin: 16mm; }
+  *{ box-sizing:border-box; }
+  body{ font-family:"Segoe UI",Arial,sans-serif; color:#1d2533; font-size:11.5pt; line-height:1.55; margin:0; }
+  .wrap{ max-width:800px; margin:0 auto; padding:24px; }
+  h1{ font-size:22pt; color:#0b4a86; margin:0 0 2px; }
+  h2{ font-size:15pt; color:#0b4a86; margin:26px 0 8px; border-bottom:2px solid #e1e9f4; padding-bottom:4px; }
+  h3{ font-size:12pt; color:#3a4a63; margin:14px 0 4px; }
+  .sub{ color:#6a7585; font-size:10.5pt; margin:0 0 18px; }
+  p{ margin:6px 0; }
+  ul{ margin:6px 0 6px 0; padding-left:20px; }
+  li{ margin:3px 0; }
+  figure{ margin:14px 0; text-align:center; page-break-inside:avoid; }
+  figure svg{ max-width:100%; height:auto; border:1px solid #e1e9f4; border-radius:6px; background:#fff; }
+  figcaption{ font-size:9.5pt; color:#6a7585; margin-top:4px; }
+  .row{ display:flex; gap:14px; flex-wrap:wrap; }
+  .row figure{ flex:1; min-width:200px; margin:8px 0; }
+  table{ border-collapse:collapse; width:100%; margin:10px 0; font-size:10.5pt; }
+  th,td{ border:1px solid #d8e2ee; padding:7px 9px; text-align:left; vertical-align:top; }
+  th{ background:#eef3fb; color:#0b4a86; }
+  .tag{ display:inline-block; padding:1px 8px; border-radius:10px; font-size:9.5pt; }
+  .legend{ display:flex; gap:22px; justify-content:center; font-size:10pt; margin:8px 0; flex-wrap:wrap; }
+  .legend span{ display:flex; align-items:center; gap:7px; }
+  .sw{ width:30px; border-top-width:3px; }
+  .note{ background:#f4f8fd; border-left:4px solid #0b4a86; padding:8px 12px; margin:12px 0; font-size:10.5pt; }
+  .pb{ page-break-before:always; }
+  .noprint{ margin:18px 0; }
+  button{ font:inherit; background:#0b4a86; color:#fff; border:0; border-radius:6px; padding:9px 18px; cursor:pointer; }
+  @media print{ .noprint{ display:none; } .wrap{ padding:0; } body{ font-size:11pt; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="noprint"><button onclick="window.print()">🖨 Drucken / als PDF speichern</button></div>
+
+  <h1>Organigramm &amp; Mitarbeiter</h1>
+  <p class="sub">Konzept zur grafischen Mitarbeiter-Organisation · NMGone · Stand 23.06.2026</p>
+
+  <h2>1 · Worum geht es</h2>
+  <p>Die Mitarbeiter werden in NMGone erfasst und sollen als <strong>grafisches Organigramm</strong> darstellbar
+     sein – im Post-it-Stil: Karten, die man frei verschiebt, mit Linien verbindet und Verbindungen wieder löst.
+     Zusätzlich kann jeder Mitarbeiter <strong>frei definierbare Zusatzfelder</strong> bekommen (z.&nbsp;B. Zertifikate,
+     Schichtmodell). Eine Person kann <strong>mehrere Vorgesetzte</strong> haben (Matrix), jede Beziehung ist
+     klassifiziert (disziplinarisch, fachlich, Vertretung).</p>
+  <ul>
+    <li>Gesamt-Organigramm des Unternehmens <em>und</em> Einzelansicht je Teilbereich/Abteilung.</li>
+    <li>Was im Organigramm verbunden wird, erscheint automatisch auch in der Karten-Ansicht.</li>
+    <li>Eine Datenbasis, zwei Sichten – keine Doppeleingabe.</li>
+  </ul>
+
+  <h2>2 · So sieht das Organigramm-Board aus</h2>
+  <figure>
+    <svg viewBox="0 0 680 430" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M1 1L9 5L1 9" fill="none" stroke="#185FA5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+        </marker>
+      </defs>
+      <line x1="195" y1="190" x2="340" y2="114" stroke="#185FA5" stroke-width="3" marker-end="url(#ar)"/>
+      <line x1="485" y1="190" x2="340" y2="114" stroke="#185FA5" stroke-width="3" marker-end="url(#ar)"/>
+      <line x1="115" y1="330" x2="195" y2="254" stroke="#185FA5" stroke-width="3" marker-end="url(#ar)"/>
+      <line x1="305" y1="330" x2="195" y2="254" stroke="#185FA5" stroke-width="3" marker-end="url(#ar)"/>
+      <line x1="495" y1="330" x2="485" y2="254" stroke="#185FA5" stroke-width="3" marker-end="url(#ar)"/>
+      <line x1="190" y1="362" x2="230" y2="362" stroke="#5F5E5A" stroke-width="2" stroke-dasharray="2 6"/>
+      <line x1="305" y1="330" x2="485" y2="254" stroke="#BA7517" stroke-width="2" stroke-dasharray="7 5"/>
+      <g font-family="Segoe UI,Arial">
+        <g><rect x="265" y="50" width="150" height="64" rx="8" fill="#fff3b0" stroke="#e6cf66"/>
+          <text x="279" y="78" font-size="14" font-weight="bold" fill="#2a2410">Anna Maier</text>
+          <text x="279" y="98" font-size="12" fill="#6b5d2a">Geschäftsführung</text></g>
+        <g><rect x="120" y="190" width="150" height="64" rx="8" fill="#fff3b0" stroke="#e6cf66"/>
+          <text x="134" y="218" font-size="14" font-weight="bold" fill="#2a2410">Ben Krause</text>
+          <text x="134" y="238" font-size="12" fill="#6b5d2a">Leitung Vertrieb</text></g>
+        <g><rect x="410" y="190" width="150" height="64" rx="8" fill="#fff3b0" stroke="#e6cf66"/>
+          <text x="424" y="218" font-size="14" font-weight="bold" fill="#2a2410">Carla Sommer</text>
+          <text x="424" y="238" font-size="12" fill="#6b5d2a">Leitung Labor</text></g>
+        <g><rect x="40" y="330" width="150" height="64" rx="8" fill="#fff3b0" stroke="#e6cf66"/>
+          <text x="54" y="358" font-size="14" font-weight="bold" fill="#2a2410">David Reuter</text>
+          <text x="54" y="378" font-size="12" fill="#6b5d2a">Außendienst</text></g>
+        <g><rect x="230" y="330" width="150" height="64" rx="8" fill="#fff3b0" stroke="#e6cf66"/>
+          <text x="244" y="358" font-size="14" font-weight="bold" fill="#2a2410">Eva Lang</text>
+          <text x="244" y="378" font-size="12" fill="#6b5d2a">Innendienst</text></g>
+        <g><rect x="420" y="330" width="150" height="64" rx="8" fill="#fff3b0" stroke="#e6cf66"/>
+          <text x="434" y="358" font-size="14" font-weight="bold" fill="#2a2410">Felix Thiel</text>
+          <text x="434" y="378" font-size="12" fill="#6b5d2a">Laborant</text></g>
+      </g>
+      <circle cx="395" cy="292" r="9" fill="#fff" stroke="#A32D2D" stroke-width="1.4"/>
+      <path d="M391 288L399 296M399 288L391 296" stroke="#A32D2D" stroke-width="1.5" stroke-linecap="round"/>
+      <text x="406" y="296" font-size="11" fill="#A32D2D" font-family="Segoe UI,Arial">Verbindung entfernen</text>
+    </svg>
+    <figcaption>Bild 1 – Post-it-Karten mit Verbindungen. Linienstil = Art der Beziehung. Roter Knopf = Verbindung lösen.</figcaption>
+  </figure>
+  <div class="legend">
+    <span><i class="sw" style="border-top:3px solid #185FA5"></i>disziplinarisch (primär)</span>
+    <span><i class="sw" style="border-top:3px dashed #BA7517"></i>fachlich</span>
+    <span><i class="sw" style="border-top:3px dotted #5F5E5A"></i>Vertretung</span>
+  </div>
+
+  <h2 class="pb">3 · Bedienung</h2>
+  <div class="row">
+    <figure>
+      <svg viewBox="0 0 200 130" xmlns="http://www.w3.org/2000/svg">
+        <rect x="55" y="40" width="90" height="50" rx="8" fill="#fff3b0" stroke="#e6cf66"/>
+        <path d="M100 18 l-9 12 h6 v18 h6 v-18 h6 z" fill="#0b4a86"/>
+        <path d="M100 112 l-9 -12 h6 v-18 h6 v18 h6 z" fill="#0b4a86"/>
+        <path d="M22 65 l12 -9 v6 h18 v6 h-18 v6 z" fill="#0b4a86"/>
+        <path d="M178 65 l-12 -9 v6 h-18 v6 h18 v6 z" fill="#0b4a86"/>
+      </svg>
+      <figcaption>Bild 2a – <strong>Ziehen:</strong> Karte mit der Maus frei verschieben.</figcaption>
+    </figure>
+    <figure>
+      <svg viewBox="0 0 200 130" xmlns="http://www.w3.org/2000/svg">
+        <rect x="14" y="20" width="74" height="40" rx="7" fill="#fff3b0" stroke="#e6cf66"/>
+        <rect x="112" y="74" width="74" height="40" rx="7" fill="#fff3b0" stroke="#e6cf66"/>
+        <line x1="78" y1="58" x2="120" y2="78" stroke="#185FA5" stroke-width="3"/>
+        <circle cx="149" cy="50" r="12" fill="#0b4a86"/>
+        <path d="M149 43 v14 M142 50 h14" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+      </svg>
+      <figcaption>Bild 2b – <strong>Verbinden:</strong> Start- und Ziel-Karte anklicken, Art wählen.</figcaption>
+    </figure>
+    <figure>
+      <svg viewBox="0 0 200 130" xmlns="http://www.w3.org/2000/svg">
+        <line x1="30" y1="95" x2="170" y2="35" stroke="#185FA5" stroke-width="3"/>
+        <circle cx="100" cy="65" r="14" fill="#fff" stroke="#A32D2D" stroke-width="2"/>
+        <path d="M94 59 l12 12 M106 59 l-12 12" stroke="#A32D2D" stroke-width="2.2" stroke-linecap="round"/>
+      </svg>
+      <figcaption>Bild 2c – <strong>Lösen:</strong> Linie anklicken und Verbindung entfernen.</figcaption>
+    </figure>
+  </div>
+  <p>Zusätzlich ordnet ein <strong>Auto-Layout</strong>-Knopf die Karten automatisch als sauberen
+     Baum von oben nach unten an – als Startanordnung, die man danach frei nachjustiert.</p>
+
+  <h2>4 · Teilbereiche</h2>
+  <p>Über ein Auswahlfeld schaltet man zwischen dem <strong>Gesamtunternehmen</strong> und einem einzelnen
+     <strong>Teilbereich</strong> (Abteilung) um. So bleibt das große Bild übersichtlich und man kann
+     bei Bedarf in eine Abteilung „hineinzoomen“.</p>
+  <figure>
+    <svg viewBox="0 0 420 70" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI,Arial">
+      <rect x="10" y="20" width="200" height="34" rx="6" fill="#fff" stroke="#cbd6e6"/>
+      <text x="24" y="42" font-size="13" fill="#1d2533">Gesamtunternehmen</text>
+      <path d="M186 33 l8 8 l8 -8" fill="none" stroke="#6a7585" stroke-width="2"/>
+      <text x="232" y="42" font-size="12" fill="#6a7585">▸ Vertrieb · Labor · Verwaltung …</text>
+    </svg>
+    <figcaption>Bild 3 – Umschalter Gesamtansicht ↔ einzelner Teilbereich.</figcaption>
+  </figure>
+
+  <h2>5 · Rückspiegelung in die Karten-Ansicht</h2>
+  <p>Was im Organigramm verbunden wird, erscheint automatisch auch auf der Mitarbeiterkarte –
+     ohne erneute Eingabe, weil beide Ansichten dieselbe Datenbasis nutzen.</p>
+  <figure>
+    <svg viewBox="0 0 320 170" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI,Arial">
+      <rect x="20" y="14" width="280" height="142" rx="10" fill="#f8fbff" stroke="#0b4a86" stroke-width="2"/>
+      <circle cx="60" cy="52" r="22" fill="#6b4fb3"/>
+      <text x="60" y="58" font-size="17" font-weight="bold" fill="#fff" text-anchor="middle">DR</text>
+      <text x="96" y="46" font-size="15" font-weight="bold" fill="#123">David Reuter</text>
+      <text x="96" y="66" font-size="12" fill="#444">🏷 Außendienst</text>
+      <text x="40" y="100" font-size="12" fill="#444">🏢 Vertrieb</text>
+      <text x="40" y="122" font-size="12" fill="#444">✉ d.reuter@nmg.de</text>
+      <text x="40" y="146" font-size="12" font-weight="bold" fill="#0b4a86">👤 Vorgesetzter: Ben Krause (disziplinarisch)</text>
+    </svg>
+    <figcaption>Bild 4 – Mitarbeiterkarte mit automatisch übernommener Vorgesetzten-Zeile.</figcaption>
+  </figure>
+
+  <h2 class="pb">6 · Datenmodell (Hintergrund)</h2>
+  <p>Drei Tabellen tragen das Ganze. Sie sind bereits angelegt:</p>
+  <figure>
+    <svg viewBox="0 0 680 240" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI,Arial">
+      <defs>
+        <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M1 1L9 5L1 9" fill="none" stroke="#6b4fb3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+        </marker>
+      </defs>
+      <line x1="250" y1="100" x2="430" y2="62" stroke="#6b4fb3" stroke-width="2" marker-end="url(#ar2)"/>
+      <line x1="250" y1="140" x2="430" y2="178" stroke="#6b4fb3" stroke-width="2" marker-end="url(#ar2)"/>
+      <text x="320" y="74" font-size="11" fill="#6b4fb3">1 : n</text>
+      <text x="320" y="170" font-size="11" fill="#6b4fb3">1 : n</text>
+      <g>
+        <rect x="40" y="80" width="210" height="80" rx="8" fill="#e8f1fb" stroke="#0b4a86"/>
+        <text x="56" y="106" font-size="13" font-weight="bold" fill="#0b4a86">tbl_mitarbeiter</text>
+        <text x="56" y="128" font-size="11" fill="#33475f">Name, Abteilung,</text>
+        <text x="56" y="146" font-size="11" fill="#33475f">Position, Kontakt …</text>
+      </g>
+      <g>
+        <rect x="430" y="26" width="220" height="74" rx="8" fill="#efeafb" stroke="#6b4fb3"/>
+        <text x="446" y="50" font-size="13" font-weight="bold" fill="#4a3a86">tbl_mitarbeiter_vorgesetzter</text>
+        <text x="446" y="72" font-size="11" fill="#4a3a86">wer → Chef · Art · primär</text>
+        <text x="446" y="90" font-size="11" fill="#4a3a86">(bildet das Organigramm)</text>
+      </g>
+      <g>
+        <rect x="430" y="140" width="220" height="74" rx="8" fill="#eaf3de" stroke="#3b6d11"/>
+        <text x="446" y="164" font-size="13" font-weight="bold" fill="#2c5a0f">tbl_mitarbeiter_feld / _wert</text>
+        <text x="446" y="186" font-size="11" fill="#2c5a0f">frei definierbare</text>
+        <text x="446" y="204" font-size="11" fill="#2c5a0f">Zusatzfelder je Person</text>
+      </g>
+    </svg>
+    <figcaption>Bild 5 – Ein Mitarbeiter, viele Vorgesetzten-Beziehungen und viele Zusatzfelder.</figcaption>
+  </figure>
+
+  <h2>7 · Umsetzung in Phasen</h2>
+  <table>
+    <tr><th>Phase</th><th>Inhalt</th><th>Status</th></tr>
+    <tr><td>1</td><td>Zusatzfelder (frei definierbar) + Vorgesetzten-Matrix erfassen, Detail-Dialog</td><td>fertig gebaut</td></tr>
+    <tr><td>2</td><td>Grafisches Organigramm-Board: ziehen · verbinden · lösen · Teilbereiche · Auto-Layout; Vorgesetzter erscheint auf der Karte</td><td>als Nächstes</td></tr>
+    <tr><td>3</td><td>Online/Mehrbenutzer: Login &amp; Rechte (jeder pflegt sein Profil)</td><td>mit Online-Schritt</td></tr>
+  </table>
+  <div class="note">Das Board kommt als <strong>zusätzliche Ansicht</strong> neben die gewohnte Kartenliste –
+     diese bleibt unverändert erhalten.</div>
+
+  <p class="sub" style="margin-top:24px">NMGone · Mitarbeiter &amp; Organigramm · interne Konzeptunterlage</p>
+
+</div>
+</body>
+</html>

@@ -31,9 +31,12 @@ ASSETS = os.path.join(ROOT, "assets")
 SHOTS  = os.path.join(ROOT, "praesentation_assets")
 LOGO_PROD = os.path.join(ASSETS, "NMGone.png")     # 1649x954
 LOGO_CORP = os.path.join(ASSETS, "nmg_logo.png")   # 2048x439  (NMG Pharma)
-SHOT_DASH  = os.path.join(SHOTS, "shot_dashboard.png")  # 1056x679
-SHOT_APPS  = os.path.join(SHOTS, "shot_apps.png")       # 1056x679
-SHOT_KASSE = os.path.join(SHOTS, "shot_kasse.png")      # 1056x699
+SHOT_DASH   = os.path.join(SHOTS, "shot_v2_startseite.png")    # 1936x1048 (V2.0)
+SHOT_KASSE  = os.path.join(SHOTS, "shot_v2_kasse.png")         # 1936x1048 (V2.0)
+SHOT_REPORT = os.path.join(SHOTS, "shot_v2_report.png")        # 1936x1048 (V2.0)
+SHOT_MITARB = os.path.join(SHOTS, "shot_v2_mitarbeiter.png")   # 1936x1048 (V2.0)
+SHOT_BEDARF = os.path.join(SHOTS, "shot_v2_bedarf.png")        # 1056x679  (V2.0)
+BEDARF_AR   = 1056/679
 
 prs = Presentation()
 prs.slide_width  = Inches(13.333)
@@ -127,8 +130,8 @@ def page_num(s, n):
     text(s, SW - 0.9, SH - 0.45, 0.6, 0.3, [[R(str(n), 10, GREY)]], align=PP_ALIGN.RIGHT)
 
 
-SHOT_AR = 1056/679   # Dashboard / Apps
-KASSE_AR = 1056/699  # Kasse
+SHOT_AR = 1936/1048   # V2.0-Screenshots (maximiert)
+KASSE_AR = 1936/1048
 
 # =====================================================================
 # 1 — TITEL
@@ -166,10 +169,10 @@ text(s, 0.9, 1.45, 11.5, 1.1, [
 ], line_spacing=1.15)
 
 stats = [
-    ("14", "Module unter einer\nOberfläche", NAVY),
+    ("14+", "Module unter einer\nOberfläche", NAVY),
     ("1", "Installation, eine\ngemeinsame Datenbasis", GREEN),
     ("V2.0", "Aktueller Stand –\nKasse inklusive", AMBER),
-    ("0 €", "laufende Lizenz-\nkosten Dritter", PURPLE),
+    ("100 %", "Eigenentwicklung –\nauf uns zugeschnitten", PURPLE),
 ]
 cx, cw, gap = 0.9, 2.65, 0.31
 for i, (big, lab, col) in enumerate(stats):
@@ -239,26 +242,30 @@ modules = [
     ("PK-Konditionen", "Kundenindividuelle Rabatte", NAVY),
     ("Kasse", "Verkauf + Wareneingang", AMBER),
     ("Kunden", "Kundenstamm & Historie", NAVY),
+    ("Mitarbeiter", "Zuständigkeiten & Profile", PURPLE),
     ("Schulbank", "Lernvorschläge pflegen", GREEN),
+    ("Report", "Kunden-Ampel & Übersicht", TEAL),
     ("Vergleichs-Suche", "PZN/Artikel schnell finden", TEAL),
     ("Globale Suche", "Kunde, Analyse, Artikel", NAVY),
     ("Abweichungsanalyse", "Manuell vs. Programm", AMBER),
+    ("Ges. Analysen", "Vorhandene Analysen öffnen", NAVY),
     ("Daten aktualisieren", "Stammdaten & Importe", GREY),
     ("Roadmap & ToDo", "Aufgaben im Blick", PURPLE),
+    ("Hilfe", "Bebildertes Handbuch", GREEN),
 ]
 cols = 4
-gw, gh = 2.6, 1.42
-gx, gy = 0.9, 2.05
+gw, gh = 2.6, 1.12
+gx, gy = 0.9, 1.95
 hgap = (SW - 2*gx - cols*gw) / (cols-1)
-vgap = 0.22
+vgap = 0.16
 for idx, (h, d, col) in enumerate(modules):
     r, c = divmod(idx, cols)
     x = gx + c*(gw+hgap); y = gy + r*(gh+vgap)
     rect(s, x, y, gw, gh, fill=WHITE, line=LINE_GREY, line_w=1.0,
          shape=MSO_SHAPE.ROUNDED_RECTANGLE, radius=0.08, shadow=True)
-    rect(s, x+0.18, y+0.2, 0.16, gh-0.4, fill=col)
-    text(s, x+0.46, y+0.18, gw-0.6, 0.5, [[R(h, 14.5, INK, bold=True)]])
-    text(s, x+0.46, y+0.7, gw-0.6, 0.6, [[R(d, 12, GREY)]])
+    rect(s, x+0.16, y+0.16, 0.14, gh-0.32, fill=col)
+    text(s, x+0.42, y+0.14, gw-0.55, 0.45, [[R(h, 13, INK, bold=True)]])
+    text(s, x+0.42, y+0.58, gw-0.55, 0.45, [[R(d, 10.5, GREY)]], line_spacing=1.0)
 page_num(s, 4)
 
 # =====================================================================
@@ -266,14 +273,14 @@ page_num(s, 4)
 # =====================================================================
 s = slide(LIGHT)
 text(s, 0.9, 0.5, 11.5, 0.85, [[R("So sieht NMGone aus", 34, NAVY, bold=True, font=HEAD)]])
-text(s, 0.9, 1.32, 11.5, 0.5, [[R("Klare, einheitliche Oberfläche – drei Ansichten aus dem laufenden Programm", 16, GREY, italic=True)]])
-iw = 3.8; ty5 = 2.3; cy5 = 5.05
-framed_shot(s, SHOT_DASH,  0.49,  ty5, iw, SHOT_AR,
+text(s, 0.9, 1.32, 11.5, 0.5, [[R("Modernes Design (V2.0) – drei Ansichten aus dem laufenden Programm", 16, GREY, italic=True)]])
+iw = 3.92; ty5 = 2.55; cy5 = 5.05
+framed_shot(s, SHOT_DASH,   0.42,  ty5, iw, SHOT_AR,
             "Startseite – Schnellzugriff & globale Suche", cap_y=cy5)
-framed_shot(s, SHOT_KASSE, 4.767, ty5, iw, KASSE_AR,
-            "Kasse – Verkauf, Wareneingang & Vorbestellungen", cap_y=cy5)
-framed_shot(s, SHOT_APPS,  9.044, ty5, iw, SHOT_AR,
-            "Apps – alle Module mit einem Klick", cap_y=cy5)
+framed_shot(s, SHOT_KASSE,  4.707, ty5, iw, SHOT_AR,
+            "Kasse – Verkauf & Wareneingang", cap_y=cy5)
+framed_shot(s, SHOT_REPORT, 8.994, ty5, iw, SHOT_AR,
+            "Report – Kunden-Ampel & Übersicht", cap_y=cy5)
 page_num(s, 5)
 
 # =====================================================================
@@ -353,8 +360,8 @@ text(s, 0.9, 5.75, 5.7, 1.5, [
 ], line_spacing=1.16)
 
 # Kasse-Screenshot rechts
-sw_w = 5.85
-framed_shot(s, SHOT_KASSE, 6.85, 1.15, sw_w, KASSE_AR,
+sw_w = 6.05
+framed_shot(s, SHOT_KASSE, 6.75, 1.45, sw_w, KASSE_AR,
             "Verkaufsmaske: Kunde, NMG-Artikel, Charge/Verfall, Rabatt – Beleg per Klick",
             cap_color=RGBColor(0xB9,0xCD,0xE8))
 page_num(s, 7)
@@ -369,8 +376,8 @@ benefits = [
     ("Zeit gespart", "Auswertungen und Verkaufsbelege entstehen in Minuten statt in Stunden Handarbeit.", NAVY),
     ("Nachvollziehbar", "Jede Änderung mit Mitarbeiter, Zeitpunkt und Vorher/Nachher revisionssicher protokolliert.", GREEN),
     ("Weniger Fehler", "Automatische Rabatt-Logik und Bestandsführung statt fehleranfälliger Handeingaben.", PURPLE),
-    ("Daten im Haus", "Lokale Datenbank – keine Cloud, keine sensiblen Apotheken-Daten bei Dritten.", AMBER),
-    ("Keine Fremdkosten", "Eigenentwicklung – keine laufenden Lizenzgebühren für externe Software.", TEAL),
+    ("Volle Datenhoheit", "Sensible Apotheken-Daten bleiben unter eigener Kontrolle, DSGVO-konform.", AMBER),
+    ("Zukunftssicher", "Modular aufgebaut und für zentrales, ortsunabhängiges Arbeiten vorbereitet.", TEAL),
     ("Maßgeschneidert", "Exakt auf unsere Prozesse zugeschnitten und jederzeit erweiterbar.", MIDBLUE),
 ]
 cols = 3; cw = 3.6; ch = 2.15; gx = 0.9; gy = 1.75
@@ -399,7 +406,7 @@ facts = [
     ("Automatische Updates", "Versionsschema mit Meilensteinen & Service-Packs; Updates per Installer."),
     ("Datensicherung", "Integrierte Backups; sensible Daten verlassen das Haus nicht."),
     ("Änderungsprotokoll", "Wer-was-wann über alle Module – Grundlage für Auswertung & Revision."),
-    ("Eigene Codebasis", "Vollständig im Haus entwickelt – unabhängig von Fremdanbietern."),
+    ("Vollständige Eigenentwicklung", "Unabhängig von Fremdanbietern und jederzeit an neue Anforderungen anpassbar."),
 ]
 for idx, (h, d) in enumerate(facts):
     r, c = divmod(idx, 2)
@@ -426,7 +433,7 @@ steps = [
     ("JETZT", "V2.0 im Einsatz", "Bedarfsanalyse, Mitarbeiter,\nHilfe & Report neu dabei", GREEN),
     ("IN ARBEIT", "Organigramm-Grafik", "Mitarbeiter-Struktur\nvisuell darstellen", NAVY),
     ("GEPLANT", "Biosimilar-Wissen", "Wirkstoff-Zuordnung in\nder Bedarfsanalyse", PURPLE),
-    ("DAS GROSSE ZIEL", "Cloud-basiertes Arbeiten", "Zentrale Daten, mehrplatz-\nfähig & weltweit  →  Folie 11", TEAL),
+    ("DAS GROSSE ZIEL", "Cloud-basiertes Arbeiten", "Zentrale Daten, mehrplatz-\nfähig & weltweit  →  Folie 12", TEAL),
 ]
 for i, (when, h, d, col) in enumerate(steps):
     cxp = c0 + i*((c3 - c0)/3)
@@ -444,7 +451,27 @@ for i, (when, h, d, col) in enumerate(steps):
 page_num(s, 10)
 
 # =====================================================================
-# 11 — VISION: CLOUD-BASIERTES ARBEITEN
+# 11 — GERADE IN PLANUNG (mit Bildern)
+# =====================================================================
+s = slide(WHITE)
+text(s, 0.9, 0.5, 11.5, 0.85, [[R("Gerade in Planung", 34, NAVY, bold=True, font=HEAD)]])
+text(s, 0.9, 1.32, 11.5, 0.5, [[R("Woran als Nächstes gearbeitet wird – ein Vorgeschmack aus dem Programm", 16, GREY, italic=True)]])
+ph = 3.3; py = 2.15; pcy = 5.7
+mw = ph * (1936/1048)
+framed_shot(s, SHOT_MITARB, (6.667-mw)/2, py, mw, 1936/1048,
+            "Mitarbeiter-Modul – aus den Profilen entsteht das Organigramm", cap_y=pcy)
+bdw = ph * BEDARF_AR
+framed_shot(s, SHOT_BEDARF, 6.667 + (6.667-bdw)/2, py, bdw, BEDARF_AR,
+            "Bedarfsanalyse – künftig mit Biosimilar-/Wirkstoff-Zuordnung", cap_y=pcy)
+text(s, 0.9, 6.35, 11.5, 0.6, [
+    [R("Das große Ziel bleibt das ", 14, INK),
+     R("cloud-basierte Arbeiten", 14, TEAL, bold=True),
+     R("  →  nächste Folie.", 14, INK)],
+], align=PP_ALIGN.CENTER)
+page_num(s, 11)
+
+# =====================================================================
+# 12 — VISION: CLOUD-BASIERTES ARBEITEN
 # =====================================================================
 s = slide(LIGHT)
 text(s, 0.9, 0.45, 11.6, 0.8, [[R("Cloud-basiertes Arbeiten", 32, NAVY, bold=True, font=HEAD)]])
@@ -484,17 +511,17 @@ rect(s, 9.65, 4.55, 0.36, 0.48, fill=MIDBLUE, shape=MSO_SHAPE.DOWN_ARROW)
 diagbox(7.4, 5.1, 4.85, 0.9, "Zentrale Datenbank · PostgreSQL (EU)", "die eine Quelle der Wahrheit",
         TEAL, fill=TEAL, tcol=WHITE, scol=ICE)
 
-# Footer: Phasen + Kosten
+# Footer: Phasen + Sicherheit (ohne Kosten)
 text(s, 0.9, 6.35, 11.6, 0.9, [
     [R("Aufbau in Phasen:  ", 12.5, NAVY, bold=True),
      R("Aufräumen → Backend → Cloud-Hosting → Umstellen → Go-Live", 12.5, INK)],
-    [R("Betriebskosten moderat:  ", 12.5, NAVY, bold=True),
-     R("ca. 30–80 €/Monat (EU-Hosting + Datenbank) · kein App-Store nötig", 12.5, GREY)],
+    [R("Sicher & schlank:  ", 12.5, NAVY, bold=True),
+     R("EU-Hosting, DSGVO-konform · kein App-Store nötig · schrittweise mit geringem Risiko", 12.5, GREY)],
 ], space_after=3, line_spacing=1.05)
-page_num(s, 11)
+page_num(s, 12)
 
 # =====================================================================
-# 12 — ABSCHLUSS
+# 13 — ABSCHLUSS
 # =====================================================================
 s = slide(DARKNAVY)
 rect(s, 0, 0, SW, SH, fill=DARKNAVY)
@@ -502,11 +529,11 @@ for i, c in enumerate([NAVY, MIDBLUE, GREEN, AMBER, PURPLE, TEAL]):
     rect(s, 1.0 + i*0.62, 1.4, 0.46, 0.46, fill=c, shape=MSO_SHAPE.ROUNDED_RECTANGLE, radius=0.25)
 text(s, 1.0, 2.5, 11.3, 1.6, [
     [R("Eine Plattform. Alle Prozesse.", 40, WHITE, bold=True, font=HEAD)],
-    [R("Im Haus gebaut.", 40, MIDBLUE, bold=True, font=HEAD)],
+    [R("Für NMG gebaut.", 40, MIDBLUE, bold=True, font=HEAD)],
 ], space_after=2)
 text(s, 1.0, 4.55, 11.0, 1.2, [
     [R("NMGone fasst Marktanalyse, Rabatte, Kunden und Verkauf zusammen – "
-       "nachvollziehbar, kostenneutral und exakt auf unsere Apotheken-Prozesse zugeschnitten.",
+       "nachvollziehbar, zukunftssicher und exakt auf unsere Apotheken-Prozesse zugeschnitten.",
        17, ICE)],
 ], line_spacing=1.25)
 rect(s, 1.0, 6.1, 3.0, 0.045, fill=MIDBLUE)

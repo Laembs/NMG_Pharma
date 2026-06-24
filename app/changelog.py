@@ -5,6 +5,12 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V2.1.0", "2026-06-24", [
+        "Neuer Meilenstein V2.1.0 - fasst den kompletten V2.0-Zyklus (V2.0 inkl. SP1-SP4: Bedarfsanalyse, Mitarbeiter & Personal, Kasse, Faktura, Report, neues Theme) zu einer stabilen Gesamtversion zusammen.",
+        "Hilfe: das bebilderte Handbuch ist vollstaendig - echte Screenshots fuer alle Module sowie neue Kapitel zu Faktura und Mitarbeiter & Personal.",
+        "Hilfe-Kasse erweitert: EK/Lagerwert, Freie Position, Vorbestellungen, MSK & Lieferschein und Auftrags-Verlauf Schritt fuer Schritt erklaert.",
+        "Anpassbare Druckvorlagen: Lieferschein (vorlagen/lieferschein.html) und Defektmeldung (vorlagen/defektmeldung.html) mit eigenen Firmendaten/Logo gestaltbar.",
+    ]),
     ("V2.0 SP4", "2026-06-24", [
         "Neue eigenstaendige App 'Faktura' - rechtskonforme Rechnungen und Gutschriften (Deutschland), eigenes Fenster/Taskleisten-Icon, teilt sich die Datenbank mit NMGone und der Kasse.",
         "Rechtssicher: der APU wird je Position zum Beleg eingefroren (spaetere Preislisten aendern alte Belege nicht); festgeschriebene Belege sind unveraenderbar (GoBD), Korrektur nur per Storno; lueckenlose Belegnummern je Belegart.",
