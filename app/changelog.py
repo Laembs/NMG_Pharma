@@ -7,6 +7,7 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 CHANGELOG: list[tuple[str, str, list[str]]] = [
     ("V2.1.0", "2026-06-24", [
         "Neuer Meilenstein V2.1.0 - fasst den kompletten V2.0-Zyklus (V2.0 inkl. SP1-SP4: Bedarfsanalyse, Mitarbeiter & Personal, Kasse, Faktura, Report, neues Theme) zu einer stabilen Gesamtversion zusammen.",
+        "Faktura ist jetzt direkt aus NMGone startbar - eigene Kachel auf der Apps-Seite und im Dashboard-Schnellzugriff (eigenes Fenster/Taskleisten-Icon).",
         "Hilfe: das bebilderte Handbuch ist vollstaendig - echte Screenshots fuer alle Module sowie neue Kapitel zu Faktura und Mitarbeiter & Personal.",
         "Hilfe-Kasse erweitert: EK/Lagerwert, Freie Position, Vorbestellungen, MSK & Lieferschein und Auftrags-Verlauf Schritt fuer Schritt erklaert.",
         "Anpassbare Druckvorlagen: Lieferschein (vorlagen/lieferschein.html) und Defektmeldung (vorlagen/defektmeldung.html) mit eigenen Firmendaten/Logo gestaltbar.",

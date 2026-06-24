@@ -26,6 +26,7 @@ from tkinter import ttk, messagebox, filedialog, simpledialog
 
 from .config import DB_PATH, ASSETS_DIR, OUTPUT_DIR
 from . import theme
+from . import tour
 
 # Palette aus dem zentralen Theme (gemeinsamer Look mit NMGone/Kasse).
 BG = theme.CARD
@@ -2391,6 +2392,7 @@ def run_standalone():
     except Exception:
         pass
     FakturaPanel(root, on_close=root.destroy).pack(fill="both", expand=True)
+    tour.maybe_show(root, "faktura", tour.faktura_steps())
     root.mainloop()
 
 

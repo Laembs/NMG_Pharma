@@ -29,6 +29,7 @@ from . import defektmeldung
 from . import kasse_reports
 from . import einstellungen
 from . import theme
+from . import tour
 
 # Redesign: Palette aus dem zentralen Theme beziehen (gemeinsamer Look mit NMGone).
 BG = theme.CARD          # Inhaltsflaechen (Karten)

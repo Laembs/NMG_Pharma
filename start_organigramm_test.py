@@ -82,8 +82,7 @@ WD = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 MONATE = ["", "Januar", "Februar", "März", "April", "Mai", "Juni",
           "Juli", "August", "September", "Oktober", "November", "Dezember"]
 
-from app.config import DB_PATH  # gemeinsame NMGone-Datenbank
-from app import tour
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "organigramm_test.db")
 
 DEMO_EMPS = [
     (1, "Anna",  "Maier",  "Leitung",    "Geschäftsführung", 470, 40),
@@ -148,7 +147,7 @@ def init_db(reset=False):
             con.execute("ALTER TABLE tbl_mitarbeiter_arbeitsbereich ADD COLUMN stufe INTEGER DEFAULT 0")
     except Exception:
         pass
-    if False:  # keine Demo-Daten in der echten NMGone-Datenbank
+    if not con.execute("SELECT COUNT(*) FROM tbl_mitarbeiter").fetchone()[0]:
         for i, v, n, ab, po, x, y in DEMO_EMPS:
             con.execute("INSERT INTO tbl_mitarbeiter(id,vorname,name,abteilung,position,board_x,board_y) "
                         "VALUES(?,?,?,?,?,?,?)", (i, v, n, ab, po, x, y))
@@ -214,7 +213,7 @@ def init_db(reset=False):
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("NMGone · Mitarbeiter & Personal")
+        root.title("Mitarbeiter-Board · Testversion")
         root.geometry("1200x780")
         root.configure(bg=BG)
         self.style = ttk.Style(root)
@@ -256,7 +255,7 @@ class App:
         h.pack_propagate(False)
         tk.Label(h, text="👥  Mitarbeiter-Board", bg=SIDEBAR, fg="white",
                  font=(FONT, 18, "bold")).pack(side="left", padx=22)
-        tk.Label(h, text="Organigramm · Abwesenheiten · Arbeitsbereiche",
+        tk.Label(h, text="Testversion · eigene Demo-Datenbank · ändert nichts an NMGone",
                  bg=SIDEBAR, fg=SIDEBAR_TEXT, font=(FONT, 10)).pack(side="left", padx=4)
         tk.Button(h, text="⚙", command=self._settings_dialog, bg=SIDEBAR, fg="white",
                   relief="flat", font=(FONT, 17), padx=10, cursor="hand2",
@@ -354,6 +353,7 @@ class App:
         self.art.pack(side="left", pady=10)
         self._tbtn(t, "✦  Auto-Layout", self.auto_layout)
         self._tbtn(t, "➕  Neue Karte", lambda: self._card_form(None))
+        self._tbtn(t, "⟳  Demo zurücksetzen", self.reset_demo)
         leg = tk.Frame(t, bg=CARD)
         leg.pack(side="right", padx=16)
         for art in ARTEN:
@@ -591,6 +591,14 @@ class App:
         con.close()
         self.redraw_orga()
         self.status.set("Auto-Layout angewendet.")
+
+    def reset_demo(self):
+        if not messagebox.askyesno("Demo zurücksetzen", "Test-Datenbank löschen und Demo-Daten neu laden?"):
+            return
+        init_db(reset=True)
+        self.load()
+        self.show_orga()
+        self.status.set("Demo-Daten zurückgesetzt.")
 
     def _card_form(self, e):
         win = tk.Toplevel(self.root)
@@ -1616,16 +1624,11 @@ class App:
         refresh()
 
 
-def run_standalone():
+def main():
     init_db()
     root = tk.Tk()
     App(root)
-    tour.maybe_show(root, "personal", tour.personal_steps())
     root.mainloop()
-
-
-def main():
-    run_standalone()
 
 
 if __name__ == "__main__":

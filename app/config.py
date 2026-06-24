@@ -98,7 +98,27 @@ def jahr_quartal_pfad(base, kategorie: str = "", dt=None):
 
 ASSETS_DIR = BASE_DIR / "assets"
 VERSION_FILE = BASE_DIR / "version.json"
-DB_PATH = DATA_DIR / "nmg_startdatenbank.sqlite"
+
+
+def _select_db_filename() -> str:
+    """Waehlt die zu nutzende SQLite-Datei.
+
+    Umschalten ohne Code-Aenderung ueber Umgebungsvariablen:
+      * NMGONE_DEMO=1            -> data/nmg_demodatenbank.sqlite (Demo)
+      * NMGONE_DB_FILE=<name>    -> data/<name> (beliebige Datei, hat Vorrang)
+    Ohne beides: die normale Produktiv-Datenbank.
+    """
+    explicit = os.environ.get("NMGONE_DB_FILE", "").strip()
+    if explicit:
+        return explicit
+    if os.environ.get("NMGONE_DEMO", "").strip() in ("1", "true", "True", "ja"):
+        return "nmg_demodatenbank.sqlite"
+    return "nmg_startdatenbank.sqlite"
+
+
+DB_FILENAME = _select_db_filename()
+DB_PATH = DATA_DIR / DB_FILENAME
+IS_DEMO_DB = DB_FILENAME != "nmg_startdatenbank.sqlite"
 
 REFERENCE_XLSX = DATA_DIR / "NMG_Hochpreiser_Vollversion_1_3_NMG_STAMM_APU_TAXEK.xlsx"
 LINDEN_REFERENCE_XLSX = DATA_DIR / "Linden_Apo_Auengrund_Referenz.xlsx"
@@ -125,6 +145,17 @@ def _copy_seed_data_if_needed() -> None:
     """
     for folder in [DATA_DIR, OUTPUT_DIR, SAVED_ANALYSES_DIR, IMPORT_DIR, BACKUP_DIR, UPDATE_DIR, LOG_DIR]:
         folder.mkdir(parents=True, exist_ok=True)
+
+    # Demo-/Sondermodus: Datei wird NICHT automatisch erzeugt. Sie muss
+    # vorhanden sein (z.B. via scripts/seed_demodaten.py). Klarer Hinweis
+    # statt stillem Kopieren der Produktivdaten.
+    if IS_DEMO_DB:
+        if not (DB_PATH.exists() and DB_PATH.stat().st_size > 1024):
+            raise FileNotFoundError(
+                f"Demo-/Sonderdatenbank fehlt: {DB_PATH}\n"
+                f"Bitte zuerst erzeugen, z.B.:  python scripts/seed_demodaten.py"
+            )
+        return
 
     if DB_PATH.exists() and DB_PATH.stat().st_size > 1024:
         return

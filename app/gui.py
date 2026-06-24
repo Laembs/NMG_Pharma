@@ -1462,6 +1462,7 @@ class NMGApp(tk.Tk):
             "todo_center": self.show_todo_center,
             "kasse": self.open_kasse_app,
             "bestell_center": self.open_kasse_app,
+            "faktura": self.open_faktura_app,
             "auswertungen": self.open_auswertungen_app,
             "report": self.show_report_page,
             "roadmap": self.show_roadmap_page,
@@ -4260,6 +4261,7 @@ LIMIT 500
             ("schulbank",        "🎓", "Schulbank",            "Lernvorschläge bearbeiten.",                lambda: self.show_schulbank_page("Schulbank"),"#11823b"),
             ("kunden",           "👥", "Kunden",           "Kundenstamm und -history.",                 self.show_kunden_center,                     "#0b4a86"),
             ("kasse",            "🛒", "Kasse",                "Verkauf an Apotheken + Wareneingang.",      self.open_kasse_app,                         "#8b5a00"),
+            ("faktura",          "🧾", "Faktura",              "Rechnungen und Gutschriften erstellen.",    self.open_faktura_app,                       "#0b4a86"),
             ("auswertungen",     "📑", "Auswertungen",         "Verkäufe, Kunden, Artikel frei auswerten.", self.open_auswertungen_app,                  "#0b6e6e"),
             ("todo",             "✅", "ToDo",                 "Aufgaben und offene Punkte.",               self.show_todo_center,                        "#11823b"),
             ("mitarbeiter",      "👥", "Mitarbeiter",          "Organigramm, Abwesenheiten, Arbeitsbereiche.", self.open_personal_app,                   "#6b4fb3"),
@@ -7395,6 +7397,7 @@ LIMIT 500
             ("\U0001f464", "Mitarbeiter", "Organigramm, Abwesenheiten, Arbeitsbereiche.", self.open_personal_app, "#6b4fb3"),
             ("\u2705", "ToDo", "Aufgaben, offene Punkte und Notizen.", self.show_todo_center, "#11823b"),
             ("\U0001f6d2", "Kasse", "Verkauf an Apotheken + Wareneingang.", self.open_kasse_app, "#8b5a00"),
+            ("\U0001f9fe", "Faktura", "Rechnungen und Gutschriften erstellen.", self.open_faktura_app, "#0b4a86"),
             ("\U0001f4d1", "Auswertungen", "Verkäufe, Kunden, Artikel frei auswerten und exportieren.", self.open_auswertungen_app, "#0b6e6e"),
             ("\U0001f50d", _T("Vergleichs-Suche"), _T("PZN oder Artikelname schnell in allen Wissens-Tabellen finden."), self.open_vergleichssuche_window, "#0b6e6e"),
             # V1.1 SP9: Globale Suche als App-Kachel.
@@ -7973,6 +7976,32 @@ LIMIT 500
         except Exception as exc:
             messagebox.showerror("Mitarbeiter & Personal",
                                  f"App konnte nicht gestartet werden:\n{exc}", parent=self)
+
+    def open_faktura_app(self):
+        """Faktura-App (Rechnungen & Gutschriften) als EIGENEN Prozess starten.
+        Teilt sich die DB mit NMGone, eigenes Fenster/Taskleisten-Icon. Zweiter
+        Aufruf bringt keinen weiteren Start, solange der Prozess laeuft."""
+        import subprocess
+        proc = getattr(self, "_faktura_proc", None)
+        if proc is not None and proc.poll() is None:
+            messagebox.showinfo(
+                "NMG Faktura",
+                "Die Faktura läuft bereits in einem eigenen Fenster.\n"
+                "Bitte über die Taskleiste nach vorn holen.", parent=self)
+            return
+        try:
+            flags = 0
+            if sys.platform == "win32":
+                flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable, "--faktura"]
+            else:
+                start_py = Path(__file__).resolve().parent.parent / "start_faktura.py"
+                cmd = [sys.executable, str(start_py)]
+            self._faktura_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
+        except Exception as exc:
+            messagebox.showerror("NMG Faktura",
+                                 f"Faktura konnte nicht gestartet werden:\n{exc}", parent=self)
 
     def open_auswertungen_app(self):
         """Auswertungs-/Report-Modul als EIGENEN Prozess starten (NMGone.exe
