@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<title>Auftragsbestätigung {{auftragsnr}}</title>
+<title>Lieferschein {{lieferscheinnr}}</title>
 <style>
   * { box-sizing: border-box; }
   body { font-family: Arial, Helvetica, sans-serif; color: #222; margin: 0; padding: 28px; font-size: 13px; }
@@ -22,6 +22,8 @@
   table.positionen .r { text-align: right; }
   table.positionen tfoot td { border-top: 2px solid #0b4a86; font-size: 14px; }
   .fuss { margin-top: 26px; color: #555; font-size: 12px; line-height: 1.5; border-top: 1px solid #ddd; padding-top: 10px; }
+  .unterschrift { margin-top: 40px; display: flex; justify-content: space-between; }
+  .unterschrift .feld { width: 45%; border-top: 1px solid #999; padding-top: 4px; font-size: 11px; color: #666; }
   @media print { body { padding: 0; } }
 </style>
 </head>
@@ -35,12 +37,13 @@
       {{absender_adresse}}<br>
       {{absender_kontakt}}
     </div>
-    <div class="titel">Auftragsbestätigung</div>
+    <div class="titel">Lieferschein</div>
   </div>
 
   <div class="meta">
     <div>
-      <strong>Auftrags-Nr:</strong> {{auftragsnr}}<br>
+      <strong>Lieferschein-Nr:</strong> {{lieferscheinnr}}<br>
+      <strong>zum Auftrag:</strong> {{auftragsnr}}<br>
       <strong>Datum:</strong> {{datum}}
     </div>
     <div class="kunde">
@@ -61,23 +64,27 @@
   <table class="positionen">
     <thead>
       <tr>
-        <th>Pos</th><th>PZN</th><th>Artikel</th><th>Liefervorgabe</th>
-        <th class="r">Menge</th><th class="r">APU €</th>
-        <th class="r">Rabatt %</th><th class="r">Summe €</th>
+        <th>Pos</th><th>PZN</th><th>Artikel</th><th>PCK</th>
+        <th>Charge</th><th>Verfall</th><th class="r">Menge</th>
       </tr>
     </thead>
     <tbody>
       {{positionen}}
     </tbody>
     <tfoot>
-      <tr><td colspan="7" class="r"><strong>Gesamt (netto)</strong></td>
-          <td class="r"><strong>{{gesamt}}</strong></td></tr>
+      <tr><td colspan="6" class="r"><strong>Gesamtmenge</strong></td>
+          <td class="r"><strong>{{gesamt_menge}}</strong></td></tr>
     </tfoot>
   </table>
 
+  <div class="unterschrift">
+    <div class="feld">Ware vollständig und einwandfrei erhalten (Datum, Unterschrift)</div>
+    <div class="feld">Bemerkungen</div>
+  </div>
+
   <div class="fuss">
-    Vielen Dank für Ihren Auftrag. Diese Auftragsbestätigung wurde maschinell
-    erstellt und ist ohne Unterschrift gültig.
+    In MSK erfasst von {{msk_von}} am {{msk_am}}. Bitte prüfen Sie die Lieferung
+    bei Erhalt. Dieser Lieferschein wurde maschinell erstellt.
   </div>
 
 </div>

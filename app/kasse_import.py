@@ -172,13 +172,13 @@ def import_wareneingang(db_path, path) -> dict:
                 "INSERT INTO tbl_wareneingang_positionen(we_id,pzn,artikelname,charge,verfall,menge,ek) "
                 "VALUES(?,?,?,?,?,?,?)", (we_id, pzn, artikelname, charge, verfall, menge, ek))
             upd = con.execute(
-                "UPDATE tbl_lagerbestand SET menge=menge+?, aktualisiert_am=? "
+                "UPDATE tbl_lagerbestand SET menge=menge+?, ek=COALESCE(?, ek), aktualisiert_am=? "
                 "WHERE pzn=? AND COALESCE(charge,'')=? AND COALESCE(verfall,'')=?",
-                (menge, jetzt, pzn, charge, verfall))
+                (menge, ek, jetzt, pzn, charge, verfall))
             if upd.rowcount == 0:
                 con.execute(
-                    "INSERT INTO tbl_lagerbestand(pzn,artikelname,charge,verfall,menge,aktualisiert_am) "
-                    "VALUES(?,?,?,?,?,?)", (pzn, artikelname, charge, verfall, menge, jetzt))
+                    "INSERT INTO tbl_lagerbestand(pzn,artikelname,charge,verfall,menge,ek,aktualisiert_am) "
+                    "VALUES(?,?,?,?,?,?,?)", (pzn, artikelname, charge, verfall, menge, ek, jetzt))
                 neu += 1
             else:
                 erhoeht += 1
