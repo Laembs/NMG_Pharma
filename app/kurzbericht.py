@@ -28,6 +28,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 # Spaltenindex (1-basiert) in der Detail-Auswertung, siehe exporter.LINDEN_HEADERS.
 COL_PZN = 1
 COL_ARTIKEL = 2
+COL_EK = 6             # Taxe-/Apotheken-EK des abgegebenen Artikels
 COL_MENGE = 7          # Abverkaeufe im Zeitraum
 COL_SORTIMENT = 8      # "X" / "X Austausch moegl" / leer
 COL_PZN_NMG = 9        # NMG-PZN, auf die umgestellt werden kann
@@ -67,15 +68,21 @@ def _eur(value: float, suffix: str = " €") -> str:
 
 # ── 1) Kennzahlen aus der Detail-Auswertung sammeln ──────────────────────────
 def collect_summary(detail_xlsx: str | Path, zeitraum_monate: int | None = None,
-                    apotheke: str = "") -> dict:
-    """Liest die Detail-Auswertung und verdichtet sie zu Kennzahlen."""
+                    apotheke: str = "", min_ek: float = 0.0) -> dict:
+    """Liest die Detail-Auswertung und verdichtet sie zu Kennzahlen.
+
+    min_ek > 0: nur Artikel mit Taxe-/Apotheken-EK über diesem Wert (Hochpreiser)
+    fliessen in den Kurzbericht ein.
+    """
     path = Path(detail_xlsx)
     wb = load_workbook(path, data_only=True, read_only=True)
     ws = wb.active
 
     positionen = 0
+    gefiltert = 0
     umstellbar = 0
     im_sortiment = 0
+    ueber_wirkstoff = 0
     einsparung_gesamt = 0.0
     umsatz_gesamt = 0.0
     hebel: list[tuple[str, str, float]] = []  # (pzn, artikel, einsparung)
@@ -86,6 +93,11 @@ def collect_summary(detail_xlsx: str | Path, zeitraum_monate: int | None = None,
         pzn = str(row[COL_PZN - 1] or "").strip()
         if not pzn:
             continue
+        # Filter: nur Hochpreiser (EK über Schwelle) in den Kurzbericht.
+        ek = _num(row[COL_EK - 1] if len(row) >= COL_EK else 0)
+        if min_ek and ek <= min_ek:
+            gefiltert += 1
+            continue
         positionen += 1
         einsp = _num(row[COL_EINSPARUNG - 1] if len(row) >= COL_EINSPARUNG else 0)
         umsatz_gesamt += _num(row[COL_UMSATZ - 1] if len(row) >= COL_UMSATZ else 0)
@@ -95,6 +107,8 @@ def collect_summary(detail_xlsx: str | Path, zeitraum_monate: int | None = None,
             umstellbar += 1
         if sortiment:
             im_sortiment += 1
+        if sortiment.startswith("Austausch (Wirkstoff)") or sortiment.startswith("Austausch mögl. (Wirkstoff)"):
+            ueber_wirkstoff += 1
         einsparung_gesamt += einsp
         if einsp > 0:
             artikel = str(row[COL_ARTIKEL - 1] or "").strip()
@@ -113,9 +127,12 @@ def collect_summary(detail_xlsx: str | Path, zeitraum_monate: int | None = None,
         "apotheke": apotheke,
         "erstellt": datetime.now(),
         "zeitraum_monate": z,
+        "min_ek": min_ek,
+        "gefiltert": gefiltert,
         "positionen": positionen,
         "umstellbar": umstellbar,
         "im_sortiment": im_sortiment,
+        "ueber_wirkstoff": ueber_wirkstoff,
         "umstellungsgrad": quote,
         "einsparung_zeitraum": einsparung_gesamt,
         # Beide Sichten hochgerechnet aus dem tatsaechlichen Datenzeitraum, damit
@@ -145,8 +162,9 @@ def create_kurzbericht_excel(summary: dict, out_path: str | Path) -> Path:
 
     title = ws.cell(1, 1, "Bedarfsanalyse – Kurzbericht")
     title.font = Font(bold=True, size=16, color=ACCENT)
+    filter_txt = f"  ·  nur Artikel mit Taxe-EK > {_eur(summary['min_ek'])}" if summary.get("min_ek") else ""
     sub = ws.cell(2, 1, f"{summary.get('apotheke') or ''}  ·  Stand {summary['erstellt']:%d.%m.%Y}"
-                        f"  ·  Zeitraum {summary['zeitraum_monate']} Monate")
+                        f"  ·  Zeitraum {summary['zeitraum_monate']} Monate{filter_txt}")
     sub.font = Font(size=10, color="777777")
 
     _xl_kpi(ws, 4, "Einsparpotenzial 6 Monate (hochgerechnet)",
@@ -155,12 +173,13 @@ def create_kurzbericht_excel(summary: dict, out_path: str | Path) -> Path:
             _eur(summary["einsparung_12m"]), GREEN)
     _xl_kpi(ws, 6, "Positionen gesamt", summary["positionen"])
     _xl_kpi(ws, 7, "davon umstellbar auf NMG", summary["umstellbar"])
-    _xl_kpi(ws, 8, "Umstellungsgrad", f"{summary['umstellungsgrad']:.0f} %")
-    _xl_kpi(ws, 9, "Umsatz gesamt (EK x Absatz)", _eur(summary["umsatz_gesamt"]))
-    _xl_kpi(ws, 10, "Datengrundlage", f"{summary['zeitraum_monate']} Monate Absatz")
+    _xl_kpi(ws, 8, "davon über Wirkstoff zugeordnet", summary.get("ueber_wirkstoff", 0))
+    _xl_kpi(ws, 9, "Umstellungsgrad", f"{summary['umstellungsgrad']:.0f} %")
+    _xl_kpi(ws, 10, "Umsatz gesamt (EK x Absatz)", _eur(summary["umsatz_gesamt"]))
+    _xl_kpi(ws, 11, "Datengrundlage", f"{summary['zeitraum_monate']} Monate Absatz")
 
     # Top-10-Tabelle
-    head_row = 11
+    head_row = 12
     headers = ["#", "Artikel", "PZN", "Einsparung"]
     for c, h in enumerate(headers, start=1):
         cell = ws.cell(head_row, c, h)
@@ -305,8 +324,9 @@ def create_kurzbericht_pdf(summary: dict, out_path: str | Path) -> Path:
 
     # Kopf
     line("Bedarfsanalyse - Kurzbericht", size=20, style="B", color=(11, 74, 134), h=11)
+    filter_txt = f"   |   nur Taxe-EK > {_eur(summary['min_ek'], ' EUR')}" if summary.get("min_ek") else ""
     line(f"{summary.get('apotheke') or ''}   |   Stand {summary['erstellt']:%d.%m.%Y}"
-         f"   |   Zeitraum {summary['zeitraum_monate']} Monate", size=10, color=(120, 120, 120))
+         f"   |   Zeitraum {summary['zeitraum_monate']} Monate{filter_txt}", size=10, color=(120, 120, 120))
     pdf.ln(3)
 
     # Zwei grosse Einspar-Zahlen nebeneinander: 6 und 12 Monate.
@@ -342,6 +362,7 @@ def create_kurzbericht_pdf(summary: dict, out_path: str | Path) -> Path:
     kpis = [
         ("Positionen gesamt", str(summary["positionen"])),
         ("davon umstellbar auf NMG", str(summary["umstellbar"])),
+        ("davon über Wirkstoff zugeordnet", str(summary.get("ueber_wirkstoff", 0))),
         ("Umstellungsgrad", f"{summary['umstellungsgrad']:.0f} %"),
         ("Umsatz gesamt (EK x Absatz)", _eur(summary["umsatz_gesamt"], " EUR")),
     ]
@@ -370,8 +391,12 @@ def create_kurzbericht_pdf(summary: dict, out_path: str | Path) -> Path:
 
 # ── 5) Orchestrator ──────────────────────────────────────────────────────────
 def create_kurzbericht(detail_xlsx: str | Path, analyse_name: str, out_dir: str | Path,
-                       zeitraum_monate: int | None = None, apotheke: str = "") -> dict:
+                       zeitraum_monate: int | None = None, apotheke: str = "",
+                       min_ek: float = 200.0) -> dict:
     """Erzeugt Excel- und PDF-Kurzbericht aus der Detail-Auswertung.
+
+    min_ek: nur Artikel mit Taxe-EK über diesem Wert (Default 200 €) kommen in den
+    Kurzbericht (Fokus Hochpreiser). 0 = kein Filter.
 
     Liefert {"excel": Path|None, "pdf": Path|None, "summary": dict}. Einzelne
     Fehler (z.B. fehlende PDF-Lib) brechen den Gesamtlauf NICHT ab.
@@ -381,7 +406,7 @@ def create_kurzbericht(detail_xlsx: str | Path, analyse_name: str, out_dir: str 
     safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in (analyse_name or "Bedarfsanalyse")).strip("_") or "Bedarfsanalyse"
 
     summary = collect_summary(detail_xlsx, zeitraum_monate=zeitraum_monate,
-                              apotheke=apotheke or analyse_name)
+                              apotheke=apotheke or analyse_name, min_ek=min_ek)
     result = {"excel": None, "pdf": None, "summary": summary}
 
     try:

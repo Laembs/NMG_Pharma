@@ -940,6 +940,92 @@ def _aggregate_rows_by_pzn(rows):
     return result
 
 
+def _wnorm(value):
+    """Vergleichsschluessel fuer Wirkstoffnamen: klein, ohne Sonderzeichen."""
+    text = str(value or "").strip().lower()
+    text = text.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
+    return re.sub(r"[^a-z0-9]+", "", text)
+
+
+def _substance_norm(value):
+    """Wirkstoff-Vergleichsschluessel OHNE angehaengte Staerke.
+
+    NMG-Stamm fuehrt den Wirkstoff inkl. Staerke ("Etanercept 50 mg"), die
+    Wirkstoff-Tabelle der abgegebenen Artikel fuehrt nur den Namen ("Etanercept")
+    + separate Staerke. Damit der Austausch ueber den Wirkstoff matcht, wird die
+    trailing Staerke+Einheit entfernt.
+    """
+    s = str(value or "")
+    s = re.sub(r"\s+\d[\d.,]*\s*(mg|µg|mcg|ug|g|ml|i\.?e\.?|%).*$", "", s, flags=re.IGNORECASE)
+    return _wnorm(s)
+
+
+def _pzn_core(value):
+    """Wie _pzn, strippt aber zusaetzlich das ' /N'-Lagervarianten-Suffix."""
+    text = re.sub(r"\s*/\s*\w+\s*$", "", str(value or "").strip())
+    return _pzn(text)
+
+
+def _build_wirkstoff_indices(con):
+    """Indizes fuer das Wirkstoff-/Austausch-Blatt und den Wirkstoff-Fallback:
+    - wirkstoff_by_pzn:  norm_pzn -> (wirkstoff, staerke)
+    - nmg_by_pzn:        norm_pzn -> artikelname (NMG-Stamm)
+    - nmg_by_wirkstoff:  wirkstoff_norm -> [(norm_pzn, artikelname)]
+    - nmg_detail_by_pzn: norm_pzn -> {apu, rabatt, lieferbar, bevorratung, liefervorschlag}
+    """
+    wirkstoff_by_pzn = {}
+    try:
+        for pzn, wirkstoff, staerke in con.execute(
+            "SELECT pzn, wirkstoff, staerke FROM tbl_wirkstoff_staerke"
+        ):
+            key = _pzn_core(pzn)
+            if key and key not in wirkstoff_by_pzn:
+                wirkstoff_by_pzn[key] = (str(wirkstoff or "").strip(), str(staerke or "").strip())
+    except Exception:
+        pass
+
+    nmg_by_pzn = {}
+    nmg_by_wirkstoff = {}
+    nmg_detail_by_pzn = {}
+    try:
+        for pzn, name, wirkstoffe, apu in con.execute(
+            "SELECT pzn, artikelname, wirkstoffe, apu FROM tbl_nmg_stamm"
+        ):
+            key = _pzn_core(pzn)
+            nm = str(name or "").strip()
+            if not key:
+                continue
+            nmg_by_pzn[key] = nm
+            nmg_detail_by_pzn.setdefault(key, {})["apu"] = apu
+            wk = _substance_norm(wirkstoffe)
+            if wk:
+                nmg_by_wirkstoff.setdefault(wk, []).append((key, nm))
+    except Exception:
+        pass
+
+    # Rabatt + Lieferfaehigkeit je NMG-PZN ergaenzen (fuer den Wirkstoff-Fallback).
+    try:
+        for nmg_pzn, rabatt in con.execute("SELECT nmg_pzn, rabatt FROM nmg_rabatte"):
+            d = nmg_detail_by_pzn.get(_pzn_core(nmg_pzn))
+            if d is not None and rabatt is not None:
+                d["rabatt"] = rabatt
+    except Exception:
+        pass
+    try:
+        for nmg_pzn, lieferbar, bevorratung, liefervorschlag in con.execute(
+            "SELECT nmg_pzn, lieferbar, bevorratung_angeraten, liefervorschlag FROM tbl_lieferfaehigkeit"
+        ):
+            d = nmg_detail_by_pzn.get(_pzn_core(nmg_pzn))
+            if d is not None:
+                d["lieferbar"] = lieferbar
+                d["bevorratung"] = bevorratung
+                d["liefervorschlag"] = liefervorschlag
+    except Exception:
+        pass
+
+    return wirkstoff_by_pzn, nmg_by_pzn, nmg_by_wirkstoff, nmg_detail_by_pzn
+
+
 def create_vorlage_export(input_file: str | Path, apotheke: str, on_duplicate_prompt=None) -> Path:
     input_file = Path(input_file)
     if not DB_PATH.exists():
@@ -1005,6 +1091,15 @@ def create_vorlage_export(input_file: str | Path, apotheke: str, on_duplicate_pr
         # (~18k Zeilen) gefetcht und in Python iteriert - bei 400+ Zeilen
         # >90 % der Auswertungszeit (~170 s von 180 s). Mit Index nur Dict-Lookup.
         trace_index = build_trace_index(con)
+
+        # Indizes fuer das zusaetzliche Wirkstoff-/NMG-Austausch-Blatt und den
+        # Wirkstoff-Fallback (NMG-Empfehlung ueber den Wirkstoff, wenn keine
+        # direkte PZN-Zuordnung existiert).
+        wirkstoff_by_pzn, nmg_by_pzn, nmg_by_wirkstoff, nmg_detail_by_pzn = _build_wirkstoff_indices(con)
+        wirkstoff_rows = []
+        seen_wirkstoff_pzn = set()
+        wirkstoff_fallback_einzel = 0
+        wirkstoff_fallback_mehrere = 0
 
         auswertung_id = None
         statistik = {"positionen": 0, "nmg_treffer": 0, "nicht_nmg": 0, "gesamt_absatz": 0.0}
@@ -1094,14 +1189,84 @@ def create_vorlage_export(input_file: str | Path, apotheke: str, on_duplicate_pr
             })
             abgleich_rows.append(abgleich_trace)
 
-            ws.cell(r_idx, 8, hit.get("im_sortiment"))
+            # Wirkstoff-Fallback: Keine direkte NMG-Zuordnung gefunden, aber es gibt
+            # NMG-Produkt(e) mit demselben Wirkstoff -> als Empfehlung uebernehmen.
+            #   genau 1 Treffer  -> wird zur NMG-Empfehlung (PZN NMG + APU/Rabatt/Liefer)
+            #   mehrere Treffer  -> alle in "austauschbar gegen", PZN NMG bleibt leer
+            if not hit.get("nmg_pzn") and hit.get("apu_nmg") is None:
+                wk_name = wirkstoff_by_pzn.get(original_pzn, ("", ""))[0]
+                cands = nmg_by_wirkstoff.get(_substance_norm(wk_name), []) if wk_name else []
+                # Dubletten (gleiche PZN) zusammenfassen, Reihenfolge erhalten.
+                uniq = []
+                seen_c = set()
+                for cp, cn in cands:
+                    if cp and cp not in seen_c:
+                        seen_c.add(cp)
+                        uniq.append((cp, cn))
+                if len(uniq) == 1:
+                    npzn, nname = uniq[0]
+                    d = nmg_detail_by_pzn.get(npzn, {})
+                    hit = dict(hit)
+                    hit.update({
+                        "im_sortiment": "Austausch (Wirkstoff)",
+                        "nmg_pzn": npzn,
+                        "apu_nmg": d.get("apu"),
+                        "rabatt": d.get("rabatt"),
+                        "lieferbar": d.get("lieferbar"),
+                        "bevorratung": d.get("bevorratung"),
+                        "liefervorschlag": d.get("liefervorschlag"),
+                        "austauschbar_gegen": None,
+                    })
+                    wirkstoff_fallback_einzel += 1
+                elif len(uniq) > 1:
+                    text = " | ".join((f"{p} – {n}" if n else p) for p, n in uniq)
+                    hit = dict(hit)
+                    hit.update({
+                        "im_sortiment": "Austausch mögl. (Wirkstoff)",
+                        "austauschbar_gegen": text,
+                    })
+                    wirkstoff_fallback_mehrere += 1
+
+            # Wunsch: Steht bereits eine NMG-PZN (Spalte 9), soll "austauschbar
+            # gegen" (Spalte 15) leer bleiben - die Austausch-Details stehen im
+            # zusaetzlichen Wirkstoff-Blatt.
+            austauschbar_wert = None if hit.get("nmg_pzn") else hit.get("austauschbar_gegen")
+
+            im_sort_val = hit.get("im_sortiment")
+            c8 = ws.cell(r_idx, 8, im_sort_val)
+            # Wirkstoff-Treffer farblich markieren, damit sie beim Pruefen auffallen.
+            if im_sort_val == "Austausch (Wirkstoff)":
+                c8.fill = PatternFill("solid", fgColor="DFF5E3")   # zartgruen = feste Empfehlung
+            elif im_sort_val and str(im_sort_val).startswith("Austausch mögl. (Wirkstoff)"):
+                c8.fill = PatternFill("solid", fgColor="FFF3D6")   # zartgelb = mehrere Optionen
             ws.cell(r_idx, 9, hit.get("nmg_pzn"))
             ws.cell(r_idx, 10, hit.get("apu_nmg"))
             ws.cell(r_idx, 11, hit.get("rabatt"))
             ws.cell(r_idx, 12, hit.get("lieferbar"))
             ws.cell(r_idx, 13, hit.get("bevorratung"))
             ws.cell(r_idx, 14, hit.get("liefervorschlag"))
-            ws.cell(r_idx, 15, hit.get("austauschbar_gegen"))
+            ws.cell(r_idx, 15, austauschbar_wert)
+
+            # Wirkstoff-/NMG-Austausch-Blatt: je abgegebener PZN einmal sammeln.
+            if original_pzn not in seen_wirkstoff_pzn:
+                seen_wirkstoff_pzn.add(original_pzn)
+                wk_name, wk_staerke = wirkstoff_by_pzn.get(original_pzn, ("", ""))
+                austausch_items = []
+                seen_nmg = set()
+                direct = _pzn(hit.get("nmg_pzn"))
+                if direct:
+                    seen_nmg.add(direct)
+                    austausch_items.append((direct, nmg_by_pzn.get(direct, "")))
+                for npzn, nname in nmg_by_wirkstoff.get(_substance_norm(wk_name), []):
+                    if npzn and npzn not in seen_nmg:
+                        seen_nmg.add(npzn)
+                        austausch_items.append((npzn, nname))
+                if wk_name or austausch_items:
+                    # Pivot-freundlich: Kandidatenliste behalten, im Blatt je
+                    # NMG-Artikel eine eigene Zeile schreiben (nicht in eine Zelle).
+                    wirkstoff_rows.append(
+                        (original_pzn, artikel_final or "", wk_name, wk_staerke, austausch_items)
+                    )
 
             # 0.7: Werte direkt berechnen, damit sie sofort sichtbar sind und auch beim
             # automatischen Vergleich nicht als leer erscheinen.
@@ -1137,7 +1302,7 @@ def create_vorlage_export(input_file: str | Path, apotheke: str, on_duplicate_pr
                         (auswertung_id, original_pzn, artikel_final, df_final, pck_final, hersteller_final,
                          ek_final, menge_wert, hit.get("im_sortiment"), hit.get("nmg_pzn"),
                          hit.get("apu_nmg"), hit.get("rabatt"), hit.get("lieferbar"),
-                         hit.get("bevorratung"), hit.get("liefervorschlag"), hit.get("austauschbar_gegen"),
+                         hit.get("bevorratung"), hit.get("liefervorschlag"), austauschbar_wert,
                          rabatt_euro, rabatt_euro * menge_wert, umsatz_wert, ist_nmg, input_file.name)
                     )
                 except Exception:
@@ -1190,5 +1355,51 @@ def create_vorlage_export(input_file: str | Path, apotheke: str, on_duplicate_pr
     ws.row_dimensions[1].height = 42
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:R{last_row}"
+
+    # Zweites Blatt: Wirkstoff der abgegebenen Artikel + austauschbare NMG-Artikel.
+    # Pivot-freundlich: je möglichem NMG-Artikel eine eigene Zeile (nicht in eine Zelle).
+    try:
+        ws2 = wb.create_sheet("Wirkstoff & NMG-Austausch")
+        # Zeile 1: Hinweiszeile (ueber die ganze Breite).
+        ws2.merge_cells("A1:F1")
+        note = ws2.cell(1, 1, "Hinweis: Abgleich erfolgt über den Wirkstoff (ohne Stärke). "
+                              "Je möglichem NMG-Artikel eine eigene Zeile – als Grundlage für eine Pivot-Tabelle.")
+        note.font = Font(italic=True, color="666666", size=9)
+        note.alignment = Alignment(vertical="center", wrap_text=True)
+        # Zeile 2: Kopfzeile.
+        kopf = ["PZN (abgegeben)", "Artikel (abgegeben)", "Wirkstoff", "Stärke", "NMG-PZN", "NMG-Artikel"]
+        for c, header in enumerate(kopf, start=1):
+            cell = ws2.cell(2, c, header)
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill("solid", fgColor="D9EAF7")
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        r2 = 3
+        for pzn, artikel, wk_name, wk_staerke, items in wirkstoff_rows:
+            zeilen = items if items else [("", "")]
+            for npzn, nname in zeilen:
+                ws2.cell(r2, 1, pzn)
+                ws2.cell(r2, 2, artikel)
+                ws2.cell(r2, 3, wk_name)
+                ws2.cell(r2, 4, wk_staerke)
+                ws2.cell(r2, 5, npzn)
+                ws2.cell(r2, 6, nname)
+                r2 += 1
+        if r2 == 3:
+            ws2.cell(3, 1, "Keine Wirkstoff-/Austausch-Treffer gefunden.")
+            r2 = 4
+        thin2 = Side(style="thin", color="B7B7B7")
+        for row in ws2.iter_rows(min_row=2, max_row=r2 - 1, min_col=1, max_col=6):
+            for cell in row:
+                cell.border = Border(left=thin2, right=thin2, top=thin2, bottom=thin2)
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+        for idx, width in enumerate([16, 34, 24, 10, 14, 40], start=1):
+            ws2.column_dimensions[get_column_letter(idx)].width = width
+        ws2.row_dimensions[1].height = 26
+        ws2.row_dimensions[2].height = 28
+        ws2.freeze_panes = "A3"
+        ws2.auto_filter.ref = f"A2:F{max(2, r2 - 1)}"
+    except Exception:
+        pass
+
     wb.save(out)
     return out

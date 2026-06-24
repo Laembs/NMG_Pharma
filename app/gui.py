@@ -8765,6 +8765,20 @@ LIMIT 500
             ids = selected_ids()
             return ids[0] if ids else None
 
+        def selected_targets():
+            """Liefert die markierten Eintraege als (source_table, id) - damit
+            Lernen/Ablehnen in die RICHTIGE Tabelle schreiben (sonst werden ueber
+            kollidierende IDs fremde tbl_lernvorschlaege-Eintraege getroffen)."""
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Schulbank", "Bitte zuerst einen oder mehrere Lernvorschläge auswählen.")
+                return []
+            out = []
+            for iid in sel:
+                if iid in row_source_map:
+                    out.append(row_source_map[iid])
+            return out
+
         rows = self.get_lernvorschlaege(current_status)
         visible_ids = []
         # SP18: Mapping iid -> (source_table, id) damit delete_selected
@@ -8791,22 +8805,50 @@ LIMIT 500
             except Exception:
                 row_source_map[iid] = ("tbl_lernvorschlaege", int(row["id"]))
 
-        def update_many(item_ids, status, label, confirm_all=False):
-            if not item_ids:
+        def _apply_status_to_target(source_table, item_id, status):
+            """Schreibt den Status in die RICHTIGE Tabelle.
+
+            tbl_lernvorschlaege -> ueber update_lernvorschlag_status (legt beim
+            Uebernehmen den Austausch an). tbl_austauschdatenbank-Eintraege
+            ("Uebernommen"-Ansicht) duerfen NICHT als Lernvorschlag-id behandelt
+            werden - Ablehnen = deaktivieren, Ruecknahme = wieder aktiv.
+            """
+            if source_table == "tbl_austauschdatenbank":
+                neu = {"abgelehnt": "inaktiv", "neu": "aktiv", "uebernommen": "aktiv"}.get(status)
+                if not neu:
+                    return
+                with sqlite3.connect(DB_PATH) as con:
+                    cols = {r[1] for r in con.execute("PRAGMA table_info(tbl_austauschdatenbank)").fetchall()}
+                    assign, params = "status=?", [neu]
+                    if "bearbeiter" in cols:
+                        assign += ", bearbeiter=?"; params.append(self.bearbeiter)
+                    if "aktualisiert_am" in cols:
+                        assign += ", aktualisiert_am=CURRENT_TIMESTAMP"
+                    if neu == "inaktiv" and "gueltig_bis" in cols:
+                        assign += ", gueltig_bis=CURRENT_TIMESTAMP"
+                    params.append(item_id)
+                    con.execute(f"UPDATE tbl_austauschdatenbank SET {assign} WHERE id=?", params)
+                    con.commit()
+            else:
+                self.update_lernvorschlag_status(item_id, status)
+
+        def update_many(targets, status, label, confirm_all=False):
+            # targets: Liste von (source_table, id).
+            if not targets:
                 messagebox.showinfo("Schulbank", "Keine Einträge ausgewählt.")
                 return
             if confirm_all:
-                if not messagebox.askyesno("Schulbank Sammelaktion", f"{len(item_ids)} sichtbare Vorschläge werden jetzt {label}.\n\nFortfahren?"):
+                if not messagebox.askyesno("Schulbank Sammelaktion", f"{len(targets)} sichtbare Vorschläge werden jetzt {label}.\n\nFortfahren?"):
                     return
-            elif len(item_ids) > 1:
-                if not messagebox.askyesno("Schulbank Sammelaktion", f"{len(item_ids)} markierte Vorschläge werden jetzt {label}.\n\nFortfahren?"):
+            elif len(targets) > 1:
+                if not messagebox.askyesno("Schulbank Sammelaktion", f"{len(targets)} markierte Vorschläge werden jetzt {label}.\n\nFortfahren?"):
                     return
 
             done = 0
             errors = []
-            for item_id in item_ids:
+            for source_table, item_id in targets:
                 try:
-                    self.update_lernvorschlag_status(item_id, status)
+                    _apply_status_to_target(source_table, item_id, status)
                     done += 1
                 except Exception as exc:
                     errors.append(f"ID {item_id}: {exc}")
@@ -8818,8 +8860,8 @@ LIMIT 500
             self.show_schulbank_page(section)
 
         def set_status(status):
-            ids = selected_ids()
-            if not ids:
+            targets = selected_targets()
+            if not targets:
                 return
             # SP19: vor dem Uebernehmen pruefen, ob die PZN_alt bereits in
             # der Biosimilar-Datenbank (tbl_austauschdatenbank) liegt.
@@ -8858,7 +8900,7 @@ LIMIT 500
                     ):
                         return
             label = "gelernt" if status == "uebernommen" else ("abgelehnt" if status == "abgelehnt" else "zurückgesetzt")
-            update_many(ids, status, label)
+            update_many(targets, status, label)
 
         def delete_selected():
             # SP18: nach source_table aufteilen. Frueher wurde immer aus
@@ -8909,8 +8951,10 @@ LIMIT 500
 
         tk.Button(actionbar, text="✓ Markierte lernen", command=lambda: set_status("uebernommen"), bg="#11823b", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=(0, 8))
         tk.Button(actionbar, text="✗ Markierte ablehnen", command=lambda: set_status("abgelehnt"), bg="#9b1c1c", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=8)
-        tk.Button(actionbar, text="✓ Alle sichtbaren lernen", command=lambda: update_many(visible_ids, "uebernommen", "gelernt", True), bg="#11823b", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=8)
-        tk.Button(actionbar, text="✗ Alle sichtbaren ablehnen", command=lambda: update_many(visible_ids, "abgelehnt", "abgelehnt", True), bg="#9b1c1c", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=8)
+        # "Alle sichtbaren" bewusst abgesetzt und heller, damit sie nicht mit den
+        # "Markierte"-Buttons verwechselt werden (Ursache: versehentlich alles abgelehnt).
+        tk.Button(actionbar, text="✓ Alle sichtbaren lernen", command=lambda: update_many(list(row_source_map.values()), "uebernommen", "gelernt", True), bg="#cdebd6", fg="#11823b", relief="flat", padx=14, pady=8).pack(side="left", padx=(24, 8))
+        tk.Button(actionbar, text="✗ Alle sichtbaren ablehnen", command=lambda: update_many(list(row_source_map.values()), "abgelehnt", "abgelehnt", True), bg="#f3cccc", fg="#9b1c1c", relief="flat", padx=14, pady=8).pack(side="left", padx=8)
         tk.Button(actionbar, text="↩ Rückgängig", command=lambda: set_status("neu"), bg="#8b5a00", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=8)
         tk.Button(actionbar, text="Löschen", command=delete_selected, padx=14, pady=8).pack(side="left", padx=8)
 

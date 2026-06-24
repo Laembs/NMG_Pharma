@@ -5,6 +5,16 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V2.0 SP2", "2026-06-24", [
+        "Bedarfsanalyse: liest jetzt auch alte bzw. als .xls gespeicherte XML-/HTML-Tabellen (typische Apotheken-/Grosshandels-Exporte) sowie CSV/TXT; robustere Spaltenerkennung (z.B. 'Packungen' wird als Absatzmenge erkannt).",
+        "Bedarfsanalyse: kommt eine PZN mehrfach vor (Verkaufslisten), koennen auf Nachfrage die Mengen je PZN summiert werden - Retouren (negative Mengen) werden dabei verrechnet.",
+        "Kurzbericht zur Bedarfsanalyse als Excel UND PDF mit Diagrammen: Einsparpotenzial auf 6 und 12 Monate hochgerechnet, Top-10-Hebel-Artikel und Kennzahlen; Fokus auf Hochpreiser (nur Taxe-EK ueber 200 Euro).",
+        "Neues Tabellenblatt 'Wirkstoff & NMG-Austausch': je abgegebenem Artikel der Wirkstoff und die passenden NMG-Artikel - eine Zeile je NMG-Artikel und damit als Pivot-Grundlage nutzbar.",
+        "Wirkstoff-Abgleich: gibt es keine direkte NMG-Zuordnung, wird ueber den Wirkstoff eine NMG-Empfehlung gesucht und farblich markiert (gruen = eindeutig, gelb = mehrere Optionen). 'Austauschbar gegen' bleibt leer, wenn bereits eine NMG-PZN gefunden wurde.",
+        "Gelbe Liste (Biosimilars): neuer Import-Knopf unter 'Daten aktualisieren'.",
+        "Stabilitaet: die Oberflaeche friert nach einer Auswertung nicht mehr ein (die Nachbearbeitung laeuft im Hintergrund); nicht lesbare Dateien melden sich jetzt klar, statt scheinbar haengen zu bleiben.",
+        "Schulbank-Korrektur: beim Ablehnen von 'Uebernommen'-Eintraegen werden nur noch die markierten Eintraege deaktiviert (vorher konnten ueber kollidierende IDs versehentlich andere Eintraege getroffen werden).",
+    ]),
     ("V2.0 SP1", "2026-06-24", [
         "Neue eigenstaendige App 'Mitarbeiter & Personal' - oeffnet sich ueber die Mitarbeiter-Kachel in einem eigenen Fenster und teilt sich die Datenbank mit NMGone.",
         "Organigramm: Mitarbeiter als verschiebbare Karten, per Linie verbinden und wieder loesen; Beziehungsart (disziplinarisch/fachlich/Vertretung) farblich unterschieden, die primaere Beziehung bildet den Baum; Auto-Layout und Filter nach Teilbereich/Abteilung.",
