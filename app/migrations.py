@@ -120,7 +120,12 @@ def run_migrations(db_path: Path = DB_PATH) -> list[str]:
         if _table_exists(con, "tbl_bestellungen"):
             bcols = _columns(con, "tbl_bestellungen")
             for col, ddl in (("msk_erfasst", "msk_erfasst INTEGER DEFAULT 0"),
-                             ("msk_von", "msk_von TEXT"), ("msk_am", "msk_am TEXT")):
+                             ("msk_von", "msk_von TEXT"), ("msk_am", "msk_am TEXT"),
+                             # Faktura: verknuepft einen Verkauf mit der erzeugten Rechnung.
+                             # Abgerechnete Auftraege verschwinden aus der Faktura-Auftragsliste;
+                             # ein Storno setzt beides zurueck (Auftrag wird wieder frei).
+                             ("faktura_beleg_id", "faktura_beleg_id INTEGER"),
+                             ("abgerechnet_am", "abgerechnet_am TEXT")):
                 if col not in bcols:
                     con.execute(f"ALTER TABLE tbl_bestellungen ADD COLUMN {ddl}")
         con.execute(
@@ -203,6 +208,113 @@ def run_migrations(db_path: Path = DB_PATH) -> list[str]:
         )
         con.execute("CREATE INDEX IF NOT EXISTS idx_kasse_log_bestell ON tbl_kasse_log(bestell_id)")
         actions.append("tbl_kasse_log sichergestellt")
+
+        # ── Faktura-App (eigenstaendig) ──────────────────────────────────────
+        # Rechnungen + Gutschriften rechtskonform (DE). Kerngedanke: APU wird
+        # je Position als Wert eingefroren (kein Live-Join), festgeschriebene
+        # Belege sind unveraenderbar (GoBD), Nummernkreise lueckenlos.
+        # Firmenstammdaten (Steuernr/USt-IdNr/Logo/Adresse) als key/value.
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_faktura_einstellungen(
+                schluessel TEXT PRIMARY KEY,
+                wert TEXT
+            )"""
+        )
+        # Mitarbeiter, die Rechnungen erstellen (Name + E-Mail; Auto-Zuordnung
+        # ueber Windows-Benutzername). 'benutzer' = getpass.getuser().
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_faktura_mitarbeiter(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                benutzer TEXT,
+                name TEXT,
+                email TEXT,
+                telefon TEXT,
+                aktiv INTEGER DEFAULT 1,
+                erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+        # Belegkopf: Rechnung / Storno / Gutschrift. Kunde wird als Snapshot
+        # mitgeschrieben (Adresse zum Belegzeitpunkt). bezug_beleg_id verknuepft
+        # Storno/Gutschrift mit der Ursprungsrechnung.
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_faktura_belege(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                belegart TEXT DEFAULT 'rechnung',
+                beleg_nr TEXT,
+                kunde_nr TEXT,
+                kunde_name TEXT,
+                kunde_adresse TEXT,
+                kunde_ustid TEXT,
+                beleg_datum TEXT,
+                leistungsdatum TEXT,
+                zeitraum_von TEXT,
+                zeitraum_bis TEXT,
+                bezug_beleg_id INTEGER,
+                netto REAL DEFAULT 0,
+                ust_betrag REAL DEFAULT 0,
+                brutto REAL DEFAULT 0,
+                status TEXT DEFAULT 'entwurf',
+                mitarbeiter TEXT,
+                mitarbeiter_email TEXT,
+                notizen TEXT,
+                pdf_pfad TEXT,
+                erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,
+                festgeschrieben_am TEXT
+            )"""
+        )
+        # Positionen mit EINGEFRORENEM APU (apu_einzel = Snapshot zum Beleg).
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_faktura_positionen(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                beleg_id INTEGER NOT NULL,
+                pos_nr INTEGER,
+                pzn TEXT,
+                bezeichnung TEXT,
+                menge REAL DEFAULT 1,
+                apu_einzel REAL DEFAULT 0,
+                rabatt REAL DEFAULT 0,
+                ust_satz REAL DEFAULT 19,
+                netto_zeile REAL DEFAULT 0,
+                ust_zeile REAL DEFAULT 0,
+                brutto_zeile REAL DEFAULT 0,
+                FOREIGN KEY(beleg_id) REFERENCES tbl_faktura_belege(id) ON DELETE CASCADE
+            )"""
+        )
+        # Lueckenlose Nummernkreise je Belegart und Jahr.
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_faktura_nummernkreis(
+                belegart TEXT,
+                jahr INTEGER,
+                praefix TEXT,
+                letzter_zaehler INTEGER DEFAULT 0,
+                PRIMARY KEY(belegart, jahr)
+            )"""
+        )
+        # Monats-Bonus-Staffel: feste Euro-Betraege je Umsatzstufe.
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_faktura_bonus_staffel(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                gueltig_ab TEXT,
+                schwelle_von REAL DEFAULT 0,
+                schwelle_bis REAL,
+                bonus_betrag REAL DEFAULT 0,
+                bezeichnung TEXT
+            )"""
+        )
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_faktura_log(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                zeitpunkt TEXT DEFAULT CURRENT_TIMESTAMP,
+                bearbeiter TEXT,
+                aktion TEXT,
+                beleg_id INTEGER,
+                details TEXT
+            )"""
+        )
+        con.execute("CREATE INDEX IF NOT EXISTS idx_faktura_pos_beleg ON tbl_faktura_positionen(beleg_id)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_faktura_belege_kunde ON tbl_faktura_belege(kunde_nr)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_faktura_belege_datum ON tbl_faktura_belege(beleg_datum)")
+        actions.append("Faktura-Tabellen sichergestellt")
 
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('db_schema_version', ?)", (DB_SCHEMA_VERSION,))
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('last_migration_at', ?)", (datetime.now().isoformat(timespec='seconds'),))

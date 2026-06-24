@@ -283,16 +283,32 @@ class Sidebar(tk.Frame):
             self.set_active(key)
         return b
 
+    def add_subitem(self, key, label, command):
+        """Eingerückter Unterpunkt (für aufklappbare Gruppen). Wird NICHT automatisch
+        gepackt - der Aufrufer blendet ihn über pack()/pack_forget() ein/aus."""
+        if not hasattr(self, "_subkeys"):
+            self._subkeys = set()
+        self._subkeys.add(key)
+        b = tk.Label(self._body, text=f"          {label}", bg=SIDEBAR, fg=SIDEBAR_MUTED,
+                     font=(FONT, 10), anchor="w", padx=12, pady=6, cursor="hand2")
+        b.bind("<Button-1>", lambda e, k=key, c=command: (self.set_active(k), c and c()))
+        b.bind("<Enter>", lambda e, bb=b, k=key: bb.config(bg=SIDEBAR_ACTIVE) if self._active != k else None)
+        b.bind("<Leave>", lambda e, bb=b, k=key: bb.config(bg=SIDEBAR if self._active != k else SIDEBAR_ACTIVE))
+        self._items[key] = b
+        return b
+
     def add_footer_note(self, text):
         tk.Label(self._foot, text=text, bg=SIDEBAR, fg=SIDEBAR_MUTED,
                  font=(FONT, 9), justify="left", anchor="w").pack(anchor="w", padx=22, pady=14)
 
     def set_active(self, key):
         self._active = key
+        subs = getattr(self, "_subkeys", set())
         for k, b in self._items.items():
+            size = 10 if k in subs else 11
             b.config(bg=SIDEBAR_ACTIVE if k == key else SIDEBAR,
-                     fg="#FFFFFF" if k == key else SIDEBAR_TEXT,
-                     font=(FONT, 11, "bold" if k == key else "normal"))
+                     fg="#FFFFFF" if k == key else (SIDEBAR_MUTED if k in subs else SIDEBAR_TEXT),
+                     font=(FONT, size, "bold" if k == key else "normal"))
 
 
 def page_header(parent, title, subtitle="", bg=BG):

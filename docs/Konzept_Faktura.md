@@ -131,13 +131,13 @@ Monatslauf (z. B. 1. des Folgemonats):
 Du kennst die genauen Stufen noch nicht – darum wird die **Staffel als Einstellung**
 gebaut, die du jederzeit selbst pflegst. Vorschlag für die Konfiguration:
 
-| Stufe | Monatsumsatz ab | Monatsumsatz bis | Bonus-Typ | Bonus-Wert |
-|------:|----------------:|-----------------:|-----------|-----------:|
-| 1 | 5.000 € | 9.999 € | Prozent | 1,0 % |
-| 2 | 10.000 € | 19.999 € | Prozent | 2,0 % |
-| 3 | 20.000 € | — | Prozent | 3,0 % |
+| Stufe | Monatsumsatz ab | Monatsumsatz bis | Bonus (Euro) |
+|------:|----------------:|-----------------:|-------------:|
+| 1 | 5.000 € | 9.999 € | 50 € |
+| 2 | 10.000 € | 19.999 € | 150 € |
+| 3 | 20.000 € | — | 400 € |
 
-- **Bonus-Typ** wahlweise **Prozent** vom Monatsumsatz **oder Fixbetrag**.
+- **Bonus ist immer ein fester Euro-Betrag** je Stufe (kein Prozent).
 - 2–3 Stufen genügen anfangs, Tabelle ist beliebig erweiterbar.
 - Staffel ist **datiert** (`gültig_ab`), damit historische Monate korrekt bleiben,
   wenn du die Stufen später änderst.
@@ -184,7 +184,8 @@ fak_nummernkreis       -- lückenlose Zähler je Belegart/Jahr
 
 fak_bonus_staffel      -- konfigurierbare Stufen (§7)
   id, gueltig_ab, schwelle_von, schwelle_bis,
-  bonus_typ ('prozent'|'fix'), bonus_wert, bezeichnung
+  bonus_betrag,         -- fester Euro-Betrag je Stufe
+  bezeichnung
 
 fak_audit              -- wer/wann/was (oder bestehendes Audit-Log nutzen)
 ```
@@ -212,8 +213,8 @@ sollte alle dafür nötigen Felder schon vorhalten (USt-IdNr., Einheiten, Steuer
    → *Stand 2026-06-23: Arbeitsbegriff bleibt vorerst **„Gutschrift"** (genaue
    Benennung folgt). Achtung: auf dem gedruckten Beleg ggf. präziser betiteln,
    siehe §1 / §14c UStG.*
-2. **Staffel-Basis:** Bonus auf **Netto- oder Bruttoumsatz** des Monats?
-   Und: **prozentual** oder **Fixbetrag** je Stufe?
+2. **Staffel-Basis:** Schwelle anhand **Netto- oder Bruttoumsatz** des Monats messen?
+   (Bonus selbst ist ein fester Euro-Betrag je Stufe – bereits geklärt.)
 3. **Staffel-Schwellen:** sobald du die Zahlen hast (Programm bleibt konfigurierbar).
 4. **Monatslauf:** Stichtag (z. B. 1. des Folgemonats)? Sammelrechnung pro Kunde?
 5. **Steuersatz:** durchgehend 19 %, oder gibt es Positionen mit 7 % / steuerfrei?

@@ -5,6 +5,31 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V2.0 SP4", "2026-06-24", [
+        "Neue eigenstaendige App 'Faktura' - rechtskonforme Rechnungen und Gutschriften (Deutschland), eigenes Fenster/Taskleisten-Icon, teilt sich die Datenbank mit NMGone und der Kasse.",
+        "Rechtssicher: der APU wird je Position zum Beleg eingefroren (spaetere Preislisten aendern alte Belege nicht); festgeschriebene Belege sind unveraenderbar (GoBD), Korrektur nur per Storno; lueckenlose Belegnummern je Belegart.",
+        "Auftraege: zeigt je Apotheke die offenen (noch nicht abgerechneten) Verkaeufe aus der Kasse (Auftraege, Artikel, Umsatz, Umsatz nach Rabatt) mit Zeitraum-Filter; daraus per Klick eine Sammelrechnung erstellen (Rechnungsdatum waehlbar), Kunden 'fuer jetzt' ausblenden.",
+        "Storno einer Rechnung erzeugt eine Storno-Rechnung mit negativen Betraegen und gibt die zugehoerigen Auftraege wieder frei (tauchen erneut in der Liste auf, in der Kasse weiter bearbeitbar).",
+        "Gutschriften: manuell zur Rechnung ODER automatisch beim Festschreiben - wahlweise % vom Netto/Brutto, Fixbetrag oder 'Auftragsrabatt' (Rechnung zum vollen APU, Gutschrift bildet je Artikel den Rabatt ab, z.B. 60%); §17-USt-Korrektur. Beim Stornieren der Rechnung werden zugehoerige Gutschriften optional mit storniert.",
+        "Quartalsverguetung: feste Euro-Verguetung je Kunde ab konfigurierbarer Umsatzschwelle (Staffel), berechnet aus den festgeschriebenen Rechnungen eines Quartals (stornierte zaehlen nicht).",
+        "Einstellungen mit aufklappbarem Menue: Firmendaten (inkl. automatischer Gutschrift), frei konfigurierbare Belegnummern (Platzhalter wie RE-{JJJJ}-{NR:5}) und Layouts.",
+        "Belegvorlage frei gestaltbar (gilt fuer Rechnung, Gutschrift, Quartalsverguetung): Akzentfarbe, Spalten, Titel/Kopftext je Belegart, Fusstext, Vorschau-PDF - plus Drag-&-Drop-Layout-Editor mit eigenen Feldern (Freitext und Datenfelder).",
+        "Ablage als PDF im Ordnerschema (Rechnungen/Jahr/Monat, Gutschriften/Jahr/Monat, Quartalsverguetung/Jahr/Quartal; Dateiname Kundennummer;Belegnummer;Apotheke;Datum); Ordner direkt aus dem Programm zu oeffnen. Spaeter auf SharePoint/OneDrive umlenkbar.",
+        "Summen auf der Rechnung als Kennzahl-Karten (wie im Kasse-Tagesabschluss).",
+    ]),
+    ("V2.0 SP3", "2026-06-24", [
+        "Kasse: Lieferschein - wird beim Setzen von 'In MSK erfasst' angeboten und ist jederzeit in der Verkaufs-Detailansicht erneut erzeugbar (Charge/Verfall, ohne Preise). Beim manuellen Erzeugen wird gefragt, ob der Auftrag in MSK erfasst wurde.",
+        "Kasse-Verkauf: reicht der Bestand nicht, kann die verfuegbare Menge sofort als Bestellung geliefert und der Rest als Vorbestellung aufgenommen werden (oder nur der vorhandene Bestand abverkauft werden).",
+        "Kasse-Verkauf: 'Freie Position' - frei benannter Posten mit eigenem Preis/Menge/Rabatt, nicht bestandsgefuehrt, wird gespeichert und erscheint mit Preis auf der Auftragsbestaetigung.",
+        "Kasse: neuer Reiter 'Auswertung' - Umsatz je Tag/Monat/Jahr (Anzahl Verkaeufe, Anzahl Packungen, APU Brutto, Rabatt (Netto), APU Netto), Verfall (Zeitraum 3/6/9/12 Monate oder Alle; abgelaufen rot, bald gelb) und Inventur. Kennzahlen als Karten, Reiter im NMGone-Blau.",
+        "Kasse-Tagesabschluss: eigener Reiter mit Kalender-Datumsauswahl, fortlaufender Nummer und Kennzahlen (Verkaeufe, Packungen, APU-, Rabatt-, Umsatz-Summe). Wird jeden Abend automatisch (Uhrzeit einstellbar, Standard 18 Uhr) erzeugt und nummeriert; verpasste Vortage werden beim Start nachgeholt.",
+        "Kasse: EK (Einkaufspreis) im Wareneingang erfassbar (mit APU vorbelegt) und beim Import uebernommen; daraus ueberall der Lagerwert (EK x Bestand) zusaetzlich zum Verkaufswert (APU x Bestand) - Lagerbestand, Artikel, Verfall, Inventur (inkl. PDF).",
+        "Kasse-Artikel: Summenleiste mit Gesamtbestand, Verkaufswert und Lagerwert; passt sich der Suche an. Kasse startet maximiert (Vollbild).",
+        "Kasse: neuer Reiter 'Defektmeldung' - Nichtverfuegbarkeits-Bescheinigung fuer die Apotheke (Apotheke + Artikel waehlen, Grund angeben).",
+        "Kasse: Auftrags-Verlauf (wer/was/wann) je Auftrag einsehbar und als PDF; Aenderungs-Protokoll gefiltert als PDF exportierbar.",
+        "Kasse: neuer Reiter 'Einstellungen' - Firmendaten (Dokumentkopf), Defektmeldung-Rechtstext und Tagesabschluss-Uhrzeit direkt in der App pflegbar.",
+        "Kasse: robusterer Datenbankzugriff (busy_timeout) fuer den Parallelbetrieb von NMGone und Kasse.",
+    ]),
     ("V2.0 SP2", "2026-06-24", [
         "Bedarfsanalyse: liest jetzt auch alte bzw. als .xls gespeicherte XML-/HTML-Tabellen (typische Apotheken-/Grosshandels-Exporte) sowie CSV/TXT; robustere Spaltenerkennung (z.B. 'Packungen' wird als Absatzmenge erkannt).",
         "Bedarfsanalyse: kommt eine PZN mehrfach vor (Verkaufslisten), koennen auf Nachfrage die Mengen je PZN summiert werden - Retouren (negative Mengen) werden dabei verrechnet.",

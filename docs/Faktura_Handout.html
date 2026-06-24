@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Faktura-Modul – Konzept-Handout</title>
+<style>
+  :root{
+    --ink:#2c2c2a; --muted:#5f5e5a; --hint:#86857f; --line:#d9d8d2;
+    --blue:#185fa5; --blue-bg:#e6f1fb; --blue-line:#85b7eb;
+    --teal:#0f6e56; --teal-bg:#e1f5ee; --teal-line:#5dcaa5;
+    --gray-bg:#f1efe8;
+    --amber:#854f0b; --amber-bg:#faeeda;
+  }
+  *{box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact;}
+  body{
+    font-family:"Segoe UI",Arial,sans-serif; color:var(--ink);
+    margin:0; line-height:1.55; font-size:13px;
+    background:#f4f4f2;
+  }
+  .page{
+    width:210mm; min-height:297mm; padding:18mm 18mm 16mm;
+    margin:10px auto; background:#fff;
+    box-shadow:0 1px 6px rgba(0,0,0,.15);
+  }
+  h1{font-size:26px; font-weight:600; margin:0 0 4px;}
+  h2{font-size:17px; font-weight:600; margin:26px 0 10px; padding-bottom:5px; border-bottom:2px solid var(--ink);}
+  h3{font-size:14px; font-weight:600; margin:16px 0 6px;}
+  p{margin:6px 0;}
+  .sub{color:var(--muted); font-size:12px;}
+  .lead{font-size:14px; color:var(--muted); border-left:3px solid var(--blue); padding:6px 0 6px 12px; margin:14px 0;}
+  table{width:100%; border-collapse:collapse; font-size:12px; margin:8px 0;}
+  th,td{text-align:left; padding:6px 8px; border-bottom:1px solid var(--line);}
+  th{color:var(--muted); font-weight:600;}
+  td.r,th.r{text-align:right;}
+  .mono{font-family:"Consolas",monospace;}
+  ul,ol{margin:6px 0 6px 18px; padding:0;}
+  li{margin:3px 0;}
+  .tag{display:inline-block; font-size:11px; padding:3px 10px; border-radius:5px; font-weight:600;}
+  .tag-blue{background:var(--blue-bg); color:var(--blue);}
+  .tag-teal{background:var(--teal-bg); color:var(--teal);}
+  .tag-amber{background:var(--amber-bg); color:var(--amber);}
+  .note{background:var(--gray-bg); border-radius:6px; padding:9px 12px; font-size:12px; color:var(--muted); margin:10px 0;}
+  .note-amber{background:var(--amber-bg); color:var(--amber);}
+  .mock{border:1px solid var(--line); border-radius:8px; padding:16px 18px; margin:10px 0;}
+  .foot{margin-top:24px; padding-top:8px; border-top:1px solid var(--line); font-size:11px; color:var(--hint);}
+  .legend{font-size:11px; color:var(--muted); margin:4px 0 0;}
+  .legend span{display:inline-block; margin-right:14px;}
+  .dot{display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:-1px; margin-right:4px;}
+  @media print{
+    body{background:#fff;}
+    .page{box-shadow:none; margin:0; width:auto; min-height:auto; padding:14mm 14mm;}
+    .page-break{page-break-before:always;}
+    @page{size:A4; margin:0;}
+  }
+</style>
+</head>
+<body>
+
+<!-- SEITE 1 -->
+<section class="page">
+  <p class="sub">NMG Pharma · Konzept-Handout · Stand 23.06.2026 · Status: Konzept (noch nichts gebaut)</p>
+  <h1>Faktura-Modul</h1>
+  <p class="sub">Rechtskonforme Rechnungen &amp; Gutschriften für Deutschland</p>
+
+  <p class="lead">Ziel: NMGone soll künftig rechtskonforme Rechnungen schreiben, dazu passende
+  Gutschriften, wahlweise sofort oder als Monatsabrechnung, plus einen gestaffelten
+  Monats-Bonus als festen Euro-Betrag. Preise (APU) werden zum Verkaufszeitpunkt eingefroren.</p>
+
+  <h2>1 · Drei Belegarten</h2>
+  <table>
+    <tr><th>Beleg</th><th>Wann</th><th>Wirkung</th></tr>
+    <tr><td><span class="tag tag-blue">Rechnung</span></td><td>beim Verkauf</td><td>Forderung an den Kunden, mit aktuellem APU</td></tr>
+    <tr><td><span class="tag tag-teal">Gutschrift</span></td><td>zur Rechnung</td><td>nachträglicher Bonus / Rabatt an den Kunden</td></tr>
+    <tr><td><span class="tag tag-teal">Monats-Bonus</span></td><td>Monatsende</td><td>fester Euro-Betrag ab erreichter Umsatzschwelle</td></tr>
+  </table>
+  <p class="note note-amber"><b>Hinweis:</b> „Gutschrift" ist in Deutschland doppeldeutig (Storno einer Rechnung
+  vs. nachträglicher Rabatt). Arbeitsbegriff bleibt vorerst „Gutschrift"; der gedruckte Beleg muss ggf.
+  präziser betitelt werden (§14c UStG).</p>
+
+  <h2>2 · So läuft ein Beleg durch</h2>
+  <p class="legend">
+    <span><span class="dot" style="background:#b4b2a9;"></span>Verkauf</span>
+    <span><span class="dot" style="background:var(--blue-line);"></span>Rechnung</span>
+    <span><span class="dot" style="background:var(--teal-line);"></span>Gutschrift</span>
+  </p>
+  <svg width="100%" viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg" style="margin-top:6px;">
+    <defs>
+      <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M2 1L8 5L2 9" fill="none" stroke="#5f5e5a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </marker>
+    </defs>
+    <text x="330" y="30" text-anchor="middle" fill="#5f5e5a" font-size="12" font-family="Segoe UI,Arial">Weg A · sofort</text>
+    <text x="330" y="278" text-anchor="middle" fill="#5f5e5a" font-size="12" font-family="Segoe UI,Arial">Weg B · monatlich</text>
+
+    <rect x="40" y="112" width="160" height="70" rx="8" fill="#f1efe8" stroke="#b4b2a9"/>
+    <text x="120" y="142" text-anchor="middle" fill="#2c2c2a" font-size="14" font-weight="600" font-family="Segoe UI,Arial">Verkauf</text>
+    <text x="120" y="162" text-anchor="middle" fill="#5f5e5a" font-size="12" font-family="Segoe UI,Arial">APU wird eingefroren</text>
+
+    <rect x="250" y="46" width="170" height="64" rx="8" fill="#e6f1fb" stroke="#85b7eb"/>
+    <text x="335" y="72" text-anchor="middle" fill="#185fa5" font-size="14" font-weight="600" font-family="Segoe UI,Arial">Sofort-Rechnung</text>
+    <text x="335" y="91" text-anchor="middle" fill="#185fa5" font-size="12" font-family="Segoe UI,Arial">festgeschrieben + PDF</text>
+
+    <rect x="460" y="46" width="180" height="64" rx="8" fill="#e1f5ee" stroke="#5dcaa5"/>
+    <text x="550" y="72" text-anchor="middle" fill="#0f6e56" font-size="14" font-weight="600" font-family="Segoe UI,Arial">Gutschrift</text>
+    <text x="550" y="91" text-anchor="middle" fill="#0f6e56" font-size="12" font-family="Segoe UI,Arial">Rabatt zur Rechnung</text>
+
+    <rect x="250" y="188" width="170" height="64" rx="8" fill="#e6f1fb" stroke="#85b7eb"/>
+    <text x="335" y="214" text-anchor="middle" fill="#185fa5" font-size="14" font-weight="600" font-family="Segoe UI,Arial">Sammelrechnung</text>
+    <text x="335" y="233" text-anchor="middle" fill="#185fa5" font-size="12" font-family="Segoe UI,Arial">alle Verkäufe / Monat</text>
+
+    <rect x="460" y="188" width="180" height="64" rx="8" fill="#e1f5ee" stroke="#5dcaa5"/>
+    <text x="550" y="214" text-anchor="middle" fill="#0f6e56" font-size="14" font-weight="600" font-family="Segoe UI,Arial">Monats-Bonus</text>
+    <text x="550" y="233" text-anchor="middle" fill="#0f6e56" font-size="12" font-family="Segoe UI,Arial">ab Umsatzschwelle</text>
+
+    <path d="M200 147 L225 147 L225 78 L250 78" fill="none" stroke="#5f5e5a" stroke-width="1.5" marker-end="url(#ar)"/>
+    <path d="M200 147 L225 147 L225 220 L250 220" fill="none" stroke="#5f5e5a" stroke-width="1.5" marker-end="url(#ar)"/>
+    <line x1="420" y1="78" x2="460" y2="78" stroke="#5f5e5a" stroke-width="1.5" marker-end="url(#ar)"/>
+    <line x1="420" y1="220" x2="460" y2="220" stroke="#5f5e5a" stroke-width="1.5" marker-end="url(#ar)"/>
+  </svg>
+
+  <div class="foot">NMG Pharma – Faktura-Konzept – Seite 1 von 3</div>
+</section>
+
+<!-- SEITE 2 -->
+<section class="page page-break">
+  <h2>3 · So sieht die fertige Rechnung aus</h2>
+  <p class="sub">Mit allen Pflichtangaben nach §14 UStG und eingefrorenem APU je Position.</p>
+
+  <div class="mock">
+    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+      <div>
+        <div style="font-size:16px; font-weight:600;">NMG Pharma GmbH</div>
+        <div class="sub">Musterstraße 1 · 12345 Musterstadt</div>
+        <div class="sub">USt-IdNr. DE123456789 · St.-Nr. 12/345/67890</div>
+      </div>
+      <span class="tag tag-blue">Festgeschrieben</span>
+    </div>
+
+    <div style="display:flex; justify-content:space-between; margin-top:14px;">
+      <div>
+        <div class="sub">Rechnung an</div>
+        <div style="font-weight:600;">Apotheke am Markt</div>
+        <div class="sub">Marktplatz 7 · 54321 Beispielheim</div>
+        <div class="sub">Kunden-Nr. 10042</div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:18px; font-weight:600;">Rechnung</div>
+        <div class="sub">Nr. <span class="mono">RE-2026-00187</span></div>
+        <div class="sub">Datum: 23.06.2026 · Lieferdatum: 23.06.2026</div>
+      </div>
+    </div>
+
+    <table style="margin-top:12px;">
+      <tr><th>PZN</th><th>Artikel</th><th class="r">Menge</th><th class="r">APU</th><th class="r">USt</th><th class="r">Netto</th></tr>
+      <tr><td class="mono">04812345</td><td>Adalimumab 40 mg</td><td class="r">10</td><td class="r">412,50 €</td><td class="r">19 %</td><td class="r">4.125,00 €</td></tr>
+      <tr><td class="mono">05123987</td><td>Etanercept 50 mg</td><td class="r">6</td><td class="r">298,00 €</td><td class="r">19 %</td><td class="r">1.788,00 €</td></tr>
+    </table>
+
+    <div style="display:flex; justify-content:flex-end; margin-top:8px;">
+      <table style="width:46%;">
+        <tr><td class="sub">Netto</td><td class="r">5.913,00 €</td></tr>
+        <tr><td class="sub">zzgl. 19 % USt</td><td class="r">1.123,47 €</td></tr>
+        <tr><td style="font-weight:600; border-bottom:none;">Gesamt</td><td class="r" style="font-weight:600; border-bottom:none;">7.036,47 €</td></tr>
+      </table>
+    </div>
+
+    <div class="note" style="background:var(--teal-bg); color:var(--teal);">
+      ↩ Verknüpfte Gutschrift <span class="mono">GU-2026-00091</span> · 150,00 € (§17 UStG: USt anteilig korrigiert)
+    </div>
+    <p class="sub" style="margin-top:8px;">Zahlbar innerhalb 14 Tagen ohne Abzug. Aufbewahrungspflichtig 10 Jahre (GoBD).</p>
+  </div>
+
+  <h3>Pflichtangaben auf jeder Rechnung (§14 UStG)</h3>
+  <ul>
+    <li>Name + Anschrift von NMG <b>und</b> Kunde · Steuernummer oder USt-IdNr.</li>
+    <li>Ausstellungsdatum · fortlaufende, lückenlose Rechnungsnummer</li>
+    <li>Menge + Bezeichnung (PZN/Artikel) · Liefer-/Leistungsdatum</li>
+    <li>Netto je Steuersatz · Steuersatz + Steuerbetrag (Arzneimittel i. d. R. 19 %)</li>
+  </ul>
+  <p class="note"><b>GoBD:</b> Eine festgeschriebene Rechnung ist unveränderbar – Korrektur nur über
+  Storno + Neuanlage. Nummernkreise lückenlos, 10 Jahre Aufbewahrung, Audit-Trail.</p>
+
+  <div class="foot">NMG Pharma – Faktura-Konzept – Seite 2 von 3</div>
+</section>
+
+<!-- SEITE 3 -->
+<section class="page page-break">
+  <h2>4 · Monats-Bonus · Staffelung (feste Euro-Beträge)</h2>
+  <p class="sub">Frei editierbar. Beispielwerte – echte Stufen folgen.</p>
+
+  <div class="mock">
+    <table>
+      <tr><th>Stufe</th><th>Umsatz ab</th><th>Umsatz bis</th><th class="r">Bonus (€)</th></tr>
+      <tr><td>1</td><td>5.000 €</td><td>9.999 €</td><td class="r">50,00 €</td></tr>
+      <tr><td>2</td><td>10.000 €</td><td>19.999 €</td><td class="r">150,00 €</td></tr>
+      <tr><td>3</td><td>20.000 €</td><td>∞</td><td class="r">400,00 €</td></tr>
+    </table>
+    <p class="note" style="margin-bottom:0;">Beispiel: Kunde mit 14.200 € Monatsumsatz → Stufe 2 → Gutschrift 150,00 €.
+    Bemessung: Netto-Monatsumsatz je Kunde.</p>
+  </div>
+
+  <h2>5 · Offene Punkte</h2>
+  <ol>
+    <li>Genaue Benennung der „Gutschrift" + ist es ein fester Rabatt auf jede Rechnung?</li>
+    <li>Schwelle am <b>Netto-</b> oder Bruttoumsatz messen? (Bonus = fester Euro-Betrag, geklärt)</li>
+    <li>Echte Staffel-Schwellen und -Beträge</li>
+    <li>Monatslauf: Stichtag? Eine Sammelrechnung je Kunde?</li>
+    <li>Steuersatz durchgehend 19 % oder gemischt?</li>
+    <li>NMG-Stammdaten (USt-IdNr., Anschrift, Logo, Bank) für den Rechnungsfuß</li>
+    <li>Entsteht die Rechnung aus der Kasse, aus Aufträgen oder beidem?</li>
+  </ol>
+
+  <h2>6 · Umsetzung in Phasen</h2>
+  <ol>
+    <li><b>Sofort-Rechnung:</b> Belege, APU-Snapshot, Nummernkreis, Festschreiben, PDF, Storno</li>
+    <li><b>Gutschriften:</b> Bonus zur Rechnung, §17-konforme USt-Korrektur</li>
+    <li><b>Monatsabrechnung:</b> Sammeln + Monatslauf, Sammelrechnung je Kunde</li>
+    <li><b>Staffel-Bonus:</b> konfigurierbare Stufen, automatische Monats-Gutschrift</li>
+    <li><b>E-Rechnung:</b> ZUGFeRD/XRechnung (B2B-Pflicht: Empfang seit 2025, Versand ab 2027/28)</li>
+  </ol>
+
+  <p class="foot">Fachkonzept, keine Steuerberatung. Rechnungsvorlage und §17-Behandlung der Boni vor
+  Produktivstart kurz mit dem Steuerberater abstimmen. · NMG Pharma – Faktura-Konzept – Seite 3 von 3</p>
+</section>
+
+</body>
+</html>
