@@ -18,7 +18,7 @@ import os
 import calendar
 import getpass
 import sqlite3
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
@@ -60,6 +60,20 @@ ABW_STYLE = {
 }
 ABW_ARTEN = tuple(ABW_STYLE.keys())
 
+# Genehmigungs-Status für Abwesenheits-Anträge
+ST_BEANTRAGT = "Beantragt"      # neu eingereicht, wartet auf Personalverantwortliche
+ST_GF        = "GF-Freigabe"     # Stufe 1 genehmigt, wartet auf Geschäftsführung
+ST_GENEHMIGT = "Genehmigt"       # endgültig genehmigt, zählt auf das Urlaubskonto
+ST_ABGELEHNT = "Abgelehnt"       # abgelehnt, wird nicht im Kalender geführt
+ST_OFFEN     = (ST_BEANTRAGT, ST_GF)   # noch zu entscheiden
+
+ST_STYLE = {
+    ST_BEANTRAGT: ("⏳ Wartet auf Genehmigung", "#C88200"),
+    ST_GF:        ("⏳ Wartet auf GF-Freigabe", "#0E7C86"),
+    ST_GENEHMIGT: ("✓ Genehmigt", "#11823B"),
+    ST_ABGELEHNT: ("✗ Abgelehnt", "#C0392B"),
+}
+
 # Vertretungsstufen je Arbeitsbereich: 0 = Verantwortlich, 1..3 = Vertretungskette
 STUFEN = ["Verantwortlich", "1. Vertretung", "2. Vertretung", "3. Vertretung"]
 STUFE_SHORT = ["V", "1.V", "2.V", "3.V"]
@@ -82,7 +96,7 @@ WD = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 MONATE = ["", "Januar", "Februar", "März", "April", "Mai", "Juni",
           "Juli", "August", "September", "Oktober", "November", "Dezember"]
 
-from app.config import DB_PATH  # gemeinsame NMGone-Datenbank
+from app.config import DB_PATH, DEMO_SUFFIX  # gemeinsame NMGone-Datenbank
 from app import tour
 
 DEMO_EMPS = [
@@ -121,7 +135,13 @@ def init_db(reset=False):
         ist_primaer INTEGER DEFAULT 0)""")
     con.execute("""CREATE TABLE IF NOT EXISTS tbl_abwesenheit (
         id INTEGER PRIMARY KEY AUTOINCREMENT, mitarbeiter_id INTEGER NOT NULL,
-        art TEXT DEFAULT 'Urlaub', von TEXT, bis TEXT, notiz TEXT, unterart TEXT)""")
+        art TEXT DEFAULT 'Urlaub', von TEXT, bis TEXT, notiz TEXT, unterart TEXT,
+        status TEXT DEFAULT 'Beantragt', beantragt_am TEXT,
+        entscheider TEXT, entschieden_am TEXT, ablehnung_grund TEXT,
+        gf_entscheider TEXT, gf_am TEXT)""")
+    # Geteilt mit der Parameter-App: Schalter 'urlaub_gf_freigabe' (2. Stufe)
+    con.execute("""CREATE TABLE IF NOT EXISTS tbl_param_config (
+        schluessel TEXT PRIMARY KEY, wert TEXT)""")
     con.execute("""CREATE TABLE IF NOT EXISTS tbl_urlaub_verfall (
         id INTEGER PRIMARY KEY AUTOINCREMENT, mitarbeiter_id INTEGER NOT NULL,
         jahr INTEGER, tage INTEGER, datum TEXT)""")
@@ -142,6 +162,17 @@ def init_db(reset=False):
     acols = {r[1] for r in con.execute("PRAGMA table_info(tbl_abwesenheit)").fetchall()}
     if "unterart" not in acols:
         con.execute("ALTER TABLE tbl_abwesenheit ADD COLUMN unterart TEXT")
+    # Genehmigungs-Workflow: neue Spalten nachrüsten
+    for col, ddl in [
+        ("status", "status TEXT"), ("beantragt_am", "beantragt_am TEXT"),
+        ("entscheider", "entscheider TEXT"), ("entschieden_am", "entschieden_am TEXT"),
+        ("ablehnung_grund", "ablehnung_grund TEXT"),
+        ("gf_entscheider", "gf_entscheider TEXT"), ("gf_am", "gf_am TEXT"),
+    ]:
+        if col not in acols:
+            con.execute(f"ALTER TABLE tbl_abwesenheit ADD COLUMN {ddl}")
+    # Altbestand (vor Einführung des Workflows) gilt als bereits genehmigt
+    con.execute("UPDATE tbl_abwesenheit SET status='Genehmigt' WHERE status IS NULL OR status=''")
     try:
         zcols = {r[1] for r in con.execute("PRAGMA table_info(tbl_mitarbeiter_arbeitsbereich)").fetchall()}
         if zcols and "stufe" not in zcols:
@@ -214,7 +245,7 @@ def init_db(reset=False):
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("NMGone · Mitarbeiter & Personal")
+        root.title(f"NMGone{DEMO_SUFFIX} · Mitarbeiter & Personal")
         root.geometry("1200x780")
         root.configure(bg=BG)
         self.style = ttk.Style(root)
@@ -269,12 +300,22 @@ class App:
                                 relief="flat", font=(FONT, 10, "bold"), padx=14, pady=7, cursor="hand2")
         self.nav_abw = tk.Button(sw, text="🗓  Abwesenheiten", command=self.show_absence,
                                  relief="flat", font=(FONT, 10, "bold"), padx=14, pady=7, cursor="hand2")
+        self.nav_antr = tk.Button(sw, text="✅  Anträge", command=self.show_antraege,
+                                  relief="flat", font=(FONT, 10, "bold"), padx=14, pady=7, cursor="hand2")
         self.nav_orga.pack(side="left", padx=4)
         self.nav_ab.pack(side="left", padx=4)
         self.nav_abw.pack(side="left", padx=4)
+        self.nav_antr.pack(side="left", padx=4)
+
+    def _update_antraege_badge(self):
+        if not hasattr(self, "nav_antr"):
+            return
+        n = len(self._open_antraege())
+        self.nav_antr.configure(text=f"✅  Anträge ({n})" if n else "✅  Anträge")
 
     def _nav_state(self):
-        for btn, name in ((self.nav_orga, "orga"), (self.nav_ab, "ab"), (self.nav_abw, "abw")):
+        for btn, name in ((self.nav_orga, "orga"), (self.nav_ab, "ab"),
+                          (self.nav_abw, "abw"), (self.nav_antr, "antr")):
             if self.view == name:
                 btn.configure(bg="white", fg=PRIMARY)
             else:
@@ -317,6 +358,7 @@ class App:
         self.emp_by_id = {e["id"]: e for e in self.emps}
         depts = sorted({e["abteilung"] or "—" for e in self.emps})
         self.dept_color = {d: DEPT_PALETTE[i % len(DEPT_PALETTE)] for i, d in enumerate(depts)}
+        self._update_antraege_badge()
 
     def _name(self, eid):
         e = self.emp_by_id.get(eid, {})
@@ -750,10 +792,12 @@ class App:
             return self.emps
         return [e for e in self.emps if (e["abteilung"] or "—") == b]
 
-    def _year_count(self, eid, art):
+    def _year_count(self, eid, art, stati=(ST_GENEHMIGT,)):
         days = 0
         for a in self.abw:
             if a["mitarbeiter_id"] != eid or a["art"] != art:
+                continue
+            if (a.get("status") or ST_GENEHMIGT) not in stati:
                 continue
             try:
                 v = date.fromisoformat(a["von"])
@@ -787,6 +831,27 @@ class App:
     def _personalverantwortliche(self):
         """Namen der als personalverantwortlich eingeteilten Mitarbeiter (entscheiden über Urlaub/Verfall)."""
         return [f"{e['vorname']} {e['name']}".strip() for e in self.emps if e.get("personalverantwortlich")]
+
+    def _geschaeftsfuehrung(self):
+        """Namen der Geschäftsführung (für die 2. Freigabe-Stufe)."""
+        gf = [f"{e['vorname']} {e['name']}".strip() for e in self.emps
+              if "geschäftsführung" in ((e.get("position") or "") + " " + (e.get("abteilung") or "")).lower()]
+        return gf or self._personalverantwortliche()
+
+    def _gf_freigabe_aktiv(self):
+        """2. Stufe (Geschäftsführung segnet ab) – Schalter aus der Parameter-App."""
+        con = sqlite3.connect(DB_PATH)
+        try:
+            row = con.execute(
+                "SELECT wert FROM tbl_param_config WHERE schluessel='urlaub_gf_freigabe'").fetchone()
+        except Exception:
+            row = None
+        con.close()
+        return bool(row and str(row[0]) == "1")
+
+    def _open_antraege(self):
+        """Alle noch zu entscheidenden Anträge (Beantragt + GF-Freigabe ausstehend)."""
+        return [a for a in self.abw if (a.get("status") or ST_GENEHMIGT) in ST_OFFEN]
 
     def _set_cal_mode(self, mode):
         self.cal_mode = mode
@@ -883,9 +948,11 @@ class App:
             anspruch = e.get("urlaubsanspruch") or STD_URLAUB
             rest = self._rest_urlaub(e, y)
             kcount = self._year_count(e["id"], "Krankheit")
+            offen = self._year_count(e["id"], "Urlaub", stati=ST_OFFEN)
             rest_col = "#C0392B" if rest < 0 else MUTED
+            offen_txt = f" · {offen} offen" if offen else ""
             self.cal.create_text(14, ry + 31, anchor="w", fill=rest_col, font=(FONT, 8),
-                                 text=f"Urlaub {gen}/{anspruch} · Rest {rest} · Krank {kcount} ({y})")
+                                 text=f"Urlaub {gen}/{anspruch} · Rest {rest}{offen_txt} · Krank {kcount} ({y})")
 
         # Abwesenheits-Balken
         row_of = {e["id"]: i for i, e in enumerate(emps)}
@@ -899,6 +966,9 @@ class App:
                 continue
             if ab < start or av > end:
                 continue
+            status = a.get("status") or ST_GENEHMIGT
+            if status == ST_ABGELEHNT:
+                continue  # Abgelehnte sind keine Abwesenheit – nicht im Kalender führen
             s = max(av, start)
             ee = min(ab, end)
             ry = HEAD_H + row_of[a["mitarbeiter_id"]] * ROW_H
@@ -906,9 +976,14 @@ class App:
             x2 = dx(ee) + DAY_W - 1
             color = ABW_STYLE.get(a["art"], "#777")
             tagid = f"abw{a['id']}"
-            self.cal.create_rectangle(x1, ry + 7, x2, ry + ROW_H - 7, fill=color, outline="", tags=(tagid,))
+            if status == ST_GENEHMIGT:
+                self.cal.create_rectangle(x1, ry + 7, x2, ry + ROW_H - 7, fill=color, outline="", tags=(tagid,))
+            else:  # Beantragt / GF-Freigabe ausstehend → schraffiert + Rahmen
+                self.cal.create_rectangle(x1, ry + 7, x2, ry + ROW_H - 7, fill=color, outline=color,
+                                          width=1, stipple="gray50", tags=(tagid,))
             if x2 - x1 > 46:
-                txt = a["art"] if mode == "monat" else a["art"][:3]
+                base = a["art"] if mode == "monat" else a["art"][:3]
+                txt = base if status == ST_GENEHMIGT else "⏳ " + base
                 self.cal.create_text((x1 + x2) / 2, ry + ROW_H / 2, text=txt,
                                      fill="white", font=(FONT, 8, "bold"), tags=(tagid,))
             self.cal.tag_bind(tagid, "<Button-1>", lambda ev, ab_=a: self._abw_click(ab_))
@@ -919,31 +994,254 @@ class App:
         self.status.set(f"Abwesenheiten · {scope} · {len(emps)} Mitarbeiter · "
                         f"Klick auf einen Balken zum Bearbeiten/Löschen.")
 
+    # =========================================================================
+    #  ANSICHT 4 · ANTRÄGE (genehmigen / ablehnen)
+    # =========================================================================
+    def show_antraege(self):
+        self.view = "antr"
+        self._nav_state()
+        self._clear_main()
+
+        gf = self._gf_freigabe_aktiv()
+        t = tk.Frame(self.main, bg=CARD, height=52)
+        t.pack(side="top", fill="x")
+        t.configure(highlightbackground=BORDER, highlightthickness=1)
+        tk.Label(t, text="✅  Urlaubs-/Abwesenheitsanträge", bg=CARD, fg=PRIMARY,
+                 font=(FONT, 12, "bold")).pack(side="left", padx=16, pady=10)
+        stufe_txt = ("Zweistufig: Personalverantwortliche → Geschäftsführung"
+                     if gf else "Einstufig: Personalverantwortliche entscheiden")
+        tk.Label(t, text=stufe_txt + "  ·  GF-Freigabe in der Parameter-App schaltbar",
+                 bg=CARD, fg=FAINT, font=(FONT, 9)).pack(side="left", padx=8)
+
+        wrap = tk.Frame(self.main, bg=BG)
+        wrap.pack(side="top", fill="both", expand=True, padx=0, pady=0)
+
+        cols = ("ma", "art", "zeit", "tage", "ein", "status")
+        tree = ttk.Treeview(wrap, columns=cols, show="headings", selectmode="browse")
+        for c, txt, w, anc in (("ma", "Mitarbeiter", 170, "w"), ("art", "Art", 120, "w"),
+                               ("zeit", "Zeitraum", 180, "w"), ("tage", "Tage", 50, "center"),
+                               ("ein", "Eingereicht", 120, "w"), ("status", "Status", 170, "w")):
+            tree.heading(c, text=txt)
+            tree.column(c, width=w, anchor=anc, stretch=(c == "status"))
+        tree.tag_configure("beantragt", foreground="#9A6500")
+        tree.tag_configure("gf", foreground="#0E7C86")
+
+        offen = sorted(self._open_antraege(), key=lambda a: (a.get("beantragt_am") or "", a["id"]))
+        self._antr_by_iid = {}
+        for a in offen:
+            try:
+                tage = sum(1 for d in self._daterange(a["von"], a["bis"]) if d.weekday() < 5)
+            except Exception:
+                tage = "?"
+            art_txt = a["art"] + (f" ({a['unterart']})" if a.get("unterart") else "")
+            st_lbl = ST_STYLE.get(a.get("status"), (a.get("status"), MUTED))[0]
+            tag = "gf" if a.get("status") == ST_GF else "beantragt"
+            iid = tree.insert("", "end", values=(
+                self._name(a["mitarbeiter_id"]), art_txt,
+                f"{a['von']} – {a['bis']}", tage, a.get("beantragt_am") or "—", st_lbl), tags=(tag,))
+            self._antr_by_iid[iid] = a
+
+        vsb = ttk.Scrollbar(wrap, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        wrap.rowconfigure(0, weight=1)
+        wrap.columnconfigure(0, weight=1)
+        self._antr_tree = tree
+
+        if not offen:
+            self._empty_overlay(wrap, "Keine offenen Anträge.",
+                                "Neue Urlaubs-/Abwesenheitsanträge erscheinen hier zur Entscheidung.")
+
+        def sel_antrag():
+            s = tree.selection()
+            if not s:
+                messagebox.showinfo("Anträge", "Bitte zuerst einen Antrag in der Liste auswählen.", parent=self.root)
+                return None
+            return self._antr_by_iid.get(s[0])
+
+        tree.bind("<Double-Button-1>", lambda e: (sel_antrag() and self._abw_click(sel_antrag())))
+
+        bar = tk.Frame(self.main, bg=BG)
+        bar.pack(side="bottom", fill="x", padx=16, pady=12)
+        tk.Button(bar, text="Details …", command=lambda: (sel_antrag() and self._abw_click(sel_antrag())),
+                  bg="#EDF1F6", fg=PRIMARY, relief="flat", font=(FONT, 10, "bold"),
+                  padx=14, pady=8, cursor="hand2").pack(side="left")
+
+        def do(genehmigen):
+            a = sel_antrag()
+            if a:
+                self._entscheide(a, genehmigen, None)
+
+        tk.Button(bar, text="✓ Genehmigen", command=lambda: do(True), bg="#11823B", fg="white",
+                  relief="flat", font=(FONT, 10, "bold"), padx=16, pady=8, cursor="hand2").pack(side="right")
+        tk.Button(bar, text="✗ Ablehnen", command=lambda: do(False), bg="#C0392B", fg="white",
+                  relief="flat", font=(FONT, 10, "bold"), padx=16, pady=8, cursor="hand2").pack(side="right", padx=(0, 8))
+
+        self.status.set(f"{len(offen)} offene Anträge · {stufe_txt}.")
+
+    def _daterange(self, von, bis):
+        v = date.fromisoformat(von)
+        b = date.fromisoformat(bis)
+        d = v
+        while d <= b:
+            yield d
+            d = date.fromordinal(d.toordinal() + 1)
+
+    def _empty_overlay(self, parent, title, sub):
+        ov = tk.Frame(parent, bg=BG)
+        ov.place(relx=0.5, rely=0.42, anchor="center")
+        tk.Label(ov, text=title, bg=BG, fg=MUTED, font=(FONT, 13, "bold")).pack()
+        tk.Label(ov, text=sub, bg=BG, fg=FAINT, font=(FONT, 10), justify="center").pack(pady=(4, 0))
+
     def _abw_click(self, a):
         win = tk.Toplevel(self.root)
         win.title("Abwesenheit")
         win.configure(bg=BG)
         win.transient(self.root)
         win.grab_set()
-        win.geometry("360x200")
+        win.geometry("400x300")
         art_txt = a["art"] + (f" – {a['unterart']}" if a.get("unterart") else "")
         info = (f"{self._name(a['mitarbeiter_id'])}\n{art_txt}\n"
                 f"{a['von']}  bis  {a['bis']}" + (f"\n{a['notiz']}" if a.get("notiz") else ""))
-        tk.Label(win, text=info, bg=BG, fg=INK, font=(FONT, 11), justify="left").pack(padx=20, pady=20, anchor="w")
+        tk.Label(win, text=info, bg=BG, fg=INK, font=(FONT, 11), justify="left").pack(padx=20, pady=(18, 6), anchor="w")
+
+        status = a.get("status") or ST_GENEHMIGT
+        st_lbl, st_col = ST_STYLE.get(status, (status, MUTED))
+        tk.Label(win, text=st_lbl, bg=BG, fg=st_col, font=(FONT, 11, "bold")).pack(padx=20, anchor="w")
+        # Entscheidungs-Historie
+        hist = []
+        if a.get("entscheider"):
+            hist.append(f"Stufe 1: {a['entscheider']} ({a.get('entschieden_am') or ''})")
+        if a.get("gf_entscheider"):
+            hist.append(f"GF-Freigabe: {a['gf_entscheider']} ({a.get('gf_am') or ''})")
+        if status == ST_ABGELEHNT and a.get("ablehnung_grund"):
+            hist.append(f"Grund: {a['ablehnung_grund']}")
+        if hist:
+            tk.Label(win, text="\n".join(hist), bg=BG, fg=MUTED, font=(FONT, 9),
+                     justify="left").pack(padx=20, pady=(4, 0), anchor="w")
+
         bar = tk.Frame(win, bg=BG)
         bar.pack(side="bottom", fill="x", padx=16, pady=14)
 
         def loeschen():
+            if not messagebox.askyesno("Löschen", "Diesen Eintrag wirklich löschen?", parent=win):
+                return
             con = sqlite3.connect(DB_PATH)
             con.execute("DELETE FROM tbl_abwesenheit WHERE id=?", (a["id"],))
             con.commit()
             con.close()
             self.abw = [x for x in self.abw if x["id"] != a["id"]]
             win.destroy()
-            self.draw_calendar()
+            self._refresh_after_decision()
             self.status.set("Abwesenheit gelöscht.")
         tk.Button(bar, text="Schließen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8, 0))
         tk.Button(bar, text="Löschen", command=loeschen, bg="#C0392B", fg="white", relief="flat", padx=16, pady=7).pack(side="right")
+
+        # Genehmigen / Ablehnen, je nach Status
+        if status in ST_OFFEN:
+            tk.Button(bar, text="✗ Ablehnen", command=lambda: self._entscheide(a, False, win),
+                      bg="#EDF1F6", fg="#C0392B", relief="flat", font=(FONT, 10, "bold"),
+                      padx=14, pady=7, cursor="hand2").pack(side="left")
+            ok_lbl = "✓ GF-Freigabe" if status == ST_GF else "✓ Genehmigen"
+            tk.Button(bar, text=ok_lbl, command=lambda: self._entscheide(a, True, win),
+                      bg="#11823B", fg="white", relief="flat", font=(FONT, 10, "bold"),
+                      padx=14, pady=7, cursor="hand2").pack(side="left", padx=(8, 0))
+
+    def _refresh_after_decision(self):
+        """Kalender + Antrags-Ansicht + Badge nach einer Änderung neu aufbauen."""
+        if getattr(self, "view", None) == "antr":
+            self.show_antraege()
+        elif getattr(self, "view", None) == "abw":
+            self.draw_calendar()
+        self._update_antraege_badge()
+
+    def _entscheide(self, a, genehmigen, win=None):
+        """Stufe-1- oder GF-Entscheidung über einen Antrag treffen."""
+        status = a.get("status") or ST_GENEHMIGT
+        if status not in ST_OFFEN:
+            return
+        zweite_stufe = (status == ST_GF)
+        if genehmigen:
+            kand = self._geschaeftsfuehrung() if zweite_stufe else self._personalverantwortliche()
+            titel = "GF-Freigabe" if zweite_stufe else "Genehmigen"
+            person = self._pick_decider(titel, kand, win or self.root)
+            if person is None:
+                return
+            now = datetime.now().strftime("%d.%m.%Y %H:%M")
+            con = sqlite3.connect(DB_PATH)
+            if zweite_stufe:
+                con.execute("UPDATE tbl_abwesenheit SET status=?, gf_entscheider=?, gf_am=? WHERE id=?",
+                            (ST_GENEHMIGT, person, now, a["id"]))
+                a["status"], a["gf_entscheider"], a["gf_am"] = ST_GENEHMIGT, person, now
+                msg = f"GF-Freigabe erteilt: {self._name(a['mitarbeiter_id'])} ({a['art']})."
+            elif self._gf_freigabe_aktiv():
+                con.execute("UPDATE tbl_abwesenheit SET status=?, entscheider=?, entschieden_am=? WHERE id=?",
+                            (ST_GF, person, now, a["id"]))
+                a["status"], a["entscheider"], a["entschieden_am"] = ST_GF, person, now
+                msg = f"Genehmigt von {person} – wartet jetzt auf GF-Freigabe."
+            else:
+                con.execute("UPDATE tbl_abwesenheit SET status=?, entscheider=?, entschieden_am=? WHERE id=?",
+                            (ST_GENEHMIGT, person, now, a["id"]))
+                a["status"], a["entscheider"], a["entschieden_am"] = ST_GENEHMIGT, person, now
+                msg = f"Genehmigt: {self._name(a['mitarbeiter_id'])} ({a['art']})."
+            con.commit()
+            con.close()
+        else:
+            kand = self._geschaeftsfuehrung() if zweite_stufe else self._personalverantwortliche()
+            person = self._pick_decider("Ablehnen", kand, win or self.root)
+            if person is None:
+                return
+            grund = simpledialog.askstring("Ablehnen", "Grund der Ablehnung (optional):",
+                                           parent=win or self.root) or ""
+            now = datetime.now().strftime("%d.%m.%Y %H:%M")
+            con = sqlite3.connect(DB_PATH)
+            con.execute("UPDATE tbl_abwesenheit SET status=?, entscheider=?, entschieden_am=?, "
+                        "ablehnung_grund=? WHERE id=?",
+                        (ST_ABGELEHNT, person, now, grund, a["id"]))
+            con.commit()
+            con.close()
+            a["status"], a["entscheider"], a["entschieden_am"], a["ablehnung_grund"] = \
+                ST_ABGELEHNT, person, now, grund
+            msg = f"Abgelehnt: {self._name(a['mitarbeiter_id'])} ({a['art']})."
+        if win is not None:
+            win.destroy()
+        self._refresh_after_decision()
+        self.status.set(msg)
+
+    def _pick_decider(self, titel, kandidaten, parent):
+        """Kleiner Dialog: Wer trifft die Entscheidung? Gibt Namen oder None (Abbruch)."""
+        kandidaten = [k for k in kandidaten if k] or ["—"]
+        dlg = tk.Toplevel(parent)
+        dlg.title(titel)
+        dlg.configure(bg=BG)
+        dlg.transient(parent)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+        tk.Label(dlg, text="Entscheidung durch:", bg=BG, fg=PRIMARY,
+                 font=(FONT, 11, "bold")).pack(anchor="w", padx=18, pady=(16, 4))
+        cb = ttk.Combobox(dlg, state="readonly", values=kandidaten, width=32)
+        # Vorbelegung: angemeldeter Benutzer, falls in der Liste
+        pre = next((k for k in kandidaten if self.current_user and self.current_user.lower() in k.lower()), kandidaten[0])
+        cb.set(pre)
+        cb.pack(padx=18, pady=(0, 6))
+        if not self._personalverantwortliche():
+            tk.Label(dlg, text="Hinweis: Noch keine Personalverantwortlichen markiert\n"
+                              "(Organigramm-Karte bearbeiten).", bg=BG, fg=MUTED,
+                     font=(FONT, 8), justify="left").pack(padx=18, anchor="w")
+        res = {"v": None}
+
+        def ok():
+            res["v"] = cb.get()
+            dlg.destroy()
+
+        bar = tk.Frame(dlg, bg=BG)
+        bar.pack(fill="x", padx=14, pady=14)
+        tk.Button(bar, text="Abbrechen", command=dlg.destroy, padx=12, pady=6).pack(side="right", padx=(8, 0))
+        tk.Button(bar, text="OK", command=ok, bg=PRIMARY, fg="white", relief="flat",
+                  padx=18, pady=6).pack(side="right")
+        dlg.wait_window()
+        return res["v"]
 
     def _abw_form(self):
         win = tk.Toplevel(self.root)
@@ -1022,18 +1320,21 @@ class App:
                 messagebox.showinfo("Abwesenheit", "Bitte einen Grund für den Sonderurlaub wählen.")
                 return
             unter = grund.get() if a_art == "Sonderurlaub" else ""
+            now = datetime.now().strftime("%d.%m.%Y %H:%M")
             con = sqlite3.connect(DB_PATH)
-            cur = con.execute("INSERT INTO tbl_abwesenheit(mitarbeiter_id,art,von,bis,notiz,unterart) "
-                              "VALUES(?,?,?,?,?,?)",
-                              (names[mname], a_art, v.isoformat(), b.isoformat(), notiz.get().strip(), unter))
+            cur = con.execute(
+                "INSERT INTO tbl_abwesenheit(mitarbeiter_id,art,von,bis,notiz,unterart,status,beantragt_am) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (names[mname], a_art, v.isoformat(), b.isoformat(), notiz.get().strip(),
+                 unter, ST_BEANTRAGT, now))
             con.commit()
             con.close()
             self.abw.append({"id": cur.lastrowid, "mitarbeiter_id": names[mname], "art": a_art,
                              "von": v.isoformat(), "bis": b.isoformat(), "notiz": notiz.get().strip(),
-                             "unterart": unter})
+                             "unterart": unter, "status": ST_BEANTRAGT, "beantragt_am": now})
             win.destroy()
-            self.draw_calendar()
-            self.status.set(f"Abwesenheit eingetragen: {mname} ({a_art}).")
+            self._refresh_after_decision()
+            self.status.set(f"Antrag eingereicht: {mname} ({a_art}) – wartet auf Genehmigung.")
             # 31.03.-Hinweis, wenn Urlaub ins neue Jahr übertragen wird
             if a_art == "Urlaub" and b.year > v.year:
                 messagebox.showwarning(

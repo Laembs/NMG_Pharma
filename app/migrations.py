@@ -316,6 +316,112 @@ def run_migrations(db_path: Path = DB_PATH) -> list[str]:
         con.execute("CREATE INDEX IF NOT EXISTS idx_faktura_belege_datum ON tbl_faktura_belege(beleg_datum)")
         actions.append("Faktura-Tabellen sichergestellt")
 
+        # ── Einkauf-App (eigenstaendig) ──────────────────────────────────────
+        # Beschaffung EU-Ausland + Margen. Kerngedanken:
+        #   * Lieferanten je Land mit Waehrung, Lieferzeit, Mindestbestellwert
+        #   * Einkaufsquellen (PZN x Lieferant) mit EK in Fremdwaehrung + Mindestabnahme
+        #   * Wechselkurse (EUR je 1 Einheit Fremdwaehrung) als zentrale Umrechnung
+        #   * Aufgaben/Wiedervorlagen mit Faelligkeit -> Meldungen auf dem Dashboard
+        # Einstellungen (key/value), u.a. §129-Preisabstand-Schwellen.
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_einkauf_einstellungen(
+                schluessel TEXT PRIMARY KEY,
+                wert TEXT
+            )"""
+        )
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_einkauf_lieferanten(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                land TEXT,
+                waehrung TEXT DEFAULT 'EUR',
+                ansprechpartner TEXT,
+                email TEXT,
+                telefon TEXT,
+                lieferzeit_tage INTEGER,
+                mindestbestellwert REAL,
+                zahlungsziel_tage INTEGER,
+                gdp_zertifiziert INTEGER DEFAULT 0,
+                aktiv INTEGER DEFAULT 1,
+                notizen TEXT,
+                erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,
+                geaendert_am TEXT
+            )"""
+        )
+        # Einkaufsquellen: pro Artikel (PZN) ein Angebot eines Lieferanten mit
+        # EK in Fremdwaehrung, Mindestabnahme und (optional) eigener Lieferzeit.
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_einkauf_quellen(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lieferant_id INTEGER,
+                pzn TEXT,
+                artikelname TEXT,
+                ek_fremd REAL,
+                waehrung TEXT DEFAULT 'EUR',
+                mindestabnahme INTEGER,
+                lieferzeit_tage INTEGER,
+                gueltig_ab TEXT,
+                aktiv INTEGER DEFAULT 1,
+                notiz TEXT,
+                erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(lieferant_id) REFERENCES tbl_einkauf_lieferanten(id) ON DELETE CASCADE
+            )"""
+        )
+        # Wechselkurse: kurs_eur = wieviel EUR ist 1 Einheit der Fremdwaehrung wert.
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_einkauf_wechselkurse(
+                waehrung TEXT PRIMARY KEY,
+                kurs_eur REAL,
+                aktualisiert_am TEXT
+            )"""
+        )
+        # Aufgaben / Wiedervorlagen des Einkaufs. Faellige/ueberfaellige Eintraege
+        # erscheinen als Meldungen auf dem Dashboard ("melde dich bei ...").
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_einkauf_aufgaben(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                titel TEXT,
+                beschreibung TEXT,
+                kategorie TEXT DEFAULT 'Wiedervorlage',
+                lieferant_id INTEGER,
+                prioritaet INTEGER DEFAULT 2,
+                faellig_am TEXT,
+                status TEXT DEFAULT 'offen',
+                erledigt_am TEXT,
+                bearbeiter TEXT,
+                erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(lieferant_id) REFERENCES tbl_einkauf_lieferanten(id) ON DELETE SET NULL
+            )"""
+        )
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS tbl_einkauf_log(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                zeitpunkt TEXT DEFAULT CURRENT_TIMESTAMP,
+                bearbeiter TEXT,
+                aktion TEXT,
+                details TEXT
+            )"""
+        )
+        con.execute("CREATE INDEX IF NOT EXISTS idx_einkauf_quellen_pzn ON tbl_einkauf_quellen(pzn)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_einkauf_quellen_lieferant ON tbl_einkauf_quellen(lieferant_id)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_einkauf_aufgaben_faellig ON tbl_einkauf_aufgaben(faellig_am)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_einkauf_aufgaben_status ON tbl_einkauf_aufgaben(status)")
+        actions.append("Einkauf-Tabellen sichergestellt")
+
+        # ── GDP-App (Wareneingang & Retouren) ────────────────────────────────
+        # Chargen-Rueckverfolgung (Kunde<->Charge), GDP-Wareneingangspruefung,
+        # Kuehlkette (Messpunkte + Messungen), Selbstinspektion, Kunden-
+        # qualifizierung, Retouren/Reklamationen, Rueckrufe und Protokoll.
+        # Erzeugung zentral in app.gdp_app.ensure_gdp_tables (Single Source);
+        # hier nur aufrufen, damit auch NMGone die Tabellen beim Start sichert.
+        try:
+            con.commit()  # offene Schreibsperre loesen, bevor zweite Verbindung schreibt
+            from .gdp_app import ensure_gdp_tables
+            ensure_gdp_tables(db_path)
+            actions.append("GDP-Tabellen sichergestellt")
+        except Exception:
+            pass
+
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('db_schema_version', ?)", (DB_SCHEMA_VERSION,))
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('last_migration_at', ?)", (datetime.now().isoformat(timespec='seconds'),))
         con.commit()

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Handout · Retouren bearbeiten (Wareneingang &amp; Retouren)</title>
+<style>
+  :root{
+    --primary:#0B4A86; --primary-dark:#083A6B; --accent:#208ACD;
+    --success:#11823B; --warning:#C88200; --danger:#B3261E;
+    --ink:#1F2933; --muted:#626E7D; --border:#DCE2E8; --bg:#F4F6F9; --card:#FFFFFF;
+  }
+  *{box-sizing:border-box;}
+  body{font-family:"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--bg);
+       margin:0;padding:24px;line-height:1.5;}
+  .sheet{max-width:900px;margin:0 auto;background:var(--card);border:1px solid var(--border);
+         border-radius:8px;overflow:hidden;}
+  header{background:var(--primary);color:#fff;padding:22px 30px;}
+  header .kicker{font-size:12px;letter-spacing:1.5px;text-transform:uppercase;opacity:.8;}
+  header h1{margin:4px 0 2px;font-size:26px;}
+  header p{margin:0;font-size:13px;opacity:.9;}
+  .body{padding:26px 30px;}
+  h2{color:var(--primary);font-size:17px;margin:26px 0 8px;padding-bottom:5px;
+     border-bottom:2px solid #E8F1FB;}
+  h2:first-child{margin-top:0;}
+  h3{color:var(--accent);font-size:13px;margin:16px 0 4px;text-transform:uppercase;letter-spacing:.5px;}
+  p{margin:6px 0;}
+  .lead{font-size:14px;color:var(--muted);}
+  ol.steps{counter-reset:s;list-style:none;padding:0;margin:10px 0;}
+  ol.steps li{counter-increment:s;position:relative;padding:9px 12px 9px 46px;margin:7px 0;
+              background:#F7FAFD;border:1px solid var(--border);border-radius:6px;}
+  ol.steps li::before{content:counter(s);position:absolute;left:10px;top:9px;width:26px;height:26px;
+              background:var(--primary);color:#fff;border-radius:50%;font-weight:bold;font-size:13px;
+              display:flex;align-items:center;justify-content:center;}
+  ol.steps li b{color:var(--primary);}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13px;}
+  th,td{border:1px solid var(--border);padding:7px 9px;text-align:left;vertical-align:top;}
+  th{background:#EEF3F8;color:var(--primary);}
+  .pill{display:inline-block;padding:2px 9px;border-radius:11px;font-size:12px;font-weight:bold;color:#fff;}
+  .p-warn{background:var(--warning);} .p-ok{background:var(--success);}
+  .p-danger{background:var(--danger);} .p-neutral{background:var(--muted);}
+  .box{border:1px solid var(--border);border-left:5px solid var(--accent);background:#F7FAFD;
+       padding:12px 16px;border-radius:6px;margin:14px 0;}
+  .box.tip{border-left-color:var(--success);background:#F1FAF4;}
+  .box.warn{border-left-color:var(--warning);background:#FEF8EE;}
+  .box h4{margin:0 0 4px;color:var(--primary);font-size:13px;}
+  .grid2{display:flex;gap:16px;flex-wrap:wrap;}
+  .grid2 .col{flex:1;min-width:240px;}
+  .stockdemo{font-family:Consolas,monospace;font-size:15px;background:#0B2C4A;color:#D7E6F4;
+       padding:10px 14px;border-radius:6px;display:inline-block;margin:6px 0;}
+  .stockdemo b{color:#7FD49B;}
+  .stockdemo .ret{color:#F2C14E;}
+  footer{padding:14px 30px;background:#F7FAFD;border-top:1px solid var(--border);
+          font-size:11px;color:var(--muted);display:flex;justify-content:space-between;}
+  @media print{
+    body{background:#fff;padding:0;}
+    .sheet{border:none;border-radius:0;max-width:none;}
+    h2{break-after:avoid;} ol.steps li,.box,table{break-inside:avoid;}
+    .no-print{display:none;}
+  }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <div class="kicker">NMGone · Wareneingang &amp; Retouren (GDP)</div>
+    <h1>Retouren bearbeiten</h1>
+    <p>Kurzanleitung für Mitarbeiter – von der Anmeldung der Apotheke bis zur Gutschrift, Freigabe oder Abschreibung</p>
+  </header>
+  <div class="body">
+
+    <p class="lead">Eine Apotheke möchte Ware zurücksenden oder reklamiert eine Lieferung.
+    Dieses Handout zeigt, <b>wie wir das im Programm sehen und Schritt für Schritt bearbeiten</b> –
+    und was mit dem Bestand passiert, wenn wir die Ware zurücknehmen.</p>
+
+    <h2>1 · Wie kommt eine Retoure zu uns?</h2>
+    <p>Die Apotheke meldet die Rücksendung <b>telefonisch, per E-Mail oder Fax</b> bei uns an.
+    Ein Mitarbeiter erfasst sie im Programm. Ab dann ist der Vorgang <b>für alle sichtbar</b>:</p>
+    <ul>
+      <li>Programm <b>„Wareneingang &amp; Retouren“</b> öffnen (Kachel im NMGone-Dashboard oder eigenes Taskleisten-Symbol).</li>
+      <li>Auf der <b>Übersicht</b> zeigt die Kachel <b>„Offene Retouren“</b>, wie viele Vorgänge in Bearbeitung sind – so geht keiner unter.</li>
+      <li>Im Bereich <b>„Retouren / Reklamation“</b> stehen alle Vorgänge mit ihrem aktuellen Status (Filter nach Status möglich).</li>
+    </ul>
+
+    <h2>2 · Eine neue Retoure erfassen</h2>
+    <ol class="steps">
+      <li>Im Bereich <b>Retouren / Reklamation</b> auf <b>„+ Neue Retoure / Reklamation“</b> klicken.</li>
+      <li><b>Vorgang</b> wählen: <i>Retoure</i> (Rücksendung) oder <i>Reklamation</i> (Beanstandung).</li>
+      <li><b>Apotheke</b> auswählen und den <b>Artikel mit Charge</b> (aus Lager bzw. tatsächlicher Lieferung), dazu <b>Menge</b>.</li>
+      <li><b>Rücksendegrund</b> wählen (z. B. Falschlieferung, Transportschaden, Temperaturbruch …) und ggf. <b>Temperaturbruch</b> markieren.</li>
+      <li>Speichern – der Vorgang erscheint mit Status <span class="pill p-warn">Neu</span>.</li>
+    </ol>
+    <div class="box tip"><h4>Warum die Charge wichtig ist</h4>
+      Über die Charge bleibt jede Rücksendung rückverfolgbar – das verlangt die GDP (Good Distribution Practice)
+      und hilft, im Rückruffall genau die betroffene Ware zu finden.</div>
+
+    <h2>3 · Den Vorgang bearbeiten (Workflow)</h2>
+    <p>Vorgang in der Liste markieren und die passende Schaltfläche oben drücken:</p>
+    <ol class="steps">
+      <li><b>Prüfen</b> – Vorgang in Bearbeitung nehmen → Status <span class="pill p-warn">In Prüfung</span>.</li>
+      <li><b>Gutschrift</b> – erzeugt einen Gutschrift-Beleg für die Apotheke. Ist die <b>Faktura</b> vorhanden, wird dort automatisch ein offener Gutschrift-Beleg angelegt → Status <span class="pill p-ok">Gutschrift</span>.</li>
+      <li><b>In Retourenbestand</b> – die Ware wird zurückgenommen und kommt in den <b>gesperrten Retourenbestand</b> (Quarantäne) → Status <span class="pill p-warn">Im Retourenbestand</span>.</li>
+      <li><b>Vernichten</b> – Ware wird direkt als vernichtet dokumentiert (z. B. bei Temperaturbruch) → Status <span class="pill p-danger">Vernichtet</span>.</li>
+      <li><b>Ablehnen</b> / <b>Storno</b> – Retoure ablehnen, oder einen versehentlich angelegten neuen Vorgang löschen.</li>
+    </ol>
+    <div class="box"><h4>Übliche Reihenfolge</h4>
+      <b>Neu → Prüfen → Gutschrift → In Retourenbestand</b>, danach im Retourenbestand
+      <b>Freigeben</b> oder <b>Abschreiben</b> (siehe nächster Abschnitt). Bei eindeutig
+      unbrauchbarer Ware: direkt <b>Vernichten</b>.</div>
+
+    <h2>4 · Bestand: so wird Retourenware angezeigt</h2>
+    <p>Zurückgenommene Ware geht <b>nicht sofort zurück in den Verkauf</b>. Sie liegt erst gesperrt
+    im <b>Retourenbestand</b> (Quarantäne). Im Bereich <b>„Retourenbestand“</b> steht je Charge der
+    Bestand so:</p>
+    <p><span class="stockdemo">Bestand: <b>25</b> <span class="ret">(5)</span></span>
+       &nbsp;→&nbsp; <b>25</b> Stück normal verkaufbar, <span style="color:var(--warning)"><b>5</b></span> Stück im Retourenbestand (gesperrt).</p>
+    <p>Pro Charge entscheidet ein Mitarbeiter, was mit der Retourenware passiert:</p>
+    <div class="grid2">
+      <div class="col box tip"><h4>✅ In Bestand freigeben</h4>
+        Einwandfreie, GDP-konforme Ware. Die gewählte Menge wandert aus dem Retourenbestand
+        zurück in den <b>Normalbestand</b> und ist wieder <b>verkaufbar</b>.</div>
+      <div class="col box warn"><h4>🗑 Abschreiben</h4>
+        Beschädigte, abgelaufene oder nicht GDP-konforme Ware. Mit <b>Grund</b> auswählen;
+        die Menge wird <b>ausgebucht</b>, der <b>EK-Wert dokumentiert</b> – revisionssicher.</div>
+    </div>
+    <div class="box warn"><h4>Wichtig (GDP)</h4>
+      Retourenware ist bis zur Freigabe <b>nicht verkaufbar</b>. Nur einwandfreie Ware mit
+      ungebrochener Kühlkette darf freigegeben werden – im Zweifel abschreiben.</div>
+
+    <h2>5 · Status auf einen Blick</h2>
+    <table>
+      <tr><th>Status</th><th>Bedeutung</th><th>Nächster Schritt</th></tr>
+      <tr><td><span class="pill p-warn">Neu</span></td><td>Erfasst, noch nicht bearbeitet</td><td>Prüfen</td></tr>
+      <tr><td><span class="pill p-warn">In Prüfung</span></td><td>In Bearbeitung</td><td>Gutschrift / Entscheidung</td></tr>
+      <tr><td><span class="pill p-ok">Gutschrift</span></td><td>Gutschrift erstellt (Faktura)</td><td>In Retourenbestand nehmen</td></tr>
+      <tr><td><span class="pill p-warn">Im Retourenbestand</span></td><td>Ware in Quarantäne (gesperrt)</td><td>Freigeben oder Abschreiben</td></tr>
+      <tr><td><span class="pill p-danger">Vernichtet</span></td><td>Ware entsorgt/abgeschrieben</td><td>abgeschlossen</td></tr>
+      <tr><td><span class="pill p-neutral">Abgelehnt</span></td><td>Rücknahme abgelehnt</td><td>abgeschlossen</td></tr>
+    </table>
+
+    <div class="box"><h4>Alles wird protokolliert</h4>
+      Jeder Schritt (wer, was, wann) steht im <b>Protokoll</b>. Protokoll, Rückruf-Verteiler und
+      Abschreibungen lassen sich als <b>CSV</b> exportieren – ideal für Inspektionen und Nachweise.</div>
+
+  </div>
+  <footer>
+    <span>NMGone · Wareneingang &amp; Retouren (GDP) · Mitarbeiter-Handout</span>
+    <span>Stand: Juni 2026</span>
+  </footer>
+</div>
+</body>
+</html>

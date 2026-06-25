@@ -113,12 +113,27 @@ def _select_db_filename() -> str:
         return explicit
     if os.environ.get("NMGONE_DEMO", "").strip() in ("1", "true", "True", "ja"):
         return "nmg_demodatenbank.sqlite"
+    # Demo-Paket: liegt KEINE Produktiv-DB, aber eine Demo-DB vor, laeuft das
+    # Programm automatisch im Demo-Modus (z.B. das ausgelieferte NMGone-Demo).
+    if not (DATA_DIR / "nmg_startdatenbank.sqlite").exists() \
+            and (DATA_DIR / "nmg_demodatenbank.sqlite").exists():
+        return "nmg_demodatenbank.sqlite"
     return "nmg_startdatenbank.sqlite"
 
 
 DB_FILENAME = _select_db_filename()
 DB_PATH = DATA_DIR / DB_FILENAME
 IS_DEMO_DB = DB_FILENAME != "nmg_startdatenbank.sqlite"
+
+# Interner Programmname. Im Demo-Modus heisst das Programm ueberall sichtbar
+# "NMGone Demo", damit Demo- und Echtbetrieb nie verwechselt werden.
+APP_NAME = "NMGone Demo" if IS_DEMO_DB else "NMGone"
+DEMO_SUFFIX = "  [DEMO]" if IS_DEMO_DB else ""
+
+
+def fenstertitel(basis: str) -> str:
+    """Haengt im Demo-Modus eine sichtbare DEMO-Markierung an einen Titel."""
+    return f"{basis}{DEMO_SUFFIX}"
 
 REFERENCE_XLSX = DATA_DIR / "NMG_Hochpreiser_Vollversion_1_3_NMG_STAMM_APU_TAXEK.xlsx"
 LINDEN_REFERENCE_XLSX = DATA_DIR / "Linden_Apo_Auengrund_Referenz.xlsx"

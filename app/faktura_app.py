@@ -24,7 +24,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 
-from .config import DB_PATH, ASSETS_DIR, OUTPUT_DIR
+from .config import DB_PATH, ASSETS_DIR, OUTPUT_DIR, DEMO_SUFFIX
 from . import theme
 from . import tour
 
@@ -2381,7 +2381,7 @@ def run_standalone():
     except Exception:
         pass
     root = tk.Tk()
-    root.title("NMG Faktura")
+    root.title(f"NMG Faktura{DEMO_SUFFIX}")
     root.geometry("1100x720")
     root.minsize(960, 620)
     root.configure(bg=SHELL_BG)

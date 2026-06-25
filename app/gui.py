@@ -151,7 +151,7 @@ from .roadmap_db import (
     update_roadmap_status,
 )
 from .migrations import run_migrations
-from .config import DB_PATH, DATA_DIR, ASSETS_DIR, SAVED_ANALYSES_DIR, IMPORT_DIR, UPDATE_DIR, OUTPUT_DIR, BACKUP_DIR, LOG_DIR, jahr_quartal_pfad
+from .config import DB_PATH, DATA_DIR, ASSETS_DIR, SAVED_ANALYSES_DIR, IMPORT_DIR, UPDATE_DIR, OUTPUT_DIR, BACKUP_DIR, LOG_DIR, jahr_quartal_pfad, DEMO_SUFFIX
 from .i18n import T as _T  # SP11: dict-basierte Uebersetzung
 from .backup import backup_erstellen, backup_wiederherstellen, backup_pruefen, versionsinfo, APP_VERSION, APP_VERSION_DISPLAY, backup_auto_taeglich, DB_SCHEMA_VERSION
 from .protocol_manager import (
@@ -245,7 +245,7 @@ def _dq_label(dq) -> str:
 class NMGApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"NMGone {APP_VERSION_DISPLAY}")
+        self.title(f"NMGone{DEMO_SUFFIX} {APP_VERSION_DISPLAY}")
         self.geometry("1040x640")
         self.minsize(980, 600)
         try:
@@ -1462,6 +1462,10 @@ class NMGApp(tk.Tk):
             "todo_center": self.show_todo_center,
             "kasse": self.open_kasse_app,
             "bestell_center": self.open_kasse_app,
+            "gdp": self.open_gdp_app,
+            "meldungen": self.open_meldungen_app,
+            "einkauf": self.open_einkauf_app,
+            "parameter": self.open_parameter_app,
             "faktura": self.open_faktura_app,
             "auswertungen": self.open_auswertungen_app,
             "report": self.show_report_page,
@@ -4261,10 +4265,14 @@ LIMIT 500
             ("schulbank",        "🎓", "Schulbank",            "Lernvorschläge bearbeiten.",                lambda: self.show_schulbank_page("Schulbank"),"#11823b"),
             ("kunden",           "👥", "Kunden",           "Kundenstamm und -history.",                 self.show_kunden_center,                     "#0b4a86"),
             ("kasse",            "🛒", "Kasse",                "Verkauf an Apotheken + Wareneingang.",      self.open_kasse_app,                         "#8b5a00"),
+            ("gdp",              "📦", "Wareneingang & Retouren", "Chargen-Rückverfolgung, Retouren (GDP).", self.open_gdp_app,                    "#0b6e6e"),
+            ("meldungen",        "🔔", "Meldungen",            "Abweichungen, Kühlsachenkontrolle, Selbstinspektion.", self.open_meldungen_app,            "#b5391f"),
+            ("einkauf",          "🛒", "Einkauf",              "Beschaffung EU-Ausland, §129-Margen, Aufgaben.", self.open_einkauf_app,                    "#0b4a86"),
             ("faktura",          "🧾", "Faktura",              "Rechnungen und Gutschriften erstellen.",    self.open_faktura_app,                       "#0b4a86"),
             ("auswertungen",     "📑", "Auswertungen",         "Verkäufe, Kunden, Artikel frei auswerten.", self.open_auswertungen_app,                  "#0b6e6e"),
             ("todo",             "✅", "ToDo",                 "Aufgaben und offene Punkte.",               self.show_todo_center,                        "#11823b"),
             ("mitarbeiter",      "👥", "Mitarbeiter",          "Organigramm, Abwesenheiten, Arbeitsbereiche.", self.open_personal_app,                   "#6b4fb3"),
+            ("parameter",        "🔐", "Parameter",            "Berechtigungen: wer darf was (Admin-Modus).",  self.open_parameter_app,                  "#0b2c4a"),
             ("produktanalyse",   "📈", "Produktanalyse",       "Produktchancen erstellen.",                 self.market_opportunities,                   "#11823b"),
             # SP7: Marktanalyse-Tile entfernt.
             ("abweichung",       "🔍", "Abweichungsanalyse",   "Manuelle vs. Programm-Auswertung.",         self.deviation_analysis,                     "#8b5a00"),
@@ -7397,7 +7405,11 @@ LIMIT 500
             ("\U0001f464", "Mitarbeiter", "Organigramm, Abwesenheiten, Arbeitsbereiche.", self.open_personal_app, "#6b4fb3"),
             ("\u2705", "ToDo", "Aufgaben, offene Punkte und Notizen.", self.show_todo_center, "#11823b"),
             ("\U0001f6d2", "Kasse", "Verkauf an Apotheken + Wareneingang.", self.open_kasse_app, "#8b5a00"),
+            ("\U0001f4e6", "Wareneingang & Retouren", "Chargen-Rückverfolgung, Retouren (GDP).", self.open_gdp_app, "#0b6e6e"),
+            ("\U0001f514", "Meldungen", "Abweichungen, Kühlsachenkontrolle, Selbstinspektion (GDP).", self.open_meldungen_app, "#b5391f"),
+            ("\U0001f6d2", "Einkauf", "Beschaffung EU-Ausland, §129-Margen, Aufgaben & Meldungen.", self.open_einkauf_app, "#0b4a86"),
             ("\U0001f9fe", "Faktura", "Rechnungen und Gutschriften erstellen.", self.open_faktura_app, "#0b4a86"),
+            ("\U0001f510", "Parameter", "Berechtigungen verwalten: welcher Mitarbeiter was darf (Admin-Modus).", self.open_parameter_app, "#0b2c4a"),
             ("\U0001f4d1", "Auswertungen", "Verkäufe, Kunden, Artikel frei auswerten und exportieren.", self.open_auswertungen_app, "#0b6e6e"),
             ("\U0001f50d", _T("Vergleichs-Suche"), _T("PZN oder Artikelname schnell in allen Wissens-Tabellen finden."), self.open_vergleichssuche_window, "#0b6e6e"),
             # V1.1 SP9: Globale Suche als App-Kachel.
@@ -8002,6 +8014,113 @@ LIMIT 500
         except Exception as exc:
             messagebox.showerror("NMG Faktura",
                                  f"Faktura konnte nicht gestartet werden:\n{exc}", parent=self)
+
+    def open_gdp_app(self):
+        """GDP-App (Wareneingang, Chargen-Rückverfolgung, Kühlkette & Retouren)
+        als EIGENEN Prozess starten. Teilt sich die DB mit NMGone, eigenes
+        Fenster/Taskleisten-Icon. Zweiter Aufruf bringt keinen weiteren Start,
+        solange der Prozess läuft."""
+        import subprocess
+        proc = getattr(self, "_gdp_proc", None)
+        if proc is not None and proc.poll() is None:
+            messagebox.showinfo(
+                "Wareneingang & Retouren",
+                "Die App läuft bereits in einem eigenen Fenster.\n"
+                "Bitte über die Taskleiste nach vorn holen.", parent=self)
+            return
+        try:
+            flags = 0
+            if sys.platform == "win32":
+                flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable, "--gdp"]
+            else:
+                start_py = Path(__file__).resolve().parent.parent / "start_gdp.py"
+                cmd = [sys.executable, str(start_py)]
+            self._gdp_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
+        except Exception as exc:
+            messagebox.showerror("Wareneingang & Retouren",
+                                 f"Die App konnte nicht gestartet werden:\n{exc}", parent=self)
+
+    def open_meldungen_app(self):
+        """Meldungen-App (GDP-Meldewesen, Kühlsachenkontrolle & Selbstinspektion)
+        als EIGENEN Prozess starten. Teilt sich die DB mit NMGone, eigenes
+        Fenster/Taskleisten-Icon (AUMID NMG.Meldungen). Zweiter Aufruf bringt
+        keinen weiteren Start, solange der Prozess läuft."""
+        import subprocess
+        proc = getattr(self, "_meldungen_proc", None)
+        if proc is not None and proc.poll() is None:
+            messagebox.showinfo(
+                "Meldungen",
+                "Die Meldungen-App läuft bereits in einem eigenen Fenster.\n"
+                "Bitte über die Taskleiste nach vorn holen.", parent=self)
+            return
+        try:
+            flags = 0
+            if sys.platform == "win32":
+                flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable, "--meldungen"]
+            else:
+                start_py = Path(__file__).resolve().parent.parent / "start_meldungen.py"
+                cmd = [sys.executable, str(start_py)]
+            self._meldungen_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
+        except Exception as exc:
+            messagebox.showerror("Meldungen",
+                                 f"Die App konnte nicht gestartet werden:\n{exc}", parent=self)
+
+    def open_einkauf_app(self):
+        """Einkauf-App (Beschaffung EU-Ausland, §129-Margen, Aufgaben/Meldungen)
+        als EIGENEN Prozess starten. Teilt sich die DB mit NMGone, eigenes
+        Fenster/Taskleisten-Icon (AUMID NMG.Einkauf). Zweiter Aufruf bringt
+        keinen weiteren Start, solange der Prozess läuft."""
+        import subprocess
+        proc = getattr(self, "_einkauf_proc", None)
+        if proc is not None and proc.poll() is None:
+            messagebox.showinfo(
+                "NMG Einkauf",
+                "Die Einkauf-App läuft bereits in einem eigenen Fenster.\n"
+                "Bitte über die Taskleiste nach vorn holen.", parent=self)
+            return
+        try:
+            flags = 0
+            if sys.platform == "win32":
+                flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable, "--einkauf"]
+            else:
+                start_py = Path(__file__).resolve().parent.parent / "start_einkauf.py"
+                cmd = [sys.executable, str(start_py)]
+            self._einkauf_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
+        except Exception as exc:
+            messagebox.showerror("NMG Einkauf",
+                                 f"Die Einkauf-App konnte nicht gestartet werden:\n{exc}", parent=self)
+
+    def open_parameter_app(self):
+        """Parameter- & Berechtigungs-App (wer darf was) als EIGENEN Prozess
+        starten. Teilt sich die DB mit NMGone, eigenes Fenster/Taskleisten-Icon.
+        Zweiter Aufruf bringt keinen weiteren Start, solange der Prozess läuft."""
+        import subprocess
+        proc = getattr(self, "_parameter_proc", None)
+        if proc is not None and proc.poll() is None:
+            messagebox.showinfo(
+                "Parameter & Berechtigungen",
+                "Die App läuft bereits in einem eigenen Fenster.\n"
+                "Bitte über die Taskleiste nach vorn holen.", parent=self)
+            return
+        try:
+            flags = 0
+            if sys.platform == "win32":
+                flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable, "--parameter"]
+            else:
+                start_py = Path(__file__).resolve().parent.parent / "start_parameter.py"
+                cmd = [sys.executable, str(start_py)]
+            self._parameter_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
+        except Exception as exc:
+            messagebox.showerror("Parameter & Berechtigungen",
+                                 f"Die App konnte nicht gestartet werden:\n{exc}", parent=self)
 
     def open_auswertungen_app(self):
         """Auswertungs-/Report-Modul als EIGENEN Prozess starten (NMGone.exe

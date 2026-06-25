@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8">
+<title>Handout · Kasse – NMGone</title>
+<link rel="stylesheet" href="_handout.css">
+</head><body>
+<div class="sheet">
+  <header>
+    <div class="kicker">NMGone · Kasse</div>
+    <h1>Die Kasse</h1>
+    <p>Der Weg der Ware: Wareneingang → Lager → Verkauf an Apotheken</p>
+  </header>
+  <div class="body">
+
+    <p class="lead">Die Kasse ist ein eigenes Programm mit eigenem Taskleisten-Symbol. Sie bildet den
+    kompletten Weg der Ware ab: Wareneingang buchen, Lagerbestand führen und an Apotheken verkaufen.
+    Jeder Verkauf landet sofort in den Auswertungen.</p>
+
+    <h2>1 · Wareneingang erfassen</h2>
+    <p>Zuerst kommt die Ware ins Lager. Im Reiter <b>„Wareneingang"</b> buchst du NMG-Ware mit Charge,
+    Verfall und Einkaufspreis ein – der Lagerbestand erhöht sich.</p>
+    <div class="box tip"><h4>💡 EK und Lagerwert</h4>
+      Das Feld <b>„EK €"</b> ist mit dem APU vorbelegt und kann überschrieben werden. Daraus errechnet
+      die Kasse überall den <b>Lagerwert</b> (EK × Bestand) – zusätzlich zum Verkaufswert (APU ×
+      Bestand). Beim Import wird eine EK-Spalte automatisch übernommen.</div>
+
+    <h2>2 · Einen Verkauf anlegen</h2>
+    <ol class="steps">
+      <li><b>Kunde wählen</b> – die belieferte Apotheke.</li>
+      <li><b>Artikel/Mengen erfassen</b> – per PZN oder Artikelsuche.</li>
+      <li><b>Abschließen</b> – der Verkauf wird gespeichert und das Lager abgebucht.</li>
+    </ol>
+    <h3>Freie Position</h3>
+    <p>Über <b>„➕ Freie Position"</b> erfasst du einen frei benannten Posten mit eigenem Preis, Menge
+    und Rabatt – z. B. einen Botendienst-Zuschlag. Er wird <b>nicht</b> vom Lager abgebucht, erscheint
+    aber mit Preis auf der Auftragsbestätigung.</p>
+
+    <h2>3 · Wenn der Bestand nicht reicht – Vorbestellung</h2>
+    <p>Buchst du mehr, als auf Lager ist, fragt die Kasse nach: Du lieferst die verfügbare Menge sofort
+    und nimmst den Rest automatisch als <b>Vorbestellung</b> auf – oder verkaufst nur den vorhandenen
+    Bestand. Offene Vorbestellungen disponierst du im Reiter <b>„Vorbestellungen"</b> und übernimmst
+    sie später als Verkauf.</p>
+
+    <h2>4 · MSK &amp; Lieferschein</h2>
+    <p>Im Reiter <b>„Verkäufe"</b> markierst du einen Verkauf als <b>„In MSK erfasst"</b>. Direkt danach
+    bietet die Kasse an, den <b>Lieferschein</b> zu erzeugen und zu öffnen. Über die Detailansicht lässt
+    er sich jederzeit erneut drucken.</p>
+    <div class="box tip"><h4>💡 Lieferschein-Vorlage</h4>
+      Eigene Firmendaten/Logo: über den Reiter „Einstellungen" pflegbar. Der Lieferschein zeigt
+      Charge/Verfall, aber keine Preise.</div>
+
+    <h2>5 · Wer hat was getan? – Verlauf &amp; Protokoll</h2>
+    <p>In der Detailansicht eines Verkaufs öffnet <b>„🕘 Verlauf"</b> die komplette Historie (angelegt,
+    MSK erfasst, Lieferschein, Storno …) mit Mitarbeiter und Zeitpunkt – auch als PDF. Das vollständige
+    Protokoll im Reiter <b>„Protokoll"</b> lässt sich nach Auftrag-Nr oder Mitarbeiter filtern und als
+    PDF exportieren.</p>
+
+    <h2>6 · Reiter „Auswertung"</h2>
+    <table>
+      <tr><th>Bereich</th><th>Inhalt</th></tr>
+      <tr><td>Umsatz</td><td>je Tag/Monat/Jahr: Anzahl Verkäufe, Anzahl Packungen, APU Brutto, Rabatt (Netto), APU Netto.</td></tr>
+      <tr><td>Tagesabschluss</td><td>Tag per Kalender wählen; zeigt Tagesabschluss-Nr und Kennzahlen.</td></tr>
+      <tr><td>Verfall</td><td>3/6/9/12 Monate oder Alle; abgelaufene (rot) und bald ablaufende (gelb) Chargen mit Bestand und Verkaufswert.</td></tr>
+      <tr><td>Inventur</td><td>Zählliste mit Soll-Bestand und Verkaufswert zum Ausdrucken.</td></tr>
+    </table>
+    <div class="box"><h4>Automatischer Tagesabschluss</h4>
+      Den Tagesabschluss erzeugst du im Reiter „Tagesabschluss" (oder per Doppelklick auf einen Tag in
+      der Umsatztabelle). Er entsteht jeden Abend um 18 Uhr zusätzlich automatisch mit laufender Nummer;
+      verpasste Vortage werden beim nächsten Start nachgeholt.</div>
+
+    <h2>7 · Defektmeldung (Nichtverfügbarkeit)</h2>
+    <p>Ist ein Artikel nicht vorrätig/lieferbar, erzeugst du im Reiter <b>„Defektmeldung"</b> eine
+    Bescheinigung für die Apotheke: Apotheke suchen, Artikel hinzufügen (Bestand wird angezeigt), Grund
+    wählen und „Defektmeldung erzeugen".</p>
+    <div class="box warn"><h4>⚠ Rechtstext prüfen</h4>
+      Der genaue Rechtstext der Defektmeldung muss fachlich/rechtlich geprüft und im Reiter
+      „Einstellungen" eingetragen werden.</div>
+
+    <h2>8 · Einstellungen</h2>
+    <p>Im Reiter <b>„Einstellungen"</b> (Zahnrad) pflegst du die Firmendaten (Kopf von
+    Auftragsbestätigung, Lieferschein und Defektmeldung), den Rechtstext der Defektmeldung und die
+    Uhrzeit des automatischen Tagesabschlusses – alles ohne Dateien bearbeiten zu müssen.</p>
+
+  </div>
+  <footer>
+    <span>NMGone · Kasse · Mitarbeiter-Handout</span>
+    <span>Stand: Juni 2026</span>
+  </footer>
+</div></body></html>

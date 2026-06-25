@@ -70,10 +70,12 @@ def artikel_pool(con):
         apu = float(apu) if apu else round(random.uniform(120, 950), 2)
         ek = float(taxe_ek) if taxe_ek else round(apu * 0.82, 2)
         rab = round(float(rabatt) * 100, 1) if rabatt else random.choice([5, 7.5, 10])
+        # Hinweis: r.quelle aus nmg_rabatte ("Partnerkonditionen ...") ist
+        # ein interner Klartext und wird NICHT uebernommen -> neutrale Label.
         pool.append(dict(
             pzn=pzn, artikel=(name or "").strip(), df=df, pck=pck,
             apu=apu, ek=ek, rabatt=rab,
-            rabatt_quelle=(rquelle or "NMG-Kondition"), herkunft="NMG"))
+            rabatt_quelle="NMG-Kondition", herkunft="NMG"))
         if sum(1 for a in pool if a["herkunft"] == "NMG") >= 22:
             break
 
@@ -511,6 +513,320 @@ def seed_austausch(con, pool):
         paare += 1
 
 
+# ----------------------------------------------------------------------- GDP
+GDP_DDL = """
+CREATE TABLE IF NOT EXISTS tbl_gdp_auslieferung(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, datum TEXT, kundennummer TEXT, kunde_name TEXT,
+    pzn TEXT, artikelname TEXT, charge TEXT, verfall TEXT, menge INTEGER DEFAULT 0,
+    beleg_nr TEXT, bearbeiter TEXT, erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS tbl_gdp_we_pruefung(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, we_id INTEGER, datum TEXT, lieferant TEXT,
+    transport_temp_c REAL, temp_ok INTEGER DEFAULT 1, unversehrt INTEGER DEFAULT 1,
+    dokumente_ok INTEGER DEFAULT 1, gdp_konform INTEGER DEFAULT 1, geprueft_von TEXT,
+    bemerkung TEXT, erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS tbl_gdp_messpunkt(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, typ TEXT, soll_min REAL, soll_max REAL,
+    aktiv INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS tbl_gdp_temperatur(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, messpunkt_id INTEGER, zeitpunkt TEXT, temp_c REAL,
+    status TEXT, erfasst_von TEXT, notiz TEXT, massnahme TEXT, behoben INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS tbl_gdp_inspektion(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, datum TEXT, titel TEXT, typ TEXT, status TEXT,
+    durchgefuehrt_von TEXT, naechste_faellig TEXT, bemerkung TEXT,
+    erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS tbl_gdp_inspektion_punkt(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, inspektion_id INTEGER, kategorie TEXT, frage TEXT,
+    ergebnis TEXT, bemerkung TEXT, massnahme TEXT);
+CREATE TABLE IF NOT EXISTS tbl_gdp_kunde_quali(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, kundennummer TEXT UNIQUE, kunde_name TEXT,
+    lizenznummer TEXT, lizenz_typ TEXT, lizenz_gueltig_bis TEXT, qualifiziert INTEGER DEFAULT 0,
+    geprueft_am TEXT, geprueft_von TEXT, bemerkung TEXT);
+CREATE TABLE IF NOT EXISTS tbl_gdp_retoure(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, datum TEXT, typ TEXT, kundennummer TEXT, kunde_name TEXT,
+    pzn TEXT, artikelname TEXT, charge TEXT, verfall TEXT, menge INTEGER DEFAULT 0, grund TEXT,
+    temperaturbruch INTEGER DEFAULT 0, status TEXT, entscheidung TEXT, gutschrift_beleg TEXT,
+    faktura_beleg_id INTEGER, bearbeiter TEXT, erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,
+    abgeschlossen_am TEXT, notiz TEXT);
+CREATE TABLE IF NOT EXISTS tbl_gdp_rueckruf(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, datum TEXT, charge TEXT, pzn TEXT, artikelname TEXT,
+    grund TEXT, betroffene_kunden INTEGER DEFAULT 0, betroffene_menge INTEGER DEFAULT 0,
+    status TEXT, ausgeloest_von TEXT, bemerkung TEXT, erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS tbl_gdp_log(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, zeitpunkt TEXT DEFAULT CURRENT_TIMESTAMP, bearbeiter TEXT,
+    modul TEXT, aktion TEXT, bezug_id INTEGER, details TEXT);
+CREATE TABLE IF NOT EXISTS tbl_gdp_abschreibung(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, datum TEXT, pzn TEXT, artikelname TEXT, charge TEXT,
+    verfall TEXT, menge INTEGER DEFAULT 0, grund TEXT, wert_ek REAL, retoure_id INTEGER,
+    bearbeiter TEXT, erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS tbl_gdp_meldung(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, datum TEXT, typ TEXT, titel TEXT, prioritaet TEXT,
+    pzn TEXT, charge TEXT, betrifft TEXT, beschreibung TEXT, status TEXT DEFAULT 'Offen',
+    massnahme TEXT, verantwortlich TEXT, faellig_am TEXT, erledigt_am TEXT,
+    gemeldet_von TEXT, erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP);
+"""
+
+INSPEKT_TEMPLATE = [
+    ("Raeumlichkeiten", "Lager sauber, trocken, abschliessbar?"),
+    ("Raeumlichkeiten", "Wareneingang/-ausgang getrennt?"),
+    ("Temperatur", "Kuehlkette luekenlos dokumentiert?"),
+    ("Temperatur", "Messgeraete kalibriert?"),
+    ("Dokumentation", "Chargen rueckverfolgbar (Kunde<->Charge)?"),
+    ("Dokumentation", "Lieferantenqualifizierung aktuell?"),
+    ("Kunden", "Nur lizenzierte Apotheken beliefert?"),
+    ("Retouren", "Retouren-Verfahren eingehalten?"),
+    ("Retouren", "Vernichtung dokumentiert?"),
+    ("Personal", "Schulungen GDP aktuell?"),
+    ("Faelschungsschutz", "securPharm / Verifizierung aktiv?"),
+    ("Selbstinspektion", "Massnahmen aus letzter Inspektion erledigt?"),
+]
+
+RET_GRUENDE = ["Falschlieferung", "Ablauf/Verfall nahe", "Transportschaden",
+               "Temperaturbruch", "Ueberbestellung", "Qualitaetsmangel",
+               "Bestellfehler Apotheke", "Sonstiges"]
+
+
+def seed_gdp(con, pool, kunden):
+    """GDP-Modul: Auslieferungen (Kunde<->Charge), Temperatur, Inspektionen,
+    Kundenqualifizierung, Retouren, Rueckrufe, Protokoll. Mind. 12 je Schritt."""
+    cur = con.cursor()
+    con.executescript(GDP_DDL)
+    for t in ("tbl_gdp_auslieferung", "tbl_gdp_we_pruefung", "tbl_gdp_messpunkt",
+              "tbl_gdp_temperatur", "tbl_gdp_inspektion", "tbl_gdp_inspektion_punkt",
+              "tbl_gdp_kunde_quali", "tbl_gdp_retoure", "tbl_gdp_rueckruf", "tbl_gdp_log",
+              "tbl_gdp_abschreibung", "tbl_gdp_meldung"):
+        cur.execute(f"DELETE FROM {t}")
+    # Retourenbestand-Spalte am Lager sicherstellen + zuruecksetzen
+    lcols = {r[1] for r in cur.execute("PRAGMA table_info(tbl_lagerbestand)")}
+    if "menge_retoure" not in lcols:
+        cur.execute("ALTER TABLE tbl_lagerbestand ADD COLUMN menge_retoure INTEGER DEFAULT 0")
+    else:
+        cur.execute("UPDATE tbl_lagerbestand SET menge_retoure=0")
+
+    # Reale Chargen aus dem Wareneingang ziehen (Basis fuer Rueckverfolgung)
+    charges = cur.execute(
+        "SELECT pzn, artikelname, charge, verfall FROM tbl_wareneingang_positionen "
+        "WHERE charge IS NOT NULL").fetchall()
+    if not charges:
+        charges = [(a["pzn"], a["artikel"], f"CH-{1000+i}", "06/2028")
+                   for i, a in enumerate(pool[:12])]
+
+    # GDP-Wareneingangspruefungen zu vorhandenen Wareneingaengen
+    we_ids = [r[0] for r in cur.execute(
+        "SELECT id, lieferant, datum FROM tbl_wareneingang ORDER BY id").fetchall()]
+    for n, wid in enumerate(we_ids):
+        temp = round(random.uniform(2.5, 7.8), 1)
+        konform = 0 if n % 7 == 0 else 1
+        cur.execute(
+            """INSERT INTO tbl_gdp_we_pruefung
+               (we_id,datum,lieferant,transport_temp_c,temp_ok,unversehrt,dokumente_ok,
+                gdp_konform,geprueft_von,bemerkung)
+               VALUES (?,?,?,?,?,?,?,?, 'demo', ?)""",
+            (wid, d(-90 + n * 5), random.choice(LIEFERANTEN), temp, 1, konform, 1, konform,
+             "Demo-Pruefung" if konform else "Karton beschaedigt - Klaerung"))
+
+    # Auslieferungen Kunde <-> Charge (>= 24)
+    beleg = 7000
+    for i, (pzn, name, charge, verfall) in enumerate(charges):
+        for k in random.sample(kunden, random.randint(1, 3)):
+            beleg += 1
+            cur.execute(
+                """INSERT INTO tbl_gdp_auslieferung
+                   (datum,kundennummer,kunde_name,pzn,artikelname,charge,verfall,menge,beleg_nr,bearbeiter)
+                   VALUES (?,?,?,?,?,?,?,?,?, 'demo')""",
+                (d(-70 + i), k["knr"], k["name"], pzn, name, charge, verfall,
+                 random.randint(1, 12), f"LF-2026-{beleg}"))
+
+    # Messpunkte (4) + Temperatur-Messungen (>=12, einige Abweichungen)
+    messpunkte = [("Kuehlschrank 1 (2-8 C)", "Kuehlschrank", 2.0, 8.0),
+                  ("Kuehlschrank 2 (2-8 C)", "Kuehlschrank", 2.0, 8.0),
+                  ("Lager Trockenbereich", "Lager", 15.0, 25.0),
+                  ("Transportbox Kuehlkette", "Transport", 2.0, 8.0)]
+    mp_ids = []
+    for name, typ, smin, smax in messpunkte:
+        cur.execute("INSERT INTO tbl_gdp_messpunkt(name,typ,soll_min,soll_max,aktiv) VALUES (?,?,?,?,1)",
+                    (name, typ, smin, smax))
+        mp_ids.append((cur.lastrowid, smin, smax))
+    for i in range(16):
+        mid, smin, smax = random.choice(mp_ids)
+        if i % 6 == 0:  # bewusste Abweichung
+            temp = round(smax + random.uniform(0.5, 3.0), 1)
+            status, behoben = "Abweichung", (1 if i % 12 else 0)
+            massn = "Kuehlaggregat geprueft, Ware umgelagert" if behoben else None
+        else:
+            temp = round(random.uniform(smin + 0.3, smax - 0.3), 1)
+            status, behoben, massn = "ok", 0, None
+        cur.execute(
+            """INSERT INTO tbl_gdp_temperatur
+               (messpunkt_id,zeitpunkt,temp_c,status,erfasst_von,notiz,massnahme,behoben)
+               VALUES (?,?,?,?, 'demo', ?,?,?)""",
+            (mid, ts(-20 + i) , temp, status, "Routinemessung", massn, behoben))
+
+    # Selbstinspektionen (2) + Pruefpunkte (>=12 je)
+    for j, (titel, status, faellig_off) in enumerate([
+            ("GDP-Selbstinspektion 2025", "abgeschlossen", 200),
+            ("GDP-Selbstinspektion 2026", "laeuft", 365)]):
+        cur.execute(
+            """INSERT INTO tbl_gdp_inspektion
+               (datum,titel,typ,status,durchgefuehrt_von,naechste_faellig,bemerkung)
+               VALUES (?,?, 'Selbstinspektion', ?, 'demo', ?, 'Demo-Inspektion')""",
+            (d(-200 + j * 200), titel, status, d(faellig_off - 200)))
+        iid = cur.lastrowid
+        for kat, frage in INSPEKT_TEMPLATE:
+            if status == "abgeschlossen":
+                erg = "Abweichung" if random.random() < 0.15 else "ok"
+            else:
+                erg = random.choice(["ok", "ok", "offen", "Abweichung"])
+            massn = "Korrekturmassnahme eingeleitet" if erg == "Abweichung" else None
+            cur.execute(
+                "INSERT INTO tbl_gdp_inspektion_punkt(inspektion_id,kategorie,frage,ergebnis,massnahme) "
+                "VALUES (?,?,?,?,?)", (iid, kat, frage, erg, massn))
+
+    # Kundenqualifizierung (alle Kunden; einige abgelaufen/gesperrt)
+    typen = ["Apothekenbetriebserlaubnis", "Apothekenbetriebserlaubnis",
+             "Grosshandelserlaubnis (83 AMG)", "Krankenhausapotheke"]
+    for i, k in enumerate(kunden):
+        if i % 6 == 5:
+            gueltig, quali = d(-30), 1          # abgelaufen
+        elif i % 6 == 4:
+            gueltig, quali = d(400), 0          # gesperrt (nicht freigegeben)
+        else:
+            gueltig, quali = d(300 + i * 10), 1  # ok
+        cur.execute(
+            """INSERT INTO tbl_gdp_kunde_quali
+               (kundennummer,kunde_name,lizenznummer,lizenz_typ,lizenz_gueltig_bis,
+                qualifiziert,geprueft_am,geprueft_von,bemerkung)
+               VALUES (?,?,?,?,?,?,?, 'demo', ?)""",
+            (k["knr"], k["name"], f"ABE-{2000+i}", typen[i % len(typen)], gueltig,
+             quali, d(-100 + i), "Demo-Qualifizierung"))
+
+    # Retouren / Reklamationen (>=12, gemischte Status)
+    status_flow = [("Neu", None, None), ("In Pruefung", None, None),
+                   ("Gutschrift", "Gutschrift erteilt", "GU-2026-{}"),
+                   ("Im Retourenbestand", "In Quarantaene", None),
+                   ("Vernichtet", "Vernichtung", None), ("Abgelehnt", "Abgelehnt", None)]
+    quarantaene = {}  # (pzn,charge,verfall) -> Stueck im Retourenbestand
+    for i in range(14):
+        pzn, name, charge, verfall = charges[i % len(charges)]
+        k = kunden[i % len(kunden)]
+        status, entsch, gut_t = status_flow[i % len(status_flow)]
+        grund = RET_GRUENDE[i % len(RET_GRUENDE)]
+        tbruch = 1 if grund == "Temperaturbruch" else 0
+        gut = gut_t.format(1100 + i) if gut_t else None
+        menge = random.randint(1, 8)
+        abg = d(-10 + i) if status in ("Gutschrift", "Im Retourenbestand", "Vernichtet", "Abgelehnt") else None
+        cur.execute(
+            """INSERT INTO tbl_gdp_retoure
+               (datum,typ,kundennummer,kunde_name,pzn,artikelname,charge,verfall,menge,grund,
+                temperaturbruch,status,entscheidung,gutschrift_beleg,bearbeiter,abgeschlossen_am,notiz)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'demo', ?, ?)""",
+            (d(-25 + i), "Reklamation" if i % 4 == 0 else "Retoure", k["knr"], k["name"],
+             pzn, name, charge, verfall, menge, grund, tbruch, status,
+             entsch, gut, abg, "Demo-Vorgang"))
+        if status == "Im Retourenbestand":
+            quarantaene[(pzn, charge, verfall, name)] = quarantaene.get((pzn, charge, verfall, name), 0) + menge
+
+    # Retourenbestand (Quarantaene) ins Lager schreiben - gesperrt, nicht verkaufbar
+    for (pzn, charge, verfall, name), stk in quarantaene.items():
+        ex = cur.execute(
+            "SELECT id, ek FROM tbl_lagerbestand WHERE pzn=? AND COALESCE(charge,'')=? "
+            "AND COALESCE(verfall,'')=?", (pzn, charge or "", verfall or "")).fetchone()
+        if ex:
+            cur.execute("UPDATE tbl_lagerbestand SET menge_retoure=COALESCE(menge_retoure,0)+? WHERE id=?",
+                        (stk, ex[0]))
+        else:
+            cur.execute(
+                "INSERT INTO tbl_lagerbestand(pzn,artikelname,charge,verfall,menge,menge_retoure,aktualisiert_am,ek) "
+                "VALUES (?,?,?,?,0,?,?,?)", (pzn, name, charge, verfall, stk, ts(-1),
+                                            round(random.uniform(80, 600), 2)))
+
+    # Abschreibungen / Write-offs (Demo, >=4)
+    for i in range(5):
+        pzn, name, charge, verfall = charges[(i + 2) % len(charges)]
+        menge = random.randint(1, 5)
+        ek = round(random.uniform(80, 600), 2)
+        cur.execute(
+            """INSERT INTO tbl_gdp_abschreibung
+               (datum,pzn,artikelname,charge,verfall,menge,grund,wert_ek,bearbeiter)
+               VALUES (?,?,?,?,?,?,?,?, 'demo')""",
+            (d(-8 + i), pzn, name, charge, verfall, menge,
+             ["Beschaedigt", "Verfall ueberschritten", "Temperaturbruch", "Nicht GDP-konform", "Rueckruf"][i],
+             round(ek * menge, 2)))
+
+    # Rueckrufe (2)
+    for i in range(2):
+        pzn, name, charge, verfall = charges[i]
+        n_k = cur.execute("SELECT COUNT(DISTINCT kundennummer) FROM tbl_gdp_auslieferung WHERE charge=?",
+                          (charge,)).fetchone()[0]
+        summe = cur.execute("SELECT COALESCE(SUM(menge),0) FROM tbl_gdp_auslieferung WHERE charge=?",
+                            (charge,)).fetchone()[0]
+        cur.execute(
+            """INSERT INTO tbl_gdp_rueckruf
+               (datum,charge,pzn,artikelname,grund,betroffene_kunden,betroffene_menge,status,ausgeloest_von,bemerkung)
+               VALUES (?,?,?,?,?,?,?, 'ausgeloest', 'demo', 'Demo-Rueckruf')""",
+            (d(-12 + i), charge, pzn, name,
+             "Qualitaetsmangel" if i == 0 else "Temperaturabweichung", n_k, summe))
+
+    # Protokoll (>=12)
+    log_aktionen = [
+        ("Wareneingang", "GDP-Pruefung erfasst"), ("Retoure", "Retoure angelegt"),
+        ("Retoure", "Gutschrift erstellt"), ("Kuehlkette", "Messung Abweichung"),
+        ("Kuehlkette", "Massnahme dokumentiert"), ("Rueckruf", "Rueckruf ausgeloest"),
+        ("Qualifizierung", "Lizenz/Qualifizierung aktualisiert"),
+        ("Inspektion", "Inspektion abgeschlossen"), ("Retoure", "Wiedereingelagert"),
+        ("Retoure", "Vernichtung dokumentiert"), ("Wareneingang", "GDP-Pruefung erfasst"),
+        ("Rueckruf", "Verteiler exportiert"),
+    ]
+    for i, (modul, aktion) in enumerate(log_aktionen):
+        cur.execute(
+            "INSERT INTO tbl_gdp_log(zeitpunkt,bearbeiter,modul,aktion,bezug_id,details) "
+            "VALUES (?, 'demo', ?,?,?, 'Demo-Eintrag')",
+            (ts(-15 + i), modul, aktion, i + 1))
+
+    # Meldungen (>=12, gemischte Typen/Prioritaeten/Status; einige offen/ueberfaellig)
+    meld_vorlagen = [
+        ("Temperaturbruch", "Kuehlschrank 1 ueber 8 C", "Hoch", "Kuehlschrank 1 (2-8 C)",
+         "Temperatur kurzzeitig auf 11 C gestiegen, Ware geprueft."),
+        ("Qualitaetsmangel", "Beschaedigte Umverpackung", "Mittel", None,
+         "Mehrere Faltschachteln eingedrueckt geliefert."),
+        ("Abweichung", "Lieferschein unvollstaendig", "Niedrig", None,
+         "Chargenangabe auf dem Lieferschein fehlte."),
+        ("Reklamation", "Apotheke meldet Falschlieferung", "Mittel", None,
+         "Falsche PZN geliefert, Austausch veranlasst."),
+        ("Faelschungsverdacht / securPharm", "securPharm-Alarm beim Verifizieren", "Kritisch", None,
+         "Packung liess sich nicht verifizieren - gesperrt und gemeldet."),
+        ("Transportschaden", "Kuehlbox undicht angeliefert", "Hoch", None,
+         "Kuehlkette nicht sicher - Ware in Quarantaene."),
+        ("Lieferengpass", "Wirkstoff voraussichtlich nicht lieferbar", "Mittel", None,
+         "Alternative Bezugsquelle wird geprueft."),
+        ("Abweichung", "Messgeraet ueberfaellig kalibriert", "Mittel", None,
+         "Kalibrierung des Thermometers terminieren."),
+    ]
+    status_zyklus = ["Offen", "In Bearbeitung", "Erledigt", "Offen", "Verworfen", "In Bearbeitung"]
+    n = 0
+    for runde in range(2):
+        for j, (typ, titel, prio, betrifft, beschr) in enumerate(meld_vorlagen):
+            status = status_zyklus[n % len(status_zyklus)]
+            ch = charges[n % len(charges)]
+            betr = betrifft or kunden[n % len(kunden)]["name"]
+            # ein paar bewusst ueberfaellige offene Meldungen
+            faellig = d(-3 + n) if (status in ("Offen", "In Bearbeitung") and n % 3 == 0) else d(10 + n)
+            erledigt = d(-2 + n) if status in ("Erledigt", "Verworfen") else None
+            massn = ("Korrektur eingeleitet, Wirksamkeit geprueft."
+                     if status in ("In Bearbeitung", "Erledigt") else None)
+            cur.execute(
+                """INSERT INTO tbl_gdp_meldung
+                   (datum,typ,titel,prioritaet,pzn,charge,betrifft,beschreibung,status,
+                    massnahme,verantwortlich,faellig_am,erledigt_am,gemeldet_von)
+                   VALUES (?,?,?,?,?,?,?,?,?,?, 'demo', ?,?, 'demo')""",
+                (d(-30 + n), typ, titel, prio, ch[0], ch[2], betr, beschr, status,
+                 massn, faellig, erledigt))
+            cur.execute(
+                "INSERT INTO tbl_gdp_log(zeitpunkt,bearbeiter,modul,aktion,bezug_id,details) "
+                "VALUES (?, 'demo', 'Meldung', 'Meldung angelegt', ?, ?)",
+                (ts(-30 + n), cur.lastrowid, f"{typ}: {titel}"))
+            n += 1
+
+
 def main():
     if not os.path.exists(SRC):
         raise SystemExit(f"Quell-DB fehlt: {SRC}")
@@ -535,6 +851,7 @@ def main():
         seed_faktura(con, pool, kunden)
         seed_bestellungen(con, pool, kunden)
         seed_austausch(con, pool)
+        seed_gdp(con, pool, kunden)
         con.commit()
     finally:
         # Report
@@ -546,7 +863,11 @@ def main():
                 "tbl_kasse_log", "tbl_kasse_tagesabschluss",
                 "tbl_kasse_einstellungen", "tbl_faktura_mitarbeiter",
                 "tbl_faktura_belege", "tbl_faktura_positionen",
-                "tbl_bestellungen", "tbl_bestellpositionen"]
+                "tbl_bestellungen", "tbl_bestellpositionen",
+                "tbl_gdp_auslieferung", "tbl_gdp_we_pruefung", "tbl_gdp_temperatur",
+                "tbl_gdp_inspektion", "tbl_gdp_inspektion_punkt", "tbl_gdp_kunde_quali",
+                "tbl_gdp_retoure", "tbl_gdp_rueckruf", "tbl_gdp_log",
+                "tbl_gdp_abschreibung"]
         print("\n=== Befuellte Tabellen ===")
         for t in tabs:
             n = con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]

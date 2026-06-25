@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8">
+<title>Handout · Wareneingang &amp; Retouren (GDP) – NMGone</title>
+<link rel="stylesheet" href="_handout.css">
+</head><body>
+<div class="sheet">
+  <header>
+    <div class="kicker">NMGone · Wareneingang &amp; Retouren (GDP)</div>
+    <h1>Wareneingang &amp; Retouren</h1>
+    <p>Das Großhandelsmodul: Chargen-Rückverfolgung, Kundenqualifizierung &amp; Retouren</p>
+  </header>
+  <div class="body">
+
+    <p class="lead">Diese App ist das Großhandelsmodul. Sie verbindet den Wareneingang aus der Kasse
+    mit der GDP-konformen Abwicklung von Chargen-Rückverfolgung, Kundenqualifizierung und Retouren.
+    Eigenes Fenster mit eigenem Taskleisten-Symbol, gemeinsame Datenbank mit NMGone.</p>
+    <div class="box tip"><h4>💡 Wo sind Kühlkette &amp; Selbstinspektion?</h4>
+      Kühlsachenkontrolle, Selbstinspektion und das Meldewesen liegen jetzt in der eigenen App
+      <b>„Meldungen"</b> – so bleibt der Wareneingang übersichtlich.</div>
+
+    <h2>1 · Übersicht (Ampel)</h2>
+    <p>Die Startseite zeigt offene Retouren, ungeprüfte Wareneingänge, abgelaufene Lizenzen und Chargen
+    mit baldigem Verfall. Jede Meldung springt direkt in den passenden Bereich – so geht nichts unter.</p>
+
+    <h2>2 · Wareneingang &amp; GDP-Prüfung</h2>
+    <ol class="steps">
+      <li>Einen <b>Wareneingang aus der Liste wählen</b> (Quelle: Kasse).</li>
+      <li><b>„GDP-Prüfung erfassen"</b>: Transport-Temperatur, Unversehrtheit und Dokumente prüfen.</li>
+      <li>Das Ergebnis wird als <b>GDP-konform / nicht konform</b> festgeschrieben.</li>
+    </ol>
+
+    <h2>3 · Chargen-Rückverfolgung &amp; Rückruf</h2>
+    <p>Charge oder PZN eingeben: links siehst du den Eingang, rechts jede Apotheke, die diese Charge
+    erhalten hat. Im Rückruffall <b>„Rückruf auslösen"</b> und über <b>„Verteiler exportieren"</b> die
+    Liste der betroffenen Apotheken (mit E-Mail) als CSV sichern.</p>
+
+    <h2>4 · Kundenqualifizierung</h2>
+    <p>Nur lizenzierte Apotheken dürfen beliefert werden. Hier hinterlegst du Lizenznummer, -typ und
+    Gültigkeit. Abgelaufene oder nicht freigegebene Apotheken werden <b>rot</b> markiert.</p>
+
+    <h2>5 · Retouren &amp; Reklamationen</h2>
+    <p>Meldet eine Apotheke telefonisch oder per E-Mail eine Rücksendung, erfasst ein Mitarbeiter sie
+    hier. Danach ist sie für alle sichtbar (das Dashboard zeigt die Zahl offener Retouren).</p>
+    <ol class="steps">
+      <li><b>„Neue Retoure / Reklamation"</b>: Apotheke, Artikel/Charge, Menge und Grund erfassen.</li>
+      <li><b>„Prüfen"</b> nimmt den Vorgang in Bearbeitung.</li>
+      <li><b>„Gutschrift"</b> erzeugt einen Gutschrift-Beleg (Anbindung an die Faktura).</li>
+      <li><b>„In Retourenbestand"</b> nimmt die Ware in Quarantäne, <b>„Vernichten"</b> dokumentiert die Entsorgung.</li>
+    </ol>
+    <div class="box"><h4>Eigenes Detail-Handout</h4>
+      Für den vollständigen Retouren-Workflow inklusive aller Status gibt es das ausführliche Handout
+      <b>„Retouren bearbeiten"</b> (docs/Handout_Retouren_bearbeiten.html).</div>
+
+    <h2>6 · Retourenbestand: freigeben oder abschreiben</h2>
+    <p>Zurückgenommene Ware geht <b>nicht</b> direkt in den Verkauf, sondern in einen gesperrten
+    Retourenbestand (Quarantäne). Im Bereich „Retourenbestand" steht der Bestand als
+    „Normalbestand (Retourenbestand)", z. B.:</p>
+    <p><span class="stockdemo">Bestand: <b>25</b> <span class="ret">(5)</span></span>
+       &nbsp;→&nbsp; <b>25</b> Stück normal verkaufbar, <span style="color:#C88200"><b>5</b></span> Stück gesperrt.</p>
+    <ol class="steps">
+      <li><b>Zeile</b> im Retourenbestand wählen.</li>
+      <li><b>„In Bestand freigeben"</b> – einwandfreie Ware wird wieder verkaufbar (geht in den Normalbestand).</li>
+      <li>oder <b>„Abschreiben"</b> – mit Grund; die Menge wird ausgebucht und der EK-Wert dokumentiert.</li>
+    </ol>
+    <div class="box warn"><h4>⚠ GDP: erst prüfen, dann freigeben</h4>
+      Retourenware ist bis zur Freigabe nicht verkaufbar. Nur einwandfreie Ware mit ungebrochener
+      Kühlkette darf freigegeben werden – im Zweifel abschreiben.</div>
+    <div class="box tip"><h4>💡 Alles revisionssicher</h4>
+      Jeder Schritt landet im Protokoll – inklusive Wer/Was/Wann. Protokoll und Abschreibungen lassen
+      sich als CSV exportieren.</div>
+
+  </div>
+  <footer>
+    <span>NMGone · Wareneingang &amp; Retouren (GDP) · Mitarbeiter-Handout</span>
+    <span>Stand: Juni 2026</span>
+  </footer>
+</div></body></html>

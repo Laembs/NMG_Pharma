@@ -26,7 +26,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 
-from .config import DB_PATH, ASSETS_DIR, OUTPUT_DIR
+from .config import DB_PATH, ASSETS_DIR, OUTPUT_DIR, DEMO_SUFFIX
 from . import theme
 
 # ── Optik (zentrales Theme, gemeinsam mit NMGone / Kasse) ────────────────────
@@ -1070,7 +1070,7 @@ def run_standalone():
     except Exception:
         pass
     root = tk.Tk()
-    root.title("NMG Auswertungen")
+    root.title(f"NMG Auswertungen{DEMO_SUFFIX}")
     root.geometry("1280x820")
     root.minsize(1040, 680)
     root.configure(bg=SHELL_BG)
