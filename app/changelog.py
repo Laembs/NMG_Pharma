@@ -5,6 +5,18 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V2.1 SP2", "2026-06-25", [
+        "App 'Wareneingang & Retouren' (GDP) stark ausgebaut zu einem kompletten, nachvollziehbaren Warenkreislauf: Einkauf -> Produktionsbestand -> Produzieren (Warenausgang/Avis) -> Verkaufs-Wareneingang -> Bestaetigung -> Verkaufsbestand.",
+        "Betriebsmodus pro Arbeitsplatz: Verkauf oder Produktion - das Programm blendet die passenden Bereiche ein und aktiviert den richtigen Wareneingang (Plakette in der Seitenleiste).",
+        "Getrennter Produktionsbestand (Einkauf fuer die Produktion, nicht verkaufbar) + Warenausgang/Avis. Bestaetigung erfolgt ausschliesslich im Verkauf - haendisch oder per Anlieferliste (Import); dabei Soll/Ist-Abgleich Avis<->Lieferung mit Abweichungsmeldung.",
+        "Optionale Rechnungsnummer am Warenausgang, per Einstellung als Pflichtfeld setzbar.",
+        "Retourenbestand (Quarantaene): zurueckgenommene Ware getrennt anzeigen 'Normalbestand (Retoure)' und entscheiden - in den Bestand freigeben oder abschreiben.",
+        "Bestandsdifferenzen: manuelle Korrekturen (Inventur, Bruch, Schwund, Fund) mit Soll-Anzeige, Ist-Eingabe ODER +/- Differenz (Schnell-Buttons), Historie und Gruenden.",
+        "Warenbewegungen: alle Ein- und Ausgaenge aus Verkauf und Produktion in einem Fenster - durchsuchbar nach Artikel/PZN/Charge/Beleg, filterbar nach Richtung und Bereich, CSV-Export.",
+        "Chargen-Rueckverfolgung an die echten Kasse-Verkaeufe gekoppelt; Rueckruf-Verteiler und vollstaendiges Chargendossier als CSV.",
+        "Wareneingang-History (Offen/Erledigt = GDP-geprueft) und Protokoll mit Zeitraum-Auswertung: Monat, Quartal, Jahr, Vorjahr oder manuell (von-bis); gefilterter CSV-Export.",
+        "Mitarbeiter-Handout 'Retouren bearbeiten' (druckbar) und erweiterte Hilfe-Kapitel.",
+    ]),
     ("V2.1 SP1", "2026-06-25", [
         "Vier neue eigenstaendige Apps rund um die gemeinsame NMGone-Datenbank: 'Wareneingang & Retouren' (GDP-Chargenrueckverfolgung, Kundenqualifizierung, Retouren mit Gutschrift), 'Meldungen' (GDP-Meldewesen, Kuehlsachenkontrolle, Selbstinspektion), 'Einkauf' (Beschaffung EU-Ausland, §129-Margenrechner, Aufgaben/Meldungen) und 'Parameter' (Berechtigungen: wer darf was - Rollen, Overrides, Admin-PIN).",
         "Demo-Modus: liegt nur eine Demo-Datenbank vor, startet das Programm automatisch im Demo-Betrieb und ist ueberall sichtbar als 'NMGone Demo' / [DEMO] markiert - Demo- und Echtbetrieb sind nicht mehr verwechselbar.",

@@ -352,9 +352,14 @@ HELP_CONTENT = {
             ]),
             ("h", "Lieferanten & Beschaffungsquellen"),
             ("p", "Unter „Lieferanten“ pflegst du Bezugsquellen je Land mit Währung, Lieferzeit, "
-                  "Mindestbestellwert, Zahlungsziel und GDP-Zertifizierung. Unter "
-                  "„Beschaffungsquellen“ hinterlegst du pro Artikel (PZN) den Einkaufspreis in "
-                  "Fremdwährung und die Mindestabnahme – die Basis für Marge und Bestellvorschlag."),
+                  "Mindestbestellwert, Zahlungsziel und GDP-Zertifizierung. Bevorzugte Lieferanten "
+                  "markierst du mit „★ Bevorzugt“ – sie stehen in der Liste oben und sind ★-markiert. "
+                  "Lieferant und Hersteller sind getrennte Dinge (der Lieferant ist die Bezugsquelle, "
+                  "der Hersteller der Markeninhaber). Im Lieferanten-Dialog hinterlegst du aber, welche "
+                  "Hersteller ein Lieferant beschaffen kann – diese Zuordnung erscheint bei den "
+                  "Importkandidaten unter „Eure Lieferanten dafür“ und wird beim Kontaktieren automatisch "
+                  "vorgeschlagen. Unter „Beschaffungsquellen“ hinterlegst du pro Artikel (PZN) den "
+                  "Einkaufspreis in Fremdwährung und die Mindestabnahme."),
             ("img", "02_quellen.png", "Beschaffungsquellen mit EK in Fremdwährung, EUR-Umrechnung und Marge."),
             ("h", "Margenrechner §129"),
             ("p", "Der Margenrechner führt Import-EK (Fremdwährung) → deutscher AVP/Festbetrag → "
@@ -368,9 +373,75 @@ HELP_CONTENT = {
                   "und dem Absatz aus den Kasse-Verkäufen. Über die Filter blendest du nur "
                   "§129-konforme Artikel oder nur Artikel mit Absatz ein. Per „Nachbestellen“ legst "
                   "du direkt eine Aufgabe beim passenden Lieferanten an."),
+            ("h", "Importkandidaten (Marktchancen)"),
+            ("p", "Unter „Marktchancen → Importkandidaten“ rechnet die App aus allen gespeicherten "
+                  "Bedarfsanalysen heraus, welche Artikel sich lohnen, aktiv bei Firmen zu beschaffen "
+                  "und über NMG als Parallelimport in den Markt zu bringen. Gezeigt werden nur Artikel "
+                  "mit echter Marktnachfrage, die NMG noch nicht führt und für die auch kein Austausch "
+                  "bekannt ist. Je Artikel siehst du Absatz (6 Monate), Apothekenbreite, einen "
+                  "abgeleiteten Preis (APU/HAP wenn gepflegt, sonst Ø-Stückpreis aus dem Markt), den "
+                  "Wirkstoff sowie die Marktstärke des Herstellers (Gesamtabsatz und Artikelzahl)."),
+            ("img", "04_importkandidaten.png", "Importkandidaten aus den Bedarfsanalysen mit Filtern und Score."),
+            ("p", "Die Liste ist standardmäßig nach dem geschätzten Jahres-Potenzial in € "
+                  "(Deckungsbeitrag = Absatz × geschätzte Marge/Stück) sortiert – die eigentliche "
+                  "Einkäuferfrage „wo lohnt sich der Aufwand?“. Die Spalte „§129“ ist eine Ampel "
+                  "(✓ machbar / ~ knapp / ✗ keine Marge), ob bei der angenommenen EU-Einkaufslage "
+                  "überhaupt eine Marge bleibt. Die Spalte „Konk.“ zeigt, wie viele Reimporteure "
+                  "denselben Wirkstoff schon bedienen – 0 = unbesetzte Lücke. Die Annahmen "
+                  "(EU-EK-Anteil, Mindestmarge) stellst du in den Einstellungen ein."),
+            ("p", "Die Spalte „Trend“ (↑ steigend / → stabil / ↓ fallend) vergleicht die Nachfrage "
+                  "über mehrere Bedarfsanalysen hinweg – so erkennst du Artikel mit wachsendem Bedarf. "
+                  "Im Detailfenster steckt zusätzlich ein Mengen- & Break-even-Rechner: Du gibst einen "
+                  "echten EU-Einkaufspreis (Fremdwährung), Mindestabnahme und Einführungskosten ein und "
+                  "siehst sofort Marge/Stück, ab welcher Menge sich der Artikel rechnet und den "
+                  "Deckungsbeitrag bei der Mindestabnahme."),
+            ("p", "Über die Pipeline behältst du den Überblick, wo jeder Kandidat steht: im "
+                  "Detailfenster setzt du den Status (Neu → Angefragt → Angebot/Muster → "
+                  "Eingelistet → Verworfen) samt Wiedervorlage und Notiz; über den Status-Filter "
+                  "siehst du z. B. nur die bereits angefragten Artikel."),
+            ("tip", "Die Liste startet leer: Du wählst zuerst deine Filter und klickst „Anzeigen“ – "
+                    "dann werden die Kandidaten berechnet (das kann beim ersten Mal kurz dauern und "
+                    "wird danach zwischengespeichert, der nächste Aufruf ist sofort da). Nach neuen "
+                    "Bedarfsanalysen aktualisierst du mit „↻ Neu berechnen“. Aus Geschwindigkeitsgründen "
+                    "zeigt die Tabelle die besten Treffer; der Excel-Export enthält immer alle."),
+            ("tip", "Welche Spalten die Importkandidaten-Tabelle zeigt (Typ, Wirkstoff, Trend, §129, "
+                    "Potenzial, Status …), legst du in den Einstellungen unter „Importkandidaten – "
+                    "Spalten anzeigen“ fest. Dort stehen auch die Bewertungs-Annahmen (EU-EK-Anteil, "
+                    "Mindestmarge, Einführungskosten)."),
+            ("step", [
+                "Filtern nach Hersteller, Wirkstoff, Preis (von/bis) und Mindest-Apothekenzahl – "
+                "die Filter bleiben gesetzt, auch wenn du zwischendurch andere Seiten öffnest.",
+                "Doppelklick auf einen Artikel öffnet ein Detailfenster mit allen Artikel- und "
+                "Herstellerdaten (Wirkstoff, Absatz, Preis/APU, weitere Kandidaten des Herstellers).",
+                "Im Detailfenster (oder über die Buttons unten) „Hersteller kontaktieren“ legt eine "
+                "Anfrage-Aufgabe zum Artikel an, „Marge rechnen“ übergibt die PZN an den §129-Rechner.",
+                "Artikel, die du im Blick behalten willst, markierst du mit „📌 Merken“ – gemerkte "
+                "Artikel stehen immer ganz oben und lassen sich per Filter „Nur gemerkte“ einzeln zeigen.",
+                "Bevorzugte Hersteller markierst du mit „★ Hersteller bevorzugt“ – Markierung bleibt erhalten.",
+            ]),
+            ("tip", "Der Reiter aktualisiert sich bei jedem Öffnen automatisch, damit neue "
+                    "Bedarfsanalysen und Markierungen sofort einfließen."),
+            ("p", "Über den Filter „Artikel-Typ“ trennst du Original-Hersteller von Reimporteuren. "
+                  "Artikel von Reimporteuren (z. B. kohlpharma, EurimPharm, EMRA-MED, Orifarm, "
+                  "CC-Pharma, Abacus, axicorp, ACA Müller) sind bereits Parallelimporte und damit keine "
+                  "neuen Chancen – deshalb ist die Liste standardmäßig auf „Nur Original“ eingestellt. "
+                  "Die Spalte „Typ“ zeigt die Einstufung; erkennt die App einen Anbieter falsch, kannst "
+                  "du ihn im Detailfenster per „↔ Typ wechseln“ dauerhaft als Reimporteur oder "
+                  "Originalhersteller markieren."),
+            ("tip", "Pseudo-Positionen wie „Botendienst“ oder „BTM-Gebühr“ haben keinen Hersteller "
+                    "und keinen Preis – über den Filter „Min. Apotheken“ (z. B. ≥ 2) oder einen "
+                    "Preis-von-Wert blendest du solche Artefakte schnell aus."),
+            ("h", "Statistik & Erfolg"),
+            ("p", "Der Reiter „Statistik & Erfolg“ zeigt, welche Lieferanten und Hersteller am besten "
+                  "mit dir kooperieren. Die Lieferanten-Tabelle listet je Lieferant die Zahl der "
+                  "Beschaffungsquellen, die durchschnittliche Marge sowie Aufgaben, erledigte Aufgaben "
+                  "und Bestellungen. Die Hersteller-Tabelle wertet die Importkandidaten-Pipeline aus: "
+                  "wie viele Artikel je Hersteller angefragt, eingelistet oder verworfen wurden und die "
+                  "Erfolgsquote (eingelistet je bearbeitetem Artikel). Beide Tabellen lassen sich nach "
+                  "Excel exportieren."),
             ("h", "Export"),
-            ("p", "Lieferanten, Beschaffungsquellen und der Beschaffungsvorschlag lassen sich jeweils "
-                  "per „⤓ Excel“ als formatierte Tabelle exportieren (Ablage im Ausgaben-Ordner)."),
+            ("p", "Lieferanten, Beschaffungsquellen, Beschaffungsvorschlag und Importkandidaten lassen "
+                  "sich jeweils per „⤓ Excel“ als formatierte Tabelle exportieren (Ablage im Ausgaben-Ordner)."),
             ("tip", "Die §129-Staffel (z. B. AVP bis 100 € → 15 %) ist in den Einstellungen anpassbar. "
                     "Die Wechselkurse pflegst du unter „Wechselkurse“ als Tageskurs (EUR je 1 Einheit). "
                     "Alle Tabellen lassen sich per Klick auf die Spaltenüberschrift sortieren."),
@@ -403,12 +474,70 @@ HELP_CONTENT = {
                 "Eingang wählen und „GDP-Prüfung erfassen“: Transport-Temperatur, Unversehrtheit und Dokumente prüfen.",
                 "Ergebnis wird als GDP-konform / nicht konform festgeschrieben.",
             ]),
+            ("p", "Die Liste ist zugleich die History: über den Filter „Offen / Erledigt“ "
+                  "trennst du noch zu prüfende von abgearbeiteten Wareneingängen."),
+            ("h", "Betriebsmodus: Verkauf oder Produktion"),
+            ("p", "Unter „Einstellungen“ stellst du je Arbeitsplatz den Betriebsmodus ein. "
+                  "Das Programm blendet dann nur die passenden Bereiche ein (der aktive Modus "
+                  "steht als Plakette oben in der Seitenleiste):"),
+            ("ul", [
+                "Verkauf: Wareneingang (→ Verkaufsbestand) und Bestätigung avisierter Lieferungen, "
+                "dazu Retouren, Retourenbestand und Kundenqualifizierung.",
+                "Produktion: Wareneingang (Einkauf → Produktion), Produktionsbestand und "
+                "Warenausgang/Avis. Retouren und Kundenqualifizierung sind hier ausgeblendet.",
+            ]),
+            ("p", "Beide Modi teilen sich dieselbe Datenbank – so reicht die Produktion ihren "
+                  "Warenausgang an den Verkauf weiter, ohne dass jemand alle Bereiche sehen muss."),
+            ("h", "Kompletter Warenkreislauf (Produktion → Verkauf)"),
+            ("p", "So entsteht ein durchgängiger, nachvollziehbarer Kreislauf:"),
+            ("step", [
+                "Einkauf bucht Ware über „Einkauf → für Produktion“ in den Produktionsbestand.",
+                "Ist produziert: im Produktionsbestand „Produzieren → Warenausgang“ – das erzeugt einen Warenausgang (Avis).",
+                "Der Avis erscheint automatisch im Verkaufs-Wareneingang als „Avisierte Lieferung“ (gelbe Karte).",
+                "Trifft die Ware im Verteilerzentrum ein: dort „Bestätigen“ – händisch oder „Per Liste bestätigen“ (Anlieferliste importieren).",
+                "Erst mit der Bestätigung wird die Ware in den Verkaufsbestand gebucht und ist über die Kasse verkaufbar.",
+            ]),
+            ("warn", "Beim „Per Liste bestätigen“ gleicht das Programm die Anlieferliste mit dem "
+                     "Avis ab (Soll/Ist je PZN+Charge). Weicht etwas ab – fehlende, zusätzliche oder "
+                     "mengenabweichende Artikel – kommt eine Meldung mit den Abweichungen; du "
+                     "entscheidest dann, ob die tatsächlich gelieferte Menge trotzdem gebucht wird. "
+                     "Die Abweichung wird im Protokoll festgehalten."),
+            ("p", "Im Bereich „Warenausgang / Avis“ siehst du alle Warenausgänge mit Status "
+                  "(avisiert / bestätigt) und kannst sie auch manuell oder per Listenimport anlegen."),
+            ("p", "Optional erfasst du je Warenausgang eine Rechnungsnummer (wird im Verkaufs-"
+                  "Wareneingang mit angezeigt). Ob sie Pflicht ist, legst du in „Einstellungen → "
+                  "Felder“ fest („Rechnungsnummer ist Pflichtfeld“)."),
+            ("tip", "Damit ist jeder Schritt lückenlos belegt: Einkauf → Produktion → Warenausgang "
+                    "→ Anlieferung/Bestätigung → Verkaufsbestand → Apotheke."),
             ("h", "Chargen-Rückverfolgung & Rückruf"),
             ("p", "Charge oder PZN eingeben: links siehst du den Eingang, rechts jede "
                   "Apotheke, die diese Charge erhalten hat. Im Rückruffall „Rückruf "
                   "auslösen“ und über „Verteiler exportieren“ die Liste der betroffenen "
                   "Apotheken (mit E-Mail) als CSV sichern."),
             ("img", "02_rueckverfolgung.png", "Chargen-Rückverfolgung Kunde ↔ Charge mit Rückruf-Verteiler."),
+            ("h", "Warenbewegungen (alle Ein- und Ausgänge)"),
+            ("p", "Der Bereich „Warenbewegungen“ führt nachträglich alle Bewegungen in einem "
+                  "Fenster zusammen – egal ob Verkauf oder Produktion: Wareneingänge (beide Arten), "
+                  "Warenausgänge aus der Produktion und die Verkäufe an Apotheken. Er ist in beiden "
+                  "Betriebsmodi sichtbar."),
+            ("ul", [
+                "Suche nach Artikel, PZN, Charge, Beleg- oder Rechnungsnummer.",
+                "Filter nach Richtung (Eingang/Ausgang) und Bereich (Verkauf/Produktion).",
+                "Eingänge sind grün, Ausgänge blau hinterlegt; per CSV exportierbar.",
+            ]),
+            ("h", "Bestandsdifferenzen (manuelle Korrekturen)"),
+            ("p", "Stimmt der gezählte Bestand nicht mit dem System überein (Inventur, Bruch, "
+                  "Schwund, Fund, Buchungsfehler), erfasst du das im Bereich „Bestandsdifferenzen“. "
+                  "Die Korrektur passt den Bestand des aktuellen Modus an (Verkauf → Verkaufsbestand, "
+                  "Produktion → Produktionsbestand) und schreibt die Differenz mit."),
+            ("step", [
+                "„Differenz erfassen“ öffnen und Artikel/Charge wählen – der Soll-Bestand (System) wird angezeigt.",
+                "Entweder den gezählten Ist-Bestand eintragen ODER eine Differenz (z. B. −3 oder +2) – das jeweils andere rechnet sich automatisch. Mit den Schnell-Buttons „−1“/„+1“ geht der häufige Fall (Bestand runter) per Klick.",
+                "Grund wählen und „Korrektur buchen“ – der Bestand wird angepasst, die Differenz (+/−) landet in der Historie und im Protokoll.",
+            ]),
+            ("p", "Die Liste zeigt alle Korrekturen mit Vorher/Differenz/Nachher; Mehrbestand ist grün, "
+                  "Fehlbestand rot. Über den Bereich-Filter trennst du Verkauf und Produktion, "
+                  "und du kannst alles als CSV exportieren."),
             ("h", "Kundenqualifizierung"),
             ("p", "Nur lizenzierte Apotheken dürfen beliefert werden. Hier hinterlegst du "
                   "Lizenznummer, -typ und Gültigkeit. Abgelaufene oder nicht freigegebene "
@@ -435,6 +564,12 @@ HELP_CONTENT = {
                 "oder „Abschreiben“ – mit Grund; die Menge wird ausgebucht und der EK-Wert dokumentiert.",
             ]),
             ("img", "04_retourenbestand.png", "Retourenbestand mit Freigabe und Abschreibung."),
+            ("h", "Protokoll auswerten (nach Zeitraum)"),
+            ("p", "Im „Protokoll“ steht jeder Vorgang mit Wer/Was/Wann. Du filterst nach "
+                  "Modul (z. B. „Bestandsdifferenz“) und nach Zeitraum mit Schnellauswahl "
+                  "„Dieser Monat / Dieses Quartal / Dieses Jahr / Vorjahr“ oder „Manuell“ "
+                  "(von–bis). So wertest du z. B. alle Bestandsänderungen eines Quartals aus. "
+                  "Der CSV-Export übernimmt den gewählten Filter."),
             ("tip", "Jeder Schritt landet im revisionssicheren Protokoll – inklusive "
                     "Wer/Was/Wann. Protokoll und Abschreibungen lassen sich als CSV exportieren."),
         ],

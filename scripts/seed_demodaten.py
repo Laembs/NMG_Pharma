@@ -558,6 +558,22 @@ CREATE TABLE IF NOT EXISTS tbl_gdp_abschreibung(
     id INTEGER PRIMARY KEY AUTOINCREMENT, datum TEXT, pzn TEXT, artikelname TEXT, charge TEXT,
     verfall TEXT, menge INTEGER DEFAULT 0, grund TEXT, wert_ek REAL, retoure_id INTEGER,
     bearbeiter TEXT, erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS tbl_gdp_einstellungen(schluessel TEXT PRIMARY KEY, wert TEXT);
+CREATE TABLE IF NOT EXISTS tbl_gdp_produktionsbestand(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, pzn TEXT, artikelname TEXT, charge TEXT, verfall TEXT,
+    menge INTEGER DEFAULT 0, ek REAL, aktualisiert_am TEXT, UNIQUE(pzn, charge, verfall));
+CREATE TABLE IF NOT EXISTS tbl_gdp_warenausgang(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, datum TEXT, nummer TEXT, quelle TEXT,
+    ziel TEXT DEFAULT 'Verkaufsbestand', status TEXT DEFAULT 'avisiert', bemerkung TEXT,
+    rechnungsnummer TEXT, erstellt_von TEXT, erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,
+    bestaetigt_am TEXT, bestaetigt_von TEXT, we_id INTEGER);
+CREATE TABLE IF NOT EXISTS tbl_gdp_warenausgang_pos(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, wa_id INTEGER, pzn TEXT, artikelname TEXT,
+    charge TEXT, verfall TEXT, menge INTEGER DEFAULT 0, ek REAL);
+CREATE TABLE IF NOT EXISTS tbl_gdp_bestandsdiff(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, datum TEXT, bereich TEXT, pzn TEXT, artikelname TEXT,
+    charge TEXT, verfall TEXT, menge_vorher INTEGER, menge_diff INTEGER, menge_nachher INTEGER,
+    grund TEXT, bemerkung TEXT, bearbeiter TEXT, erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS tbl_gdp_meldung(
     id INTEGER PRIMARY KEY AUTOINCREMENT, datum TEXT, typ TEXT, titel TEXT, prioritaet TEXT,
     pzn TEXT, charge TEXT, betrifft TEXT, beschreibung TEXT, status TEXT DEFAULT 'Offen',
@@ -593,7 +609,8 @@ def seed_gdp(con, pool, kunden):
     for t in ("tbl_gdp_auslieferung", "tbl_gdp_we_pruefung", "tbl_gdp_messpunkt",
               "tbl_gdp_temperatur", "tbl_gdp_inspektion", "tbl_gdp_inspektion_punkt",
               "tbl_gdp_kunde_quali", "tbl_gdp_retoure", "tbl_gdp_rueckruf", "tbl_gdp_log",
-              "tbl_gdp_abschreibung", "tbl_gdp_meldung"):
+              "tbl_gdp_abschreibung", "tbl_gdp_meldung", "tbl_gdp_produktionsbestand",
+              "tbl_gdp_warenausgang", "tbl_gdp_warenausgang_pos", "tbl_gdp_bestandsdiff"):
         cur.execute(f"DELETE FROM {t}")
     # Retourenbestand-Spalte am Lager sicherstellen + zuruecksetzen
     lcols = {r[1] for r in cur.execute("PRAGMA table_info(tbl_lagerbestand)")}
@@ -601,6 +618,16 @@ def seed_gdp(con, pool, kunden):
         cur.execute("ALTER TABLE tbl_lagerbestand ADD COLUMN menge_retoure INTEGER DEFAULT 0")
     else:
         cur.execute("UPDATE tbl_lagerbestand SET menge_retoure=0")
+    # Wareneingangs-Art sicherstellen; Demo zeigt beide Wareneingaenge aktiv
+    wcols = {r[1] for r in cur.execute("PRAGMA table_info(tbl_wareneingang)")}
+    if "art" not in wcols:
+        cur.execute("ALTER TABLE tbl_wareneingang ADD COLUMN art TEXT DEFAULT 'bestand'")
+    else:
+        cur.execute("UPDATE tbl_wareneingang SET art='bestand'")
+    # Demo startet im Verkauf-Modus (zeigt Retouren/Avis-Bestaetigung); zum
+    # Produktionsteil in den Einstellungen auf 'produktion' umschalten.
+    cur.execute("INSERT OR REPLACE INTO tbl_gdp_einstellungen(schluessel,wert) "
+                "VALUES('betriebsmodus','verkauf')")
 
     # Reale Chargen aus dem Wareneingang ziehen (Basis fuer Rueckverfolgung)
     charges = cur.execute(
@@ -614,6 +641,10 @@ def seed_gdp(con, pool, kunden):
     we_ids = [r[0] for r in cur.execute(
         "SELECT id, lieferant, datum FROM tbl_wareneingang ORDER BY id").fetchall()]
     for n, wid in enumerate(we_ids):
+        # Die letzten 3 Eingaenge bewusst OHNE GDP-Pruefung lassen (History-Filter
+        # "Offen" demonstrierbar + offene Pflicht auf der Uebersicht).
+        if n >= len(we_ids) - 3:
+            continue
         temp = round(random.uniform(2.5, 7.8), 1)
         konform = 0 if n % 7 == 0 else 1
         cur.execute(
@@ -623,6 +654,77 @@ def seed_gdp(con, pool, kunden):
                VALUES (?,?,?,?,?,?,?,?, 'demo', ?)""",
             (wid, d(-90 + n * 5), random.choice(LIEFERANTEN), temp, 1, konform, 1, konform,
              "Demo-Pruefung" if konform else "Karton beschaedigt - Klaerung"))
+
+    # Zweiter Wareneingang (Einkauf -> Produktion): die ersten 3 Eingaenge als
+    # 'produktion' markieren und ihre Ware in den getrennten Produktionsbestand
+    # buchen (NICHT in den verkaufbaren Lagerbestand).
+    prod_we = we_ids[:3]
+    for wid in prod_we:
+        cur.execute("UPDATE tbl_wareneingang SET art='produktion', lieferant=? WHERE id=?",
+                    (random.choice(["EuroPharma S.L.", "Medis d.o.o.", "PharmaParallel BV"]), wid))
+        for pzn, name, charge, verfall, menge, ek in cur.execute(
+                "SELECT pzn,artikelname,charge,verfall,menge,ek FROM tbl_wareneingang_positionen "
+                "WHERE we_id=?", (wid,)).fetchall():
+            cur.execute(
+                """INSERT INTO tbl_gdp_produktionsbestand(pzn,artikelname,charge,verfall,menge,ek,aktualisiert_am)
+                   VALUES (?,?,?,?,?,?,?)
+                   ON CONFLICT(pzn,charge,verfall) DO UPDATE SET menge=menge+excluded.menge""",
+                (pzn, name, charge, verfall, menge, ek or round(random.uniform(60, 400), 2), ts(-1)))
+
+    # Warenausgaenge aus der Produktion (Avis an den Verkaufs-Wareneingang):
+    # 3 avisiert (warten auf Bestaetigung) + 1 bereits bestaetigt.
+    for j in range(4):
+        pzn, name, charge, verfall = charges[(j + 1) % len(charges)]
+        status = "bestaetigt" if j == 3 else "avisiert"
+        nummer = f"WA-2026-{1001 + j}"
+        # Demo: jeder zweite Warenausgang mit Rechnungsnummer (Feld ist optional)
+        rnr = f"RE-2026-{4200 + j}" if j % 2 == 0 else ""
+        cur.execute(
+            """INSERT INTO tbl_gdp_warenausgang
+               (datum,nummer,quelle,ziel,status,bemerkung,rechnungsnummer,erstellt_von,bestaetigt_am,bestaetigt_von)
+               VALUES (?,?, 'Produktion', 'Verkaufsbestand', ?, 'Demo-Produktionscharge', ?, 'demo', ?, ?)""",
+            (ts(-6 + j), nummer, status, rnr,
+             ts(-2) if status == "bestaetigt" else None,
+             "demo" if status == "bestaetigt" else None))
+        wa_id = cur.lastrowid
+        for _ in range(random.randint(1, 3)):
+            p2, n2, c2, v2 = charges[random.randrange(len(charges))]
+            cur.execute(
+                "INSERT INTO tbl_gdp_warenausgang_pos(wa_id,pzn,artikelname,charge,verfall,menge,ek) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (wa_id, p2, n2, f"FW-{random.randint(1000,9999)}", v2,
+                 random.randint(5, 30), round(random.uniform(80, 500), 2)))
+
+    # Manuelle Bestandsdifferenzen (Demo): Verkaufs- und Produktionsbestand
+    bd_gruende = ["Inventur", "Bruch / Beschaedigung", "Schwund / Diebstahl",
+                  "Fund / Mehrbestand", "Buchungsfehler"]
+    lager_lines = cur.execute(
+        "SELECT pzn,artikelname,charge,verfall,menge FROM tbl_lagerbestand WHERE menge>0 LIMIT 6").fetchall()
+    prod_lines = cur.execute(
+        "SELECT pzn,artikelname,charge,verfall,menge FROM tbl_gdp_produktionsbestand WHERE menge>0 LIMIT 4").fetchall()
+    # Datums ueber mehrere Zeitraeume streuen, damit Monat/Quartal/Jahr/Vorjahr
+    # im Protokoll-Zeitraumfilter unterschiedliche Ergebnisse zeigen.
+    bd_offsets = [-2, -8, -20, -55, -120, -200, -300, -400, -430, -460]
+    for n, (bereich, line) in enumerate(
+            [("Verkauf", l) for l in lager_lines] + [("Produktion", l) for l in prod_lines]):
+        pzn, name, charge, verfall, vorher = line
+        diff = random.choice([-3, -2, -1, 1, 2])
+        nachher = max(0, (vorher or 0) + diff)
+        echt_diff = nachher - (vorher or 0)
+        off = bd_offsets[n % len(bd_offsets)]
+        grund = bd_gruende[n % len(bd_gruende)]
+        cur.execute(
+            """INSERT INTO tbl_gdp_bestandsdiff
+               (datum,bereich,pzn,artikelname,charge,verfall,menge_vorher,menge_diff,menge_nachher,
+                grund,bemerkung,bearbeiter)
+               VALUES (?,?,?,?,?,?,?,?,?,?, 'Demo-Korrektur', 'demo')""",
+            (ts(off), bereich, pzn, name, charge, verfall, vorher, echt_diff, nachher, grund))
+        # passender Protokoll-Eintrag (damit Modul=Bestandsdifferenz + Zeitraum greift)
+        cur.execute(
+            "INSERT INTO tbl_gdp_log(zeitpunkt,bearbeiter,modul,aktion,bezug_id,details) "
+            "VALUES (?, 'demo', 'Bestandsdifferenz', ?, ?, ?)",
+            (ts(off), f"{bereich}: {'+' if echt_diff > 0 else ''}{echt_diff}", n + 1,
+             f"{name} Ch {charge}: {vorher} -> {nachher} ({grund})"))
 
     # Auslieferungen Kunde <-> Charge (>= 24)
     beleg = 7000
@@ -867,7 +969,8 @@ def main():
                 "tbl_gdp_auslieferung", "tbl_gdp_we_pruefung", "tbl_gdp_temperatur",
                 "tbl_gdp_inspektion", "tbl_gdp_inspektion_punkt", "tbl_gdp_kunde_quali",
                 "tbl_gdp_retoure", "tbl_gdp_rueckruf", "tbl_gdp_log",
-                "tbl_gdp_abschreibung"]
+                "tbl_gdp_abschreibung", "tbl_gdp_produktionsbestand",
+                "tbl_gdp_warenausgang", "tbl_gdp_warenausgang_pos", "tbl_gdp_bestandsdiff"]
         print("\n=== Befuellte Tabellen ===")
         for t in tabs:
             n = con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]

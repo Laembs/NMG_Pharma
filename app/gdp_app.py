@@ -28,6 +28,7 @@ from tkinter import ttk, messagebox, filedialog
 
 from .config import DB_PATH, ASSETS_DIR
 from . import theme
+from . import erechnung as erech
 
 try:
     from . import tour
@@ -42,6 +43,9 @@ ACCENT_DARK = theme.PRIMARY_DARK
 ACCENT_LIGHT = theme.SELECT_BG
 BORDER = theme.BORDER
 HEAD_BG = "#EEF3F8"
+CARD = theme.CARD
+CARD_ALT = theme.CARD_ALT
+INK = theme.INK
 TEXT = theme.INK
 MUTED = theme.MUTED
 OK_GREEN = theme.SUCCESS
@@ -192,8 +196,50 @@ def ensure_gdp_tables(db_path=DB_PATH):
                 menge INTEGER DEFAULT 0, grund TEXT, wert_ek REAL,
                 retoure_id INTEGER, bearbeiter TEXT, erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE IF NOT EXISTS tbl_gdp_einstellungen(
+                schluessel TEXT PRIMARY KEY, wert TEXT
+            );
+            CREATE TABLE IF NOT EXISTS tbl_gdp_produktionsbestand(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pzn TEXT, artikelname TEXT, charge TEXT, verfall TEXT,
+                menge INTEGER DEFAULT 0, ek REAL, aktualisiert_am TEXT,
+                UNIQUE(pzn, charge, verfall)
+            );
+            CREATE TABLE IF NOT EXISTS tbl_gdp_warenausgang(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                datum TEXT, nummer TEXT, quelle TEXT, ziel TEXT DEFAULT 'Verkaufsbestand',
+                status TEXT DEFAULT 'avisiert', bemerkung TEXT,
+                erstellt_von TEXT, erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,
+                bestaetigt_am TEXT, bestaetigt_von TEXT, we_id INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS tbl_gdp_warenausgang_pos(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wa_id INTEGER, pzn TEXT, artikelname TEXT, charge TEXT, verfall TEXT,
+                menge INTEGER DEFAULT 0, ek REAL
+            );
+            CREATE TABLE IF NOT EXISTS tbl_gdp_bestandsdiff(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                datum TEXT, bereich TEXT, pzn TEXT, artikelname TEXT, charge TEXT, verfall TEXT,
+                menge_vorher INTEGER, menge_diff INTEGER, menge_nachher INTEGER,
+                grund TEXT, bemerkung TEXT, bearbeiter TEXT, erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP
+            );
             """
         )
+        # Wareneingangs-Art je Beleg: 'bestand' (Fertigware aus Produktion ->
+        # Verkaufsbestand, Standard) oder 'produktion' (Einkauf -> Produktions-
+        # bestand). Spalte am gemeinsamen tbl_wareneingang nachruesten.
+        if _table_exists(con, "tbl_wareneingang"):
+            wcols = {r[1] for r in con.execute("PRAGMA table_info(tbl_wareneingang)")}
+            if "art" not in wcols:
+                con.execute("ALTER TABLE tbl_wareneingang ADD COLUMN art TEXT DEFAULT 'bestand'")
+        # Betriebsmodus dieses Arbeitsplatzes (Verkauf oder Produktion). Standard
+        # Verkauf; in den Einstellungen umschaltbar.
+        con.execute("INSERT OR IGNORE INTO tbl_gdp_einstellungen(schluessel,wert) VALUES('betriebsmodus','verkauf')")
+        # Rechnungsnummer am Warenausgang (optional; per Einstellung als Pflicht setzbar).
+        wacols = {r[1] for r in con.execute("PRAGMA table_info(tbl_gdp_warenausgang)")}
+        if "rechnungsnummer" not in wacols:
+            con.execute("ALTER TABLE tbl_gdp_warenausgang ADD COLUMN rechnungsnummer TEXT")
+        con.execute("INSERT OR IGNORE INTO tbl_gdp_einstellungen(schluessel,wert) VALUES('rechnungsnummer_pflicht','0')")
         # Retourenbestand (Quarantaene) lebt als zusaetzliche Spalte je Lagerzeile:
         # Normalbestand = menge (verkaufbar), Retourenbestand = menge_retoure
         # (gesperrt, erst nach Freigabe verkaufbar). Nachruesten fuer Bestands-DBs.
@@ -424,6 +470,167 @@ class FormDialog(tk.Toplevel):
         self.destroy()
 
 
+class ErechnungPruefDialog(tk.Toplevel):
+    """Prüf- und Übernahme-Maske für eine eingelesene eRechnung.
+
+    Der Mitarbeiter gleicht alle Positionen (Menge, EK, Charge/Verfall) gegen
+    die tatsächlich gelieferte Ware ab und bucht sie – nach ausdrücklicher
+    Bestätigung – als Wareneingang (Produktion) mit Einkaufspreisen.
+    Die Zuordnung Lieferanten-Artikelnummer -> deutsche PZN bleibt vorerst
+    manuell (Art-Nr/PZN ist je Zeile editierbar)."""
+
+    def __init__(self, panel, daten, fehler):
+        super().__init__(panel)
+        self.panel = panel
+        self.daten = daten
+        self.title("eRechnung prüfen & als Wareneingang (Produktion) übernehmen")
+        self.configure(bg=SHELL_BG)
+        self.transient(panel.winfo_toplevel())
+        v = daten.get("verkaeufer", {})
+        s = daten.get("summen", {})
+
+        head = tk.Frame(self, bg=ACCENT)
+        head.pack(fill="x")
+        tk.Label(head, text="eRechnung prüfen & übernehmen", bg=ACCENT, fg="#FFFFFF",
+                 font=(theme.FONT, 13, "bold"), padx=16, pady=10).pack(anchor="w")
+
+        info = tk.Frame(self, bg=SHELL_BG)
+        info.pack(fill="x", padx=18, pady=(12, 2))
+        kopf = (f"Lieferant: {v.get('name', '')}    USt-IdNr.: {v.get('ustid', '') or '—'} "
+                f"({v.get('land', '')})\n"
+                f"Rechnung: {daten.get('rechnungsnr', '')} ({daten.get('typ', '')})    "
+                f"Datum: {daten.get('datum', '')}    Brutto: {s.get('brutto', 0):.2f} €    "
+                f"[{daten.get('_format', '')}]")
+        tk.Label(info, text=kopf, bg=SHELL_BG, fg=TEXT, justify="left",
+                 font=(theme.FONT, 10)).pack(anchor="w")
+        if fehler:
+            tk.Label(info, text="⚠ eRechnung-Hinweise: " + " | ".join(fehler), bg=SHELL_BG,
+                     fg=WARN, justify="left", wraplength=760,
+                     font=(theme.FONT, 9)).pack(anchor="w", pady=(4, 0))
+        tk.Label(self, text="Mengen/EK gegen die gelieferte Ware prüfen, Charge und Verfall "
+                 "erfassen. Art-Nr/PZN ggf. auf die echte PZN korrigieren (Zuordnung noch manuell).",
+                 bg=SHELL_BG, fg=MUTED, justify="left", wraplength=770,
+                 font=(theme.FONT, 9)).pack(fill="x", padx=18, pady=(2, 6))
+
+        cols = [("Art-Nr/PZN", 12), ("Bezeichnung", 26), ("Menge", 7),
+                ("EK €", 9), ("Charge", 12), ("Verfall", 10)]
+        wrap = tk.Frame(self, bg=SHELL_BG)
+        wrap.pack(fill="both", expand=True, padx=18, pady=4)
+        header = tk.Frame(wrap, bg=SHELL_BG)
+        header.pack(fill="x")
+        for txt, w in cols:
+            tk.Label(header, text=txt, bg=SHELL_BG, fg=MUTED, width=w, anchor="w",
+                     font=(theme.FONT, 9, "bold")).pack(side="left", padx=2)
+        canvas = tk.Canvas(wrap, bg=SHELL_BG, highlightthickness=0, height=260)
+        sb = ttk.Scrollbar(wrap, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=SHELL_BG)
+        inner.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        self.rows = []
+        for p in daten.get("positionen", []):
+            r = tk.Frame(inner, bg=SHELL_BG)
+            r.pack(fill="x", pady=1)
+
+            def feld(width, val):
+                var = tk.StringVar(value=str(val))
+                tk.Entry(r, textvariable=var, width=width, font=(theme.FONT, 9),
+                         relief="solid", bd=1, highlightthickness=0).pack(side="left", padx=2)
+                return var
+            vrs = {
+                "pzn": feld(12, p.get("pzn", "") or ""),
+                "bez": feld(26, p.get("bezeichnung", "") or ""),
+                "menge": feld(7, f"{p.get('menge', 0):g}"),
+                "ek": feld(9, f"{p.get('einzelpreis', 0):.2f}"),
+                "charge": feld(12, ""),
+                "verfall": feld(10, ""),
+            }
+            self.rows.append(vrs)
+
+        foot = tk.Frame(self, bg=SHELL_BG)
+        foot.pack(fill="x", padx=18, pady=(6, 16))
+        self._gep = tk.IntVar(value=0)
+        tk.Checkbutton(foot, text="Geprüft: Positionen mit der gelieferten Ware abgeglichen.",
+                       variable=self._gep, bg=SHELL_BG, fg=TEXT, activebackground=SHELL_BG,
+                       font=(theme.FONT, 9)).pack(side="left")
+        theme.PillButton(foot, "✅ Geprüft – Wareneingang buchen", self._buchen,
+                         kind="success", font_size=10, padx=14, pady=7).pack(side="right")
+        theme.PillButton(foot, "Abbrechen", self.destroy, kind="neutral",
+                         font_size=10, padx=14, pady=7).pack(side="right", padx=(0, 8))
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.update_idletasks()
+        try:
+            self.geometry(f"+{panel.winfo_rootx() + 60}+{panel.winfo_rooty() + 40}")
+        except Exception:
+            pass
+        self.grab_set()
+
+    def _buchen(self):
+        if not self._gep.get():
+            messagebox.showwarning("Prüfung", "Bitte zuerst die Prüfung bestätigen (Häkchen).",
+                                   parent=self)
+            return
+        pos = []
+        for r in self.rows:
+            try:
+                menge = float(str(r["menge"].get()).replace(",", ".") or 0)
+            except ValueError:
+                menge = 0.0
+            if menge <= 0:
+                continue
+            try:
+                ek = float(str(r["ek"].get()).replace(",", ".") or 0)
+            except ValueError:
+                ek = 0.0
+            pos.append((r["pzn"].get().strip(), r["bez"].get().strip(),
+                        r["charge"].get().strip(), r["verfall"].get().strip(), menge, ek))
+        if not pos:
+            messagebox.showwarning("Wareneingang", "Keine Position mit Menge > 0.", parent=self)
+            return
+        lieferant = (self.daten.get("verkaeufer") or {}).get("name") or "Lieferant"
+        lieferschein = self.daten.get("rechnungsnr") or None
+        jetzt = datetime.now().isoformat(timespec="seconds")
+        try:
+            with self.panel._conn() as con:
+                cur = con.execute(
+                    "INSERT INTO tbl_wareneingang(datum, lieferant, lieferschein, bearbeiter, art) "
+                    "VALUES(?,?,?,?, 'produktion')", (jetzt, lieferant, lieferschein, ME()))
+                we_id = cur.lastrowid
+                for pzn, name, charge, verfall, menge, ek in pos:
+                    con.execute(
+                        "INSERT INTO tbl_wareneingang_positionen"
+                        "(we_id,pzn,artikelname,charge,verfall,menge,ek) VALUES(?,?,?,?,?,?,?)",
+                        (we_id, pzn, name, charge, verfall, menge, ek))
+                    upd = con.execute(
+                        "UPDATE tbl_gdp_produktionsbestand SET menge=menge+?, ek=COALESCE(?,ek), "
+                        "aktualisiert_am=? WHERE pzn=? AND COALESCE(charge,'')=? "
+                        "AND COALESCE(verfall,'')=?",
+                        (menge, ek, jetzt, pzn, charge, verfall))
+                    if upd.rowcount == 0:
+                        con.execute(
+                            "INSERT INTO tbl_gdp_produktionsbestand"
+                            "(pzn,artikelname,charge,verfall,menge,ek,aktualisiert_am) "
+                            "VALUES(?,?,?,?,?,?,?)", (pzn, name, charge, verfall, menge, ek, jetzt))
+                con.commit()
+        except Exception as exc:
+            messagebox.showerror("Wareneingang", f"Buchung fehlgeschlagen:\n{exc}", parent=self)
+            return
+        self.panel._log("Wareneingang", "eRechnung übernommen (Produktion)", we_id,
+                        f"{lieferant} · Rg {lieferschein or '–'} · {len(pos)} Pos.")
+        try:
+            self.panel._refresh_wareneingang()
+        except Exception:
+            pass
+        self.destroy()
+        messagebox.showinfo("Übernommen",
+                            f"Wareneingang (Produktion) gebucht: {len(pos)} Position(en).\n"
+                            "Die GDP-Prüfung dieses Wareneingangs steht noch aus.",
+                            parent=self.panel)
+
+
 # ════════════════════════════════════════════════════════════════════════════
 class GDPPanel(tk.Frame):
     """Hauptoberflaeche der GDP-App (Sidebar + Seiten)."""
@@ -431,21 +638,31 @@ class GDPPanel(tk.Frame):
     NAV = (
         ("uebersicht",      "Uebersicht",            "\U0001F4CA"),
         ("wareneingang",    "Wareneingang",          "\U0001F4E6"),
+        ("produktionsbestand", "Produktionsbestand", "\U0001F3ED"),
+        ("warenausgang",    "Warenausgang / Avis",   "\U0001F4E4"),
         ("rueckverfolgung", "Chargen-Rueckverfolgung", "\U0001F50E"),
+        ("bewegungen",      "Warenbewegungen",       "\U0001F501"),
+        ("bestandsdiff",    "Bestandsdifferenzen",   "Δ"),
         ("retouren",        "Retouren / Reklamation", "↩"),
         ("retourenbestand", "Retourenbestand",       "⚖"),
         ("qualifizierung",  "Kundenqualifizierung",  "\U0001F6E1"),
         ("protokoll",       "Protokoll",             "\U0001F4DD"),
+        ("einstellungen",   "Einstellungen",         "⚙"),
     )
     TITEL = {k: t for k, t, _ in NAV}
     UNTERTITEL = {
         "uebersicht": "Kennzahlen und offene GDP-Pflichten auf einen Blick.",
-        "wareneingang": "NMG-Ware annehmen (Charge/Verfall ins Lager) und GDP-Pruefung erfassen.",
+        "wareneingang": "Ware annehmen (Charge/Verfall) und GDP-Pruefung erfassen.",
+        "produktionsbestand": "Eingekaufte Ware fuer die Produktion - getrennt vom Verkaufsbestand.",
+        "warenausgang": "Produzierte Ware avisieren - erscheint zur Bestaetigung im Verkaufs-Wareneingang.",
         "rueckverfolgung": "Welche Apotheke hat welche Charge erhalten? Gezielter Rueckruf.",
+        "bewegungen": "Alle Ein- und Ausgaenge aus Verkauf und Produktion - durchsuchbar.",
+        "bestandsdiff": "Manuelle Bestandskorrekturen (Inventur, Bruch, Schwund) erfassen und nachvollziehen.",
         "retouren": "Rueckwaren und Reklamationen von der Erfassung bis zur Gutschrift.",
         "retourenbestand": "Zurueckgenommene Ware in Quarantaene: freigeben oder abschreiben.",
         "qualifizierung": "Nur lizenzierte Apotheken duerfen beliefert werden.",
         "protokoll": "Revisionssicheres Protokoll aller GDP-Vorgaenge.",
+        "einstellungen": "Module ein-/ausschalten - z. B. die beiden Wareneingaenge.",
     }
 
     def __init__(self, master, db_path=DB_PATH, on_close=None, nmgone_action=None):
@@ -477,6 +694,41 @@ class GDPPanel(tk.Frame):
         if getattr(self, "_log_tree", None) is not None and self._current == "protokoll":
             self._refresh_protokoll()
 
+    # ----------------------------------------------------------- Einstellungen
+    def _setting(self, key, default=None):
+        with self._conn() as con:
+            r = con.execute("SELECT wert FROM tbl_gdp_einstellungen WHERE schluessel=?",
+                            (key,)).fetchone()
+        return r[0] if r else default
+
+    def _set_setting(self, key, val):
+        with self._conn() as con:
+            con.execute("INSERT INTO tbl_gdp_einstellungen(schluessel,wert) VALUES(?,?) "
+                        "ON CONFLICT(schluessel) DO UPDATE SET wert=excluded.wert",
+                        (key, str(val)))
+            con.commit()
+
+    def _modus(self):
+        """Betriebsmodus dieses Arbeitsplatzes: 'verkauf' oder 'produktion'.
+        Strikt getrennt - bestimmt sichtbare Bereiche und aktiven Wareneingang."""
+        m = self._setting("betriebsmodus", "verkauf")
+        return m if m in ("verkauf", "produktion") else "verkauf"
+
+    def _we_bestand_aktiv(self):
+        return self._modus() == "verkauf"
+
+    def _we_produktion_aktiv(self):
+        return self._modus() == "produktion"
+
+    def _rechnung_pflicht(self):
+        return self._setting("rechnungsnummer_pflicht", "0") == "1"
+
+    def _next_nummer(self, con, prefix):
+        jahr = HEUTE().year
+        n = con.execute("SELECT COUNT(*) FROM tbl_gdp_warenausgang WHERE nummer LIKE ?",
+                        (f"{prefix}-{jahr}-%",)).fetchone()[0]
+        return f"{prefix}-{jahr}-{1001 + n}"
+
     # ------------------------------------------------------------------- Aufbau
     def _build(self):
         self.columnconfigure(1, weight=1)
@@ -498,15 +750,20 @@ class GDPPanel(tk.Frame):
                      bg=SIDEBAR, fg="#FFFFFF").pack(anchor="w")
         tk.Label(left, text="Wareneingang\n& Retouren", font=(theme.FONT, 15, "bold"),
                  fg="#FFFFFF", bg=SIDEBAR, justify="left").grid(
-            row=1, column=0, sticky="w", padx=18, pady=(6, 10))
+            row=1, column=0, sticky="w", padx=18, pady=(6, 2))
 
         nav = tk.Frame(left, bg=SIDEBAR)
         nav.grid(row=2, column=0, sticky="new", padx=8)
+        self._modus_badge = tk.Label(nav, text="", font=(theme.FONT, 9, "bold"),
+                                     fg="#FFFFFF", bg=SIDEBAR_ACTIVE, padx=8, pady=3)
+        self._modus_badge.pack(anchor="w", padx=10, pady=(0, 8))
         self._nav_buttons = {}
         self._nav_bars = {}
+        self._nav_rowf = {}
         for key, text, icon in self.NAV:
             rowf = tk.Frame(nav, bg=SIDEBAR)
             rowf.pack(fill="x", pady=1)
+            self._nav_rowf[key] = rowf
             bar = tk.Frame(rowf, bg=SIDEBAR, width=4)
             bar.pack(side="left", fill="y")
             b = tk.Button(rowf, text=f"   {icon}   {text}", anchor="w", relief="flat",
@@ -557,11 +814,16 @@ class GDPPanel(tk.Frame):
         self._builders = {
             "uebersicht": self._build_uebersicht,
             "wareneingang": self._build_wareneingang,
+            "produktionsbestand": self._build_produktionsbestand,
+            "warenausgang": self._build_warenausgang,
             "rueckverfolgung": self._build_rueckverfolgung,
+            "bewegungen": self._build_bewegungen,
+            "bestandsdiff": self._build_bestandsdiff,
             "retouren": self._build_retouren,
             "retourenbestand": self._build_retourenbestand,
             "qualifizierung": self._build_qualifizierung,
             "protokoll": self._build_protokoll,
+            "einstellungen": self._build_einstellungen,
         }
         self._refreshers = {}
         for key, builder in self._builders.items():
@@ -570,8 +832,46 @@ class GDPPanel(tk.Frame):
             builder(frame)
             self._views[key] = frame
 
+        self._apply_nav_visibility()
         self._current = None
         self._show_view("uebersicht")
+
+    # Bereiche, die nur in einem Betriebsmodus sichtbar sind
+    NAV_PRODUKTION = ("produktionsbestand", "warenausgang")
+    NAV_VERKAUF = ("retouren", "retourenbestand", "qualifizierung")
+
+    def _visible_nav_keys(self):
+        produktion = self._we_produktion_aktiv()
+        verkauf = self._we_bestand_aktiv()
+        keys = set()
+        for key, _t, _i in self.NAV:
+            if key in self.NAV_PRODUKTION:
+                if produktion:
+                    keys.add(key)
+            elif key in self.NAV_VERKAUF:
+                if verkauf:
+                    keys.add(key)
+            else:
+                keys.add(key)
+        return keys
+
+    def _apply_nav_visibility(self):
+        """Blendet Nav-Eintraege passend zum Betriebsmodus ein/aus. Re-packt in
+        NAV-Reihenfolge, damit die Sortierung erhalten bleibt."""
+        visible = self._visible_nav_keys()
+        for key, _t, _i in self.NAV:
+            self._nav_rowf[key].pack_forget()
+        for key, _t, _i in self.NAV:
+            if key in visible:
+                self._nav_rowf[key].pack(fill="x", pady=1)
+        if getattr(self, "_modus_badge", None) is not None:
+            m = self._modus()
+            self._modus_badge.config(
+                text=f"Modus: {self.MODUS_INFO[m][0].strip()}",
+                bg=(OK_GREEN if m == "verkauf" else "#7A4E12"))
+        cur = getattr(self, "_current", None)
+        if cur is not None and cur not in visible:
+            self._show_view("uebersicht")
 
     def _nav_hover(self, key, on):
         if key == self._current:
@@ -622,12 +922,19 @@ class GDPPanel(tk.Frame):
 
         outer_a, self._alert_body = _card(body, "Offene Pflichten", "Was als naechstes ansteht")
         outer_a.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        outer_b, b2 = _card(body, "Schnellzugriff")
+        outer_b, self._quick_body = _card(body, "Schnellzugriff")
         outer_b.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-        for key, label, icon in self.NAV[1:]:
-            theme.PillButton(b2, f"{icon}  {label}", lambda k=key: self._show_view(k),
-                             kind="ghost", font_size=10, padx=12, pady=8).pack(fill="x", pady=3)
         self._refreshers["uebersicht"] = self._refresh_uebersicht
+
+    def _refresh_quickaccess(self):
+        for w in self._quick_body.winfo_children():
+            w.destroy()
+        visible = self._visible_nav_keys()
+        for key, label, icon in self.NAV[1:]:
+            if key in visible and key != "einstellungen":
+                theme.PillButton(self._quick_body, f"{icon}  {label}",
+                                 lambda k=key: self._show_view(k),
+                                 kind="ghost", font_size=10, padx=12, pady=8).pack(fill="x", pady=3)
 
     def _kpi_tile(self, parent, value, label, color):
         f = tk.Frame(parent, bg=BG, highlightbackground=BORDER, highlightthickness=1)
@@ -639,14 +946,14 @@ class GDPPanel(tk.Frame):
         return f
 
     def _refresh_uebersicht(self):
+        self._refresh_quickaccess()
+        verkauf = self._we_bestand_aktiv()
         with self._conn() as con:
             ret_offen = con.execute(
                 "SELECT COUNT(*) FROM tbl_gdp_retoure WHERE status IN ('Neu','In Pruefung')").fetchone()[0]
-            # Lizenzen
             liz_abgelaufen = con.execute(
                 "SELECT COUNT(*) FROM tbl_gdp_kunde_quali WHERE lizenz_gueltig_bis IS NOT NULL "
                 "AND lizenz_gueltig_bis < ?", (_heute_iso(),)).fetchone()[0]
-            # Chargen die in <90 Tagen ablaufen (aus Lagerbestand)
             chargen = []
             if _table_exists(con, "tbl_lagerbestand"):
                 chargen = con.execute(
@@ -657,7 +964,6 @@ class GDPPanel(tk.Frame):
                 we_ungeprueft = con.execute(
                     "SELECT COUNT(*) FROM tbl_wareneingang w WHERE NOT EXISTS "
                     "(SELECT 1 FROM tbl_gdp_we_pruefung p WHERE p.we_id=w.id)").fetchone()[0]
-            # Retourenbestand (Quarantaene), der noch entschieden werden muss
             rb_offen = rb_stueck = 0
             if _table_exists(con, "tbl_lagerbestand"):
                 lcols = {r[1] for r in con.execute("PRAGMA table_info(tbl_lagerbestand)")}
@@ -665,19 +971,37 @@ class GDPPanel(tk.Frame):
                     rb_offen, rb_stueck = con.execute(
                         "SELECT COUNT(*), COALESCE(SUM(menge_retoure),0) FROM tbl_lagerbestand "
                         "WHERE COALESCE(menge_retoure,0) > 0").fetchone()
+            avis_offen = 0
+            if _table_exists(con, "tbl_gdp_warenausgang"):
+                avis_offen = con.execute(
+                    "SELECT COUNT(*) FROM tbl_gdp_warenausgang WHERE status='avisiert'").fetchone()[0]
+            pb_chargen = pb_stueck = 0
+            if _table_exists(con, "tbl_gdp_produktionsbestand"):
+                pb_chargen, pb_stueck = con.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(menge),0) FROM tbl_gdp_produktionsbestand "
+                    "WHERE menge>0").fetchone()
         grenze = HEUTE() + timedelta(days=90)
         bald_ab = sum(1 for *_ , verf, menge in chargen
                       if (_parse_verfall(verf) and _parse_verfall(verf) <= grenze))
 
         for w in self._kpi_row.winfo_children():
             w.destroy()
-        tiles = [
-            (ret_offen, "Offene Retouren", WARN if ret_offen else OK_GREEN),
-            (rb_offen, "Retourenbestand offen", WARN if rb_offen else OK_GREEN),
-            (we_ungeprueft, "Wareneingaenge ungeprueft", WARN if we_ungeprueft else OK_GREEN),
-            (liz_abgelaufen, "Lizenzen abgelaufen", DANGER if liz_abgelaufen else OK_GREEN),
-            (bald_ab, "Chargen Verfall < 90 Tage", WARN if bald_ab else OK_GREEN),
-        ]
+        if verkauf:
+            tiles = [
+                (ret_offen, "Offene Retouren", WARN if ret_offen else OK_GREEN),
+                (rb_offen, "Retourenbestand offen", WARN if rb_offen else OK_GREEN),
+                (avis_offen, "Avise zu bestaetigen", WARN if avis_offen else OK_GREEN),
+                (liz_abgelaufen, "Lizenzen abgelaufen", DANGER if liz_abgelaufen else OK_GREEN),
+                (bald_ab, "Chargen Verfall < 90 Tage", WARN if bald_ab else OK_GREEN),
+            ]
+        else:
+            tiles = [
+                (we_ungeprueft, "Wareneingaenge ungeprueft", WARN if we_ungeprueft else OK_GREEN),
+                (pb_chargen, "Produktionsbestand (Chargen)", ACCENT),
+                (pb_stueck, "Produktionsbestand (Stueck)", ACCENT),
+                (avis_offen, "Warenausgaenge avisiert", ACCENT if avis_offen else OK_GREEN),
+                (bald_ab, "Chargen Verfall < 90 Tage", WARN if bald_ab else OK_GREEN),
+            ]
         for i, (v, lbl, col) in enumerate(tiles):
             self._kpi_row.columnconfigure(i, weight=1)
             self._kpi_tile(self._kpi_row, v, lbl, col).grid(row=0, column=i, sticky="nsew", padx=4)
@@ -685,15 +1009,26 @@ class GDPPanel(tk.Frame):
         for w in self._alert_body.winfo_children():
             w.destroy()
         alerts = []
-        if liz_abgelaufen:
-            alerts.append((DANGER, f"{liz_abgelaufen} Apotheke(n) mit abgelaufener Lizenz - Belieferung sperren.", "qualifizierung"))
         if we_ungeprueft:
             alerts.append((WARN, f"{we_ungeprueft} Wareneingang/-gaenge ohne GDP-Pruefung.", "wareneingang"))
-        if ret_offen:
-            alerts.append((WARN, f"{ret_offen} Retoure(n)/Reklamation(en) in Bearbeitung.", "retouren"))
-        if rb_offen:
-            alerts.append((WARN, f"{rb_offen} Charge(n) im Retourenbestand ({rb_stueck} St) - "
-                                 "freigeben oder abschreiben.", "retourenbestand"))
+        if verkauf:
+            if liz_abgelaufen:
+                alerts.append((DANGER, f"{liz_abgelaufen} Apotheke(n) mit abgelaufener Lizenz - Belieferung sperren.", "qualifizierung"))
+            if avis_offen:
+                alerts.append((WARN, f"{avis_offen} avisierte Lieferung(en) aus der Produktion - im "
+                                     "Wareneingang bestaetigen.", "wareneingang"))
+            if ret_offen:
+                alerts.append((WARN, f"{ret_offen} Retoure(n)/Reklamation(en) in Bearbeitung.", "retouren"))
+            if rb_offen:
+                alerts.append((WARN, f"{rb_offen} Charge(n) im Retourenbestand ({rb_stueck} St) - "
+                                     "freigeben oder abschreiben.", "retourenbestand"))
+        else:
+            if pb_chargen:
+                alerts.append((ACCENT, f"{pb_chargen} Charge(n) im Produktionsbestand ({pb_stueck} St) - "
+                                       "produzieren und avisieren.", "produktionsbestand"))
+            if avis_offen:
+                alerts.append((WARN, f"{avis_offen} Warenausgang/-gaenge avisiert (warten auf "
+                                     "Bestaetigung im Verkauf).", "warenausgang"))
         if bald_ab:
             alerts.append((WARN, f"{bald_ab} Charge(n) laufen in unter 90 Tagen ab.", "rueckverfolgung"))
         if not alerts:
@@ -720,21 +1055,67 @@ class GDPPanel(tk.Frame):
                 (like, like, limit),
             ).fetchall()
 
+    def _erechnung_einlesen(self):
+        """Liest eine eingehende eRechnung (ZUGFeRD/Factur-X oder XRechnung) ein
+        und öffnet die Prüf-/Übernahme-Maske, aus der – nach Bestätigung durch
+        den Mitarbeiter – ein Wareneingang (Produktion) mit Einkaufspreisen
+        gebucht werden kann."""
+        pfad = filedialog.askopenfilename(
+            title="eRechnung einlesen (XML oder ZUGFeRD-PDF)",
+            filetypes=[("eRechnung", "*.xml *.pdf"), ("XML", "*.xml"),
+                       ("PDF (ZUGFeRD)", "*.pdf"), ("Alle Dateien", "*.*")])
+        if not pfad:
+            return
+        try:
+            daten = erech.lies_erechnung(pfad)
+        except Exception as exc:
+            messagebox.showerror("eRechnung", f"Konnte nicht gelesen werden:\n{exc}\n\n"
+                                 "Hinweis: Aus komprimierten ZUGFeRD-PDFs gelingt das Auslesen "
+                                 "nur mit installierter Bibliothek 'facturx'.")
+            return
+        if not daten.get("positionen"):
+            messagebox.showwarning("eRechnung", "Die eRechnung enthält keine Positionen.")
+            return
+        fehler = erech.pruefe_en16931(daten)
+        ErechnungPruefDialog(self, daten, fehler)
+
     def _build_wareneingang(self, parent):
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(2, weight=1)
+        parent.rowconfigure(3, weight=1)
         bar = tk.Frame(parent, bg=SHELL_BG)
         bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         theme.PillButton(bar, "✅  GDP-Pruefung erfassen", self._we_pruefung_dialog,
                          kind="primary", font_size=10).pack(side="left")
         theme.PillButton(bar, "↻  Aktualisieren", self._refresh_wareneingang,
                          kind="neutral", font_size=10).pack(side="left", padx=8)
-        tk.Label(bar, text="Doppelklick auf einen Eingang = Positionen anzeigen.",
-                 bg=SHELL_BG, fg=MUTED, font=(theme.FONT, 9)).pack(side="left", padx=12)
+        theme.PillButton(bar, "🧾  eRechnung einlesen", self._erechnung_einlesen,
+                         kind="neutral", font_size=10).pack(side="left", padx=(0, 8))
+        tk.Label(bar, text="History:", bg=SHELL_BG, fg=MUTED,
+                 font=(theme.FONT, 9)).pack(side="left", padx=(8, 4))
+        self._we_filter = tk.StringVar(value="Alle")
+        cb = ttk.Combobox(bar, textvariable=self._we_filter, state="readonly", width=22,
+                          style="NMG.TCombobox",
+                          values=["Alle", "Offen (ungeprueft)", "Erledigt (GDP-geprueft)"])
+        cb.pack(side="left")
+        cb.bind("<<ComboboxSelected>>", lambda _e: self._refresh_wareneingang())
+        tk.Label(bar, text="Typ:", bg=SHELL_BG, fg=MUTED,
+                 font=(theme.FONT, 9)).pack(side="left", padx=(8, 4))
+        self._we_typ_filter = tk.StringVar(value="Alle")
+        cbt = ttk.Combobox(bar, textvariable=self._we_typ_filter, state="readonly", width=18,
+                           style="NMG.TCombobox",
+                           values=["Alle", "Verkaufsbestand", "Produktion"])
+        cbt.pack(side="left")
+        cbt.bind("<<ComboboxSelected>>", lambda _e: self._refresh_wareneingang())
+        self._we_count = tk.Label(bar, text="", bg=SHELL_BG, fg=MUTED, font=(theme.FONT, 9))
+        self._we_count.pack(side="left", padx=12)
 
-        # ---- Buchungsmaske: NMG-Ware mit Charge/Verfall ins Lager buchen ----
-        outer_b, formb = _card(parent, "Artikel ins Lager buchen", "NMG-Ware annehmen")
+        # ---- Buchungsmaske: Ware mit Charge/Verfall annehmen ----
+        outer_b, formb = _card(parent, "Wareneingang erfassen", "Ware annehmen")
         outer_b.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        # Art des Wareneingangs (nur sichtbar bei mehreren aktiven Arten)
+        self._we_art = tk.StringVar(value="bestand")
+        self._we_art_frame = tk.Frame(formb, bg=BG)
+        self._we_art_frame.pack(fill="x", pady=(0, 4))
         whead = tk.Frame(formb, bg=BG)
         whead.pack(fill="x")
         tk.Label(whead, text="Artikel suchen (PZN / Name):", bg=BG,
@@ -773,14 +1154,161 @@ class GDPPanel(tk.Frame):
         theme.PillButton(row2, "Einbuchen", self._we_buchen, kind="primary",
                          font_size=10, padx=14, pady=4).pack(side="left")
 
+        # ---- Avisierte Lieferungen aus der Produktion (zu bestaetigen) ----
+        # Erscheinen hier automatisch, sobald in der Produktion ein Warenausgang
+        # erzeugt wurde. Werden bei Anlieferung bestaetigt (haendisch / per Liste).
+        self._we_avis_outer = tk.Frame(parent, bg="#FBE9C7", highlightbackground=WARN,
+                                       highlightthickness=1)
+        self._we_avis_outer.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        avhead = tk.Frame(self._we_avis_outer, bg="#FBE9C7")
+        avhead.pack(fill="x", padx=12, pady=(8, 4))
+        tk.Label(avhead, text="🕓  Avisierte Lieferungen (zu bestaetigen)", bg="#FBE9C7",
+                 fg="#8A5A00", font=(theme.FONT, 11, "bold")).pack(side="left")
+        theme.PillButton(avhead, "✅  Bestaetigen", self._we_avis_confirm,
+                         kind="success", font_size=9, padx=12, pady=4).pack(side="right")
+        theme.PillButton(avhead, "📥  Per Liste bestaetigen", self._we_avis_confirm_liste,
+                         kind="neutral", font_size=9, padx=12, pady=4).pack(side="right", padx=6)
+        avbody = tk.Frame(self._we_avis_outer, bg="#FBE9C7")
+        avbody.pack(fill="x", padx=12, pady=(0, 10))
+        self._we_avis_tree = _make_tree(avbody, ("Nummer", "Datum", "Quelle", "Rechnung", "Positionen", "Stueck"),
+                                        (115, 85, 130, 120, 85, 65), height=4,
+                                        anchors={"Positionen": "center", "Stueck": "center"})
+        self._we_avis_tree.bind("<Double-1>",
+                                lambda _e: self._wa_show_positions(self._we_avis_selected()))
+
         # ---- Liste der erfassten Wareneingaenge + GDP-Pruefstatus ----
         outer, body = _card(parent)
-        outer.grid(row=2, column=0, sticky="nsew")
-        cols = ("Datum", "Lieferant", "Lieferschein", "Positionen", "Stueck", "GDP-Pruefung")
-        self._we_tree = _make_tree(body, cols, (90, 150, 130, 80, 70, 150),
+        outer.grid(row=3, column=0, sticky="nsew")
+        cols = ("Datum", "Art", "Lieferant", "Lieferschein", "Positionen", "Stueck", "GDP-Pruefung")
+        self._we_tree = _make_tree(body, cols, (90, 130, 140, 120, 75, 65, 140),
                                    anchors={"Positionen": "center", "Stueck": "center"})
         self._we_tree.bind("<Double-1>", lambda _e: self._we_show_positions())
         self._refreshers["wareneingang"] = self._refresh_wareneingang
+        self._we_sync_art_selector()
+
+    def _we_avis_selected(self):
+        sel = self._we_avis_tree.selection()
+        return int(sel[0]) if sel else None
+
+    def _we_avis_confirm(self):
+        wa_id = self._we_avis_selected()
+        if not wa_id:
+            messagebox.showinfo("Bestaetigen", "Bitte eine avisierte Lieferung waehlen.", parent=self)
+            return
+        self._wa_confirm(wa_id)
+
+    def _we_avis_confirm_liste(self):
+        wa_id = self._we_avis_selected()
+        if not wa_id:
+            messagebox.showinfo("Per Liste bestaetigen",
+                                "Bitte die zugehoerige avisierte Lieferung waehlen.", parent=self)
+            return
+        path = filedialog.askopenfilename(
+            parent=self, title="Anlieferliste waehlen (Excel, CSV oder TXT)",
+            filetypes=[("Tabellen", "*.xlsx *.xlsm *.csv *.txt"), ("Alle Dateien", "*.*")])
+        if not path:
+            return
+        try:
+            positions, rechnung = self._parse_lieferliste(path)
+        except Exception as e:
+            messagebox.showerror("Import", f"Datei konnte nicht gelesen werden:\n{e}", parent=self)
+            return
+        if not positions:
+            messagebox.showinfo("Per Liste bestaetigen",
+                                "Keine gueltigen Positionen (PZN + Menge) gefunden.", parent=self)
+            return
+        # Soll/Ist-Abgleich: avisierte Positionen vs. tatsaechliche Anlieferliste
+        with self._conn() as con:
+            avis = con.execute(
+                "SELECT pzn, artikelname, charge, verfall, menge, ek FROM tbl_gdp_warenausgang_pos "
+                "WHERE wa_id=?", (wa_id,)).fetchall()
+        diffs = self._avis_diff(avis, positions)
+        if diffs:
+            mehr = "" if len(diffs) <= 15 else f"\n… und {len(diffs) - 15} weitere"
+            if not messagebox.askyesno(
+                    "Abweichung Avis ↔ Anlieferung",
+                    "Die Anlieferliste weicht vom avisierten Warenausgang ab:\n\n"
+                    + "\n".join(f"• {d}" for d in diffs[:15]) + mehr
+                    + "\n\nTatsaechlich gelieferte Menge buchen und den Avis trotzdem bestaetigen?",
+                    icon="warning", parent=self):
+                return
+        else:
+            if not messagebox.askyesno("Per Liste bestaetigen",
+                    f"Anlieferliste stimmt mit dem Avis ueberein.\n\n{len(positions)} Position(en) "
+                    "in den Verkaufsbestand buchen und den Avis bestaetigen?", parent=self):
+                return
+        # Rechnungsnummer aus der Anlieferliste am Avis nachtragen (falls vorhanden)
+        if rechnung:
+            with self._conn() as con:
+                con.execute("UPDATE tbl_gdp_warenausgang SET rechnungsnummer=? WHERE id=? "
+                            "AND COALESCE(rechnungsnummer,'')=''", (rechnung, wa_id))
+                con.commit()
+        if self._wa_confirm(wa_id, override_positions=positions) and diffs:
+            self._log("Wareneingang", "Avis mit Abweichung bestaetigt", wa_id, " | ".join(diffs))
+
+    @staticmethod
+    def _avis_diff(avis_pos, liste_pos):
+        """Vergleicht avisierte Positionen (Soll) mit der Anlieferliste (Ist).
+        Schluessel = (PZN, Charge). Liefert Liste von Abweichungstexten."""
+        def agg(rows):
+            d = {}
+            for pzn, name, charge, verfall, menge, ek in rows:
+                key = ((pzn or "").strip(), (charge or "").strip())
+                m, nm = d.get(key, (0, name))
+                d[key] = (m + (menge or 0), name or nm)
+            return d
+        soll, ist = agg(avis_pos), agg(liste_pos)
+        diffs = []
+        for key in sorted(set(soll) | set(ist)):
+            pzn, charge = key
+            soll_m, name_s = soll.get(key, (0, ""))
+            ist_m, name_i = ist.get(key, (0, ""))
+            name = name_s or name_i or pzn
+            ch = f" Ch {charge}" if charge else " (ohne Charge)"
+            if soll_m and not ist_m:
+                diffs.append(f"FEHLT: {name}{ch} – avisiert {soll_m}, nicht in Liste")
+            elif ist_m and not soll_m:
+                diffs.append(f"ZUSAETZLICH: {name}{ch} – {ist_m} geliefert, nicht avisiert")
+            elif soll_m != ist_m:
+                diffs.append(f"MENGE: {name}{ch} – avisiert {soll_m}, geliefert {ist_m}")
+        return diffs
+
+    WE_ART_LABEL = {"bestand": "→ Verkaufsbestand", "produktion": "→ Produktion"}
+
+    def _we_sync_art_selector(self):
+        """(Re)baut den Art-Umschalter passend zu den aktiven Einstellungen.
+        Beide Arten aus -> Hinweis statt Maske; eine Art -> fester Hinweis;
+        beide -> Auswahl per Radiobutton."""
+        f = getattr(self, "_we_art_frame", None)
+        if f is None:
+            return
+        for w in f.winfo_children():
+            w.destroy()
+        opts = []
+        if self._we_bestand_aktiv():
+            opts.append(("bestand", "Aus Produktion → Verkaufsbestand"))
+        if self._we_produktion_aktiv():
+            opts.append(("produktion", "Einkauf → für Produktion (Rohware)"))
+        if not opts:
+            self._we_art.set("")
+            tk.Label(f, text="⚠  Beide Wareneingaenge sind in den Einstellungen deaktiviert.",
+                     bg=BG, fg=DANGER, font=(theme.FONT, 9, "bold")).pack(anchor="w")
+            return
+        keys = [k for k, _ in opts]
+        if self._we_art.get() not in keys:
+            self._we_art.set(keys[0])
+        if len(opts) == 1:
+            tk.Label(f, text="Wareneingang: " + opts[0][1], bg=BG, fg=ACCENT,
+                     font=(theme.FONT, 9, "bold")).pack(anchor="w")
+        else:
+            head = tk.Frame(f, bg=BG)
+            head.pack(fill="x")
+            tk.Label(head, text="Art des Wareneingangs:", bg=BG, fg=MUTED,
+                     font=(theme.FONT, 9, "bold")).pack(side="left", padx=(0, 10))
+            for k, lbl in opts:
+                tk.Radiobutton(head, text=lbl, variable=self._we_art, value=k, bg=BG,
+                               activebackground=BG, selectcolor=BG, font=(theme.FONT, 9),
+                               cursor="hand2").pack(side="left", padx=(0, 12))
 
     def _we_pick_artikel(self, payload):
         pzn, name = payload
@@ -793,6 +1321,12 @@ class GDPPanel(tk.Frame):
         self._we_ek_var.set(f"{apu:.2f}".replace(".", ",") if apu is not None else "")
 
     def _we_buchen(self):
+        art = self._we_art.get() if hasattr(self, "_we_art") else "bestand"
+        if not art:
+            messagebox.showwarning("Wareneingang",
+                "Beide Wareneingaenge sind deaktiviert. Bitte in den Einstellungen "
+                "mindestens einen aktivieren.", parent=self)
+            return
         pzn = getattr(self, "_we_pzn", None)
         if not pzn:
             messagebox.showwarning("Wareneingang", "Bitte zuerst einen NMG-Artikel waehlen.", parent=self)
@@ -826,22 +1360,27 @@ class GDPPanel(tk.Frame):
                 ek = apu
             jetzt = datetime.now().isoformat(timespec="seconds")
             cur = con.execute(
-                "INSERT INTO tbl_wareneingang(datum, lieferant, lieferschein, bearbeiter) VALUES(?,?,?,?)",
-                (jetzt, lieferant, lieferschein or None, ME()))
+                "INSERT INTO tbl_wareneingang(datum, lieferant, lieferschein, bearbeiter, art) "
+                "VALUES(?,?,?,?,?)",
+                (jetzt, lieferant, lieferschein or None, ME(), art))
             we_id = cur.lastrowid
             con.execute(
                 "INSERT INTO tbl_wareneingang_positionen(we_id,pzn,artikelname,charge,verfall,menge,ek) "
                 "VALUES(?,?,?,?,?,?,?)", (we_id, pzn, artikelname, charge, verfall, menge, ek))
+            # Ziel-Bestand je nach Art: Produktions-Einkauf -> getrennter
+            # Produktionsbestand (nicht verkaufbar); sonst Verkaufsbestand.
+            ziel = "tbl_gdp_produktionsbestand" if art == "produktion" else "tbl_lagerbestand"
             upd = con.execute(
-                "UPDATE tbl_lagerbestand SET menge = menge + ?, ek=COALESCE(?, ek), aktualisiert_am = ? "
+                f"UPDATE {ziel} SET menge = menge + ?, ek=COALESCE(?, ek), aktualisiert_am = ? "
                 "WHERE pzn=? AND COALESCE(charge,'')=? AND COALESCE(verfall,'')=?",
                 (menge, ek, jetzt, pzn, charge, verfall))
             if upd.rowcount == 0:
                 con.execute(
-                    "INSERT INTO tbl_lagerbestand(pzn,artikelname,charge,verfall,menge,ek,aktualisiert_am) "
+                    f"INSERT INTO {ziel}(pzn,artikelname,charge,verfall,menge,ek,aktualisiert_am) "
                     "VALUES(?,?,?,?,?,?,?)", (pzn, artikelname, charge, verfall, menge, ek, jetzt))
             con.commit()
-        self._log("Wareneingang", "Einbuchen", we_id,
+        ziel_lbl = "Produktionsbestand" if art == "produktion" else "Verkaufsbestand"
+        self._log("Wareneingang", f"Einbuchen ({ziel_lbl})", we_id,
                   f"{artikelname} (PZN {pzn}) +{menge} · Charge {charge or '–'} · Verf {verfall or '–'}")
         self._we_pzn = None
         self._we_search.clear()
@@ -850,7 +1389,10 @@ class GDPPanel(tk.Frame):
                     self._we_ek_var, self._we_ls_var):
             var.set("")
         self._refresh_wareneingang()
-        messagebox.showinfo("Wareneingang", f"{menge} × {artikelname} eingebucht.", parent=self)
+        if art == "produktion" and self._current != "produktionsbestand":
+            self._refreshers.get("produktionsbestand", lambda: None)()
+        messagebox.showinfo("Wareneingang",
+                            f"{menge} × {artikelname} in den {ziel_lbl} eingebucht.", parent=self)
 
     def _we_import(self):
         from . import kasse_import
@@ -879,27 +1421,80 @@ class GDPPanel(tk.Frame):
     def _refresh_wareneingang(self):
         t = self._we_tree
         t.delete(*t.get_children())
+        flt = self._we_filter.get() if hasattr(self, "_we_filter") else "Alle"
         with self._conn() as con:
             if not _table_exists(con, "tbl_wareneingang"):
-                t.insert("", "end", values=("-", "Keine Kasse-Wareneingaenge vorhanden", "", "", "", ""))
+                t.insert("", "end", values=("-", "Noch keine Wareneingaenge erfasst", "", "", "", ""))
+                if hasattr(self, "_we_count"):
+                    self._we_count.config(text="")
                 return
+            has_art = "art" in {r[1] for r in con.execute("PRAGMA table_info(tbl_wareneingang)")}
+            art_sel = "w.art" if has_art else "'bestand'"
             rows = con.execute(
-                """SELECT w.id, w.datum, w.lieferant, w.lieferschein,
+                f"""SELECT w.id, w.datum, COALESCE({art_sel},'bestand'), w.lieferant, w.lieferschein,
                           (SELECT COUNT(*) FROM tbl_wareneingang_positionen p WHERE p.we_id=w.id),
                           (SELECT COALESCE(SUM(menge),0) FROM tbl_wareneingang_positionen p WHERE p.we_id=w.id),
                           (SELECT gdp_konform FROM tbl_gdp_we_pruefung g WHERE g.we_id=w.id ORDER BY g.id DESC LIMIT 1)
                    FROM tbl_wareneingang w ORDER BY w.datum DESC, w.id DESC""").fetchall()
-        for i, (wid, datum, lief, ls, npos, stk, konform) in enumerate(rows):
+        typ_flt = self._we_typ_filter.get() if hasattr(self, "_we_typ_filter") else "Alle"
+        gezeigt = offen_n = erledigt_n = 0
+        for i, (wid, datum, art, lief, ls, npos, stk, konform) in enumerate(rows):
+            if typ_flt == "Verkaufsbestand" and art != "bestand":
+                continue
+            if typ_flt == "Produktion" and art != "produktion":
+                continue
+            ist_erledigt = konform is not None
+            if ist_erledigt:
+                erledigt_n += 1
+            else:
+                offen_n += 1
+            if flt.startswith("Offen") and ist_erledigt:
+                continue
+            if flt.startswith("Erledigt") and not ist_erledigt:
+                continue
             if konform is None:
                 pruef, tag = "offen", "warn"
             elif konform:
                 pruef, tag = "✔ GDP-konform", "ok"
             else:
                 pruef, tag = "✖ nicht konform", "alert"
-            base = "even" if i % 2 else "odd"
+            base = "even" if gezeigt % 2 else "odd"
+            art_disp = self.WE_ART_LABEL.get(art, art)
             t.insert("", "end", iid=str(wid),
-                     values=(datum or "", lief or "", ls or "", npos, stk, pruef),
+                     values=(datum or "", art_disp, lief or "", ls or "", npos, stk, pruef),
                      tags=(base if tag in ("ok",) else tag,))
+            gezeigt += 1
+        if hasattr(self, "_we_count"):
+            self._we_count.config(
+                text=f"{gezeigt} angezeigt · {offen_n} offen · {erledigt_n} erledigt")
+        self._refresh_we_avis()
+
+    def _refresh_we_avis(self):
+        """Avisierte Warenausgaenge (Ziel Verkaufsbestand) im Wareneingang zeigen.
+        Karte nur sichtbar, wenn es offene Avise gibt UND Produktion aktiv ist."""
+        t = getattr(self, "_we_avis_tree", None)
+        if t is None:
+            return
+        t.delete(*t.get_children())
+        rows = []
+        if self._we_bestand_aktiv():  # Avise werden im Verkauf-Modus bestaetigt
+            with self._conn() as con:
+                if _table_exists(con, "tbl_gdp_warenausgang"):
+                    rows = con.execute(
+                        """SELECT w.id, w.nummer, w.datum, w.quelle, COALESCE(w.rechnungsnummer,''),
+                                  (SELECT COUNT(*) FROM tbl_gdp_warenausgang_pos p WHERE p.wa_id=w.id),
+                                  (SELECT COALESCE(SUM(menge),0) FROM tbl_gdp_warenausgang_pos p WHERE p.wa_id=w.id)
+                           FROM tbl_gdp_warenausgang w
+                           WHERE w.status='avisiert' AND w.ziel='Verkaufsbestand'
+                           ORDER BY w.id DESC""").fetchall()
+        for wid, nummer, datum, quelle, rnr, npos, stk in rows:
+            t.insert("", "end", iid=str(wid),
+                     values=(nummer or "", (datum or "")[:10], quelle or "", rnr, npos, stk),
+                     tags=("warn",))
+        if rows:
+            self._we_avis_outer.grid()
+        else:
+            self._we_avis_outer.grid_remove()
 
     def _we_selected_id(self):
         sel = self._we_tree.selection()
@@ -968,6 +1563,510 @@ class GDPPanel(tk.Frame):
             ("dokumente_ok", "Dokumente vollstaendig", "check", 1),
             ("bemerkung", "Bemerkung", "multiline", ""),
         ], save)
+
+    # ===================================================== PRODUKTIONSBESTAND
+    def _build_produktionsbestand(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(2, weight=1)
+        bar = tk.Frame(parent, bg=SHELL_BG)
+        bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        theme.PillButton(bar, "\U0001F3ED  Produzieren → Warenausgang", self._pb_produzieren,
+                         kind="success", font_size=10).pack(side="left")
+        theme.PillButton(bar, "\U0001F5D1  Abschreiben", self._pb_abschreiben,
+                         kind="danger", font_size=10).pack(side="left", padx=6)
+        theme.PillButton(bar, "↻  Aktualisieren", self._refresh_produktionsbestand,
+                         kind="neutral", font_size=10).pack(side="left", padx=6)
+        tk.Label(bar, text="Eingekaufte Ware fuer die Produktion (gesperrt). 'Produzieren' "
+                           "erzeugt einen Warenausgang, der im Verkaufs-Wareneingang avisiert wird.",
+                 bg=SHELL_BG, fg=MUTED, font=(theme.FONT, 9)).pack(side="left", padx=12)
+
+        self._pb_summary = tk.Label(parent, text="", bg=SHELL_BG, fg=TEXT,
+                                    font=(theme.FONT, 10, "bold"))
+        self._pb_summary.grid(row=1, column=0, sticky="w", pady=(0, 6))
+
+        outer, body = _card(parent, "Produktionsbestand", "Rohware / Einkauf fuer die Produktion")
+        outer.grid(row=2, column=0, sticky="nsew")
+        self._pb_tree = _make_tree(
+            body, ("PZN", "Artikel", "Charge", "Verfall", "Menge", "EK"),
+            (90, 250, 110, 90, 70, 80), anchors={"Menge": "center", "EK": "e"})
+        self._refreshers["produktionsbestand"] = self._refresh_produktionsbestand
+
+    def _refresh_produktionsbestand(self):
+        t = getattr(self, "_pb_tree", None)
+        if t is None:
+            return
+        t.delete(*t.get_children())
+        ges = wert = 0
+        with self._conn() as con:
+            rows = con.execute(
+                "SELECT id, pzn, artikelname, charge, verfall, menge, ek FROM tbl_gdp_produktionsbestand "
+                "WHERE menge > 0 ORDER BY artikelname").fetchall()
+        grenze = HEUTE() + timedelta(days=90)
+        for i, (pid, pzn, name, charge, verf, menge, ek) in enumerate(rows):
+            ges += menge
+            wert += (ek or 0) * menge
+            d = _parse_verfall(verf)
+            tag = "alert" if (d and d <= grenze) else ("even" if i % 2 else "odd")
+            t.insert("", "end", iid=str(pid),
+                     values=(pzn or "", name or "", charge or "", verf or "", menge,
+                             f"{ek:.2f}" if ek else ""), tags=(tag,))
+        self._pb_summary.config(
+            text=f"Produktionsbestand: {len(rows)} Charge(n) · {ges} Stueck · EK-Wert ~ {wert:.2f} EUR")
+
+    def _pb_selected(self):
+        sel = self._pb_tree.selection()
+        if not sel:
+            return None
+        with self._conn() as con:
+            r = con.execute(
+                "SELECT id, pzn, artikelname, charge, verfall, menge, ek FROM tbl_gdp_produktionsbestand "
+                "WHERE id=?", (int(sel[0]),)).fetchone()
+        if not r:
+            return None
+        return dict(zip(("id", "pzn", "artikelname", "charge", "verfall", "menge", "ek"), r))
+
+    def _pb_produzieren(self):
+        """Produktion fertig: reduziert den Produktionsbestand und legt einen
+        avisierten Warenausgang an (Ziel Verkaufsbestand). Der Warenausgang
+        erscheint danach automatisch im Verkaufs-Wareneingang zur Bestaetigung."""
+        d = self._pb_selected()
+        if not d:
+            messagebox.showinfo("Produzieren", "Bitte eine Zeile im Produktionsbestand waehlen.", parent=self)
+            return
+        maxq = d["menge"]
+
+        def save(v):
+            q = max(0, min(int(v["menge"]), maxq))
+            if q <= 0:
+                return
+            rnr = v.get("rechnungsnummer", "").strip()
+            if self._rechnung_pflicht() and not rnr:
+                raise ValueError("Rechnungsnummer ist als Pflichtfeld gesetzt (Einstellungen).")
+            charge = v["charge"].strip() or d["charge"]
+            verfall = _normalize_verfall(v["verfall"]) if v["verfall"].strip() else d["verfall"]
+            jetzt = datetime.now().isoformat(timespec="seconds")
+            with self._conn() as con:
+                con.execute("UPDATE tbl_gdp_produktionsbestand SET menge=menge-?, aktualisiert_am=? WHERE id=?",
+                            (q, jetzt, d["id"]))
+                nummer = self._next_nummer(con, "WA")
+                cur = con.execute(
+                    """INSERT INTO tbl_gdp_warenausgang
+                       (datum,nummer,quelle,ziel,status,bemerkung,rechnungsnummer,erstellt_von)
+                       VALUES(?,?, 'Produktion', 'Verkaufsbestand', 'avisiert', ?,?, ?)""",
+                    (jetzt, nummer, v.get("bemerkung", ""), rnr, ME()))
+                wa_id = cur.lastrowid
+                con.execute(
+                    "INSERT INTO tbl_gdp_warenausgang_pos(wa_id,pzn,artikelname,charge,verfall,menge,ek) "
+                    "VALUES(?,?,?,?,?,?,?)", (wa_id, d["pzn"], d["artikelname"], charge, verfall, q, d["ek"]))
+                con.commit()
+            self._log("Warenausgang", "Produziert / avisiert", wa_id,
+                      f"{nummer}: {q} St {d['artikelname']} Charge {charge} -> Verkaufs-Wareneingang")
+            self._refresh_produktionsbestand()
+            self._refreshers.get("warenausgang", lambda: None)()
+            self._refresh_wareneingang()
+            messagebox.showinfo("Warenausgang erstellt",
+                                f"Warenausgang {nummer} ({q} St) angelegt und an den "
+                                "Verkaufs-Wareneingang avisiert. Dort bei Anlieferung bestaetigen.",
+                                parent=self)
+
+        rnr_label = "Rechnungsnummer *" if self._rechnung_pflicht() else "Rechnungsnummer"
+        FormDialog(self, f"Produzieren → Warenausgang: {d['artikelname']}", [
+            ("menge", "Menge produziert", "int", str(maxq)),
+            ("charge", "Charge Fertigware", "text", d["charge"] or ""),
+            ("verfall", "Verfall (MM/JJJJ)", "text", d["verfall"] or ""),
+            ("rechnungsnummer", rnr_label, "text", ""),
+            ("bemerkung", "Bemerkung", "text", ""),
+        ], save, width=460)
+
+    def _pb_abschreiben(self):
+        d = self._pb_selected()
+        if not d:
+            messagebox.showinfo("Abschreiben", "Bitte eine Zeile im Produktionsbestand waehlen.", parent=self)
+            return
+        maxq = d["menge"]
+
+        def save(v):
+            q = max(0, min(int(v["menge"]), maxq))
+            if q <= 0:
+                return
+            wert = round((d["ek"] or 0) * q, 2)
+            with self._conn() as con:
+                con.execute("UPDATE tbl_gdp_produktionsbestand SET menge=menge-?, aktualisiert_am=? WHERE id=?",
+                            (q, _heute_iso(), d["id"]))
+                con.execute(
+                    """INSERT INTO tbl_gdp_abschreibung
+                       (datum,pzn,artikelname,charge,verfall,menge,grund,wert_ek,bearbeiter)
+                       VALUES(?,?,?,?,?,?,?,?,?)""",
+                    (_heute_iso(), d["pzn"], d["artikelname"], d["charge"], d["verfall"],
+                     q, "Produktionsbestand: " + v["grund"], wert, ME()))
+                con.commit()
+            self._log("Produktionsbestand", "Abgeschrieben", d["id"],
+                      f"{q} St {d['artikelname']} Charge {d['charge']}, EK ~ {wert} EUR: {v['grund']}")
+            self._refresh_produktionsbestand()
+            messagebox.showinfo("Abgeschrieben",
+                                f"{q} St abgeschrieben (EK-Wert ~ {wert} EUR).", parent=self)
+
+        FormDialog(self, f"Abschreiben: {d['artikelname']} (Ch {d['charge']})", [
+            ("menge", "Menge abschreiben", "int", str(maxq)),
+            ("grund", "Grund", "combo",
+             ["Beschaedigt", "Verfall ueberschritten", "Produktionsausschuss",
+              "Nicht GDP-konform", "Sonstiges"], "Beschaedigt"),
+        ], save)
+
+    # ===================================================== WARENAUSGANG / AVIS
+    WA_STATUS_TAG = {"avisiert": "warn", "bestaetigt": "ok", "storniert": "alert"}
+
+    def _build_warenausgang(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(2, weight=1)
+        bar = tk.Frame(parent, bg=SHELL_BG)
+        bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        theme.PillButton(bar, "➕  Neuer Warenausgang", self._wa_new,
+                         kind="primary", font_size=10).pack(side="left")
+        theme.PillButton(bar, "\U0001F4E5  Liste importieren", self._wa_import,
+                         kind="neutral", font_size=10).pack(side="left", padx=6)
+        theme.PillButton(bar, "✖  Stornieren", self._wa_storno,
+                         kind="neutral", font_size=10).pack(side="left", padx=6)
+        theme.PillButton(bar, "↻  Aktualisieren", self._refresh_warenausgang,
+                         kind="neutral", font_size=10).pack(side="left", padx=6)
+
+        tk.Label(parent, text="Hier wird der Warenausgang nur angelegt/avisiert. Die Bestaetigung "
+                              "erfolgt ausschliesslich im VERKAUF (Wareneingang), wenn die Ware "
+                              "im Verteilerzentrum eintrifft. Doppelklick = Positionen.",
+                 bg=SHELL_BG, fg=MUTED, font=(theme.FONT, 9), justify="left",
+                 wraplength=900).grid(row=1, column=0, sticky="w", pady=(0, 6))
+
+        outer, body = _card(parent)
+        outer.grid(row=2, column=0, sticky="nsew")
+        cols = ("Nummer", "Datum", "Quelle", "Rechnung", "Ziel", "Positionen", "Stueck", "Status")
+        self._wa_tree = _make_tree(body, cols, (110, 85, 130, 120, 120, 75, 60, 100),
+                                   anchors={"Positionen": "center", "Stueck": "center"})
+        self._wa_tree.bind("<Double-1>", lambda _e: self._wa_show_positions())
+        self._refreshers["warenausgang"] = self._refresh_warenausgang
+
+    def _refresh_warenausgang(self):
+        t = getattr(self, "_wa_tree", None)
+        if t is None:
+            return
+        t.delete(*t.get_children())
+        with self._conn() as con:
+            rows = con.execute(
+                """SELECT w.id, w.nummer, w.datum, w.quelle, COALESCE(w.rechnungsnummer,''), w.ziel, w.status,
+                          (SELECT COUNT(*) FROM tbl_gdp_warenausgang_pos p WHERE p.wa_id=w.id),
+                          (SELECT COALESCE(SUM(menge),0) FROM tbl_gdp_warenausgang_pos p WHERE p.wa_id=w.id)
+                   FROM tbl_gdp_warenausgang w ORDER BY w.id DESC""").fetchall()
+        for wid, nummer, datum, quelle, rnr, ziel, status, npos, stk in rows:
+            t.insert("", "end", iid=str(wid),
+                     values=(nummer or "", (datum or "")[:10], quelle or "", rnr, ziel or "",
+                             npos, stk, status or ""),
+                     tags=(self.WA_STATUS_TAG.get(status, "odd"),))
+
+    def _wa_selected_id(self):
+        sel = self._wa_tree.selection()
+        return int(sel[0]) if sel else None
+
+    def _wa_show_positions(self, wa_id=None):
+        wa_id = wa_id or self._wa_selected_id()
+        if not wa_id:
+            return
+        with self._conn() as con:
+            hdr = con.execute("SELECT nummer, quelle, status, COALESCE(rechnungsnummer,'') "
+                              "FROM tbl_gdp_warenausgang WHERE id=?", (wa_id,)).fetchone()
+            pos = con.execute(
+                "SELECT pzn, artikelname, charge, verfall, menge, ek FROM tbl_gdp_warenausgang_pos "
+                "WHERE wa_id=? ORDER BY artikelname", (wa_id,)).fetchall()
+        win = tk.Toplevel(self)
+        win.title(f"Warenausgang {hdr[0] if hdr else wa_id}")
+        win.configure(bg=SHELL_BG)
+        win.geometry("680x420")
+        rnr_txt = f"  ·  Rechnung {hdr[3]}" if (hdr and hdr[3]) else ""
+        tk.Label(win, bg=ACCENT, fg="#FFFFFF", font=(theme.FONT, 12, "bold"), anchor="w",
+                 text=f"  {hdr[0] if hdr else ''} · {hdr[1] if hdr else ''} · {hdr[2] if hdr else ''}{rnr_txt}"
+                 ).pack(fill="x", ipady=8)
+        wrap = tk.Frame(win, bg=SHELL_BG)
+        wrap.pack(fill="both", expand=True, padx=12, pady=12)
+        tree = _make_tree(wrap, ("PZN", "Artikel", "Charge", "Verfall", "Menge", "EK"),
+                          (80, 240, 90, 80, 60, 70), anchors={"Menge": "center", "EK": "e"})
+        for i, (pzn, name, charge, verf, menge, ek) in enumerate(pos):
+            tree.insert("", "end", values=(pzn or "", name or "", charge or "", verf or "", menge,
+                                           f"{ek:.2f}" if ek else ""), tags=("even" if i % 2 else "odd",))
+
+    def _wa_storno(self):
+        wa_id = self._wa_selected_id()
+        if not wa_id:
+            messagebox.showinfo("Storno", "Bitte einen Warenausgang waehlen.", parent=self)
+            return
+        with self._conn() as con:
+            st = con.execute("SELECT status FROM tbl_gdp_warenausgang WHERE id=?", (wa_id,)).fetchone()
+        if not st or st[0] != "avisiert":
+            messagebox.showinfo("Storno", "Nur avisierte (noch nicht bestaetigte) Warenausgaenge "
+                                "koennen storniert werden.", parent=self)
+            return
+        if not messagebox.askyesno("Storno", f"Warenausgang #{wa_id} stornieren?", parent=self):
+            return
+        with self._conn() as con:
+            con.execute("UPDATE tbl_gdp_warenausgang SET status='storniert' WHERE id=?", (wa_id,))
+            con.commit()
+        self._log("Warenausgang", "Storniert", wa_id, "")
+        self._refresh_warenausgang()
+        self._refresh_wareneingang()
+
+    def _wa_new(self):
+        """Manueller Warenausgang mit beliebig vielen Positionen."""
+        win = tk.Toplevel(self)
+        win.title("Neuer Warenausgang")
+        win.configure(bg=SHELL_BG)
+        win.geometry("740x580")
+        win.transient(self.winfo_toplevel())
+        tk.Label(win, bg=ACCENT, fg="#FFFFFF", font=(theme.FONT, 13, "bold"), anchor="w",
+                 text="  Neuer Warenausgang (Avis an den Verkaufs-Wareneingang)").pack(fill="x", ipady=9)
+        head = tk.Frame(win, bg=SHELL_BG)
+        head.pack(fill="x", padx=16, pady=(12, 4))
+        quelle_var = tk.StringVar(value="Produktion")
+        rnr_var = tk.StringVar()
+        bem_var = tk.StringVar()
+        rnr_lbl = "Rechnungsnr *:" if self._rechnung_pflicht() else "Rechnungsnr:"
+        for lbl, var, w in (("Quelle:", quelle_var, 18), (rnr_lbl, rnr_var, 16),
+                            ("Bemerkung:", bem_var, 24)):
+            tk.Label(head, text=lbl, bg=SHELL_BG, fg=TEXT, font=(theme.FONT, 9, "bold")).pack(side="left", padx=(0, 4))
+            tk.Entry(head, textvariable=var, width=w).pack(side="left", padx=(0, 12))
+
+        addc = tk.Frame(win, bg=CARD_ALT, highlightbackground=BORDER, highlightthickness=1)
+        addc.pack(fill="x", padx=16, pady=8)
+        tk.Label(addc, text="Position hinzufuegen:", bg=CARD_ALT, fg=ACCENT,
+                 font=(theme.FONT, 9, "bold")).pack(anchor="w", padx=10, pady=(8, 0))
+        cur_art = {"pzn": None, "name": None}
+        sb = SearchBox(
+            addc.master if False else addc,
+            fetch=lambda t: [(f"{pzn} · {name}", (pzn, name)) for pzn, name in self._search_nmg(t)],
+            on_select=lambda p: cur_art.update(pzn=p[0], name=p[1]) or
+                        art_lbl.config(text=f"{p[0]} · {p[1]}", fg=ACCENT), height=4)
+        sb.pack(fill="x", padx=10, pady=2)
+        art_lbl = tk.Label(addc, text="Kein Artikel gewaehlt", bg=CARD_ALT, fg=MUTED,
+                           font=(theme.FONT, 9, "italic"))
+        art_lbl.pack(anchor="w", padx=10)
+        prow = tk.Frame(addc, bg=CARD_ALT)
+        prow.pack(fill="x", padx=10, pady=(2, 8))
+        ch_v, vf_v, mn_v, ek_v = (tk.StringVar() for _ in range(4))
+        for lbl, var, w in (("Charge", ch_v, 12), ("Verfall", vf_v, 10), ("Menge", mn_v, 6), ("EK", ek_v, 8)):
+            tk.Label(prow, text=lbl + ":", bg=CARD_ALT, font=(theme.FONT, 9, "bold")).pack(side="left", padx=(0, 3))
+            tk.Entry(prow, textvariable=var, width=w).pack(side="left", padx=(0, 10))
+
+        positions = []
+        ptree_wrap = tk.Frame(win, bg=SHELL_BG)
+        ptree_wrap.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+        ptree = _make_tree(ptree_wrap, ("PZN", "Artikel", "Charge", "Verfall", "Menge", "EK"),
+                           (80, 230, 90, 80, 60, 70), anchors={"Menge": "center", "EK": "e"}, height=8)
+
+        def add_pos():
+            if not cur_art["pzn"]:
+                messagebox.showwarning("Position", "Bitte zuerst einen Artikel waehlen.", parent=win)
+                return
+            try:
+                menge = int(mn_v.get().strip())
+                if menge <= 0:
+                    raise ValueError
+            except ValueError:
+                messagebox.showwarning("Position", "Menge muss eine positive Zahl sein.", parent=win)
+                return
+            verfall = _normalize_verfall(vf_v.get()) or vf_v.get().strip()
+            try:
+                ek = float(ek_v.get().strip().replace(",", ".")) if ek_v.get().strip() else None
+            except ValueError:
+                ek = None
+            rec = (cur_art["pzn"], cur_art["name"], ch_v.get().strip(), verfall, menge, ek)
+            positions.append(rec)
+            ptree.insert("", "end", values=(rec[0], rec[1], rec[2], rec[3], rec[4],
+                                            f"{ek:.2f}" if ek else ""))
+            cur_art.update(pzn=None, name=None)
+            art_lbl.config(text="Kein Artikel gewaehlt", fg=MUTED)
+            sb.clear()
+            for v in (ch_v, vf_v, mn_v, ek_v):
+                v.set("")
+
+        def del_pos():
+            sel = ptree.selection()
+            if not sel:
+                return
+            idx = ptree.index(sel[0])
+            ptree.delete(sel[0])
+            if 0 <= idx < len(positions):
+                positions.pop(idx)
+
+        btnrow = tk.Frame(addc, bg=CARD_ALT)
+        btnrow.pack(fill="x", padx=10, pady=(0, 8))
+        theme.PillButton(btnrow, "+ Position", add_pos, kind="accent", font_size=9, padx=12, pady=4).pack(side="left")
+        theme.PillButton(btnrow, "− Position entfernen", del_pos, kind="neutral", font_size=9, padx=12, pady=4).pack(side="left", padx=6)
+
+        def save_wa():
+            if not positions:
+                messagebox.showwarning("Warenausgang", "Bitte mindestens eine Position hinzufuegen.", parent=win)
+                return
+            rnr = rnr_var.get().strip()
+            if self._rechnung_pflicht() and not rnr:
+                messagebox.showwarning("Warenausgang",
+                    "Rechnungsnummer ist als Pflichtfeld gesetzt (Einstellungen).", parent=win)
+                return
+            self._wa_create(quelle_var.get().strip() or "Manuell", bem_var.get().strip(),
+                            positions, rechnungsnummer=rnr)
+            win.destroy()
+
+        foot = tk.Frame(win, bg=SHELL_BG)
+        foot.pack(fill="x", padx=16, pady=(0, 14))
+        theme.PillButton(foot, "Warenausgang speichern & avisieren", save_wa, kind="success",
+                         font_size=10, padx=16, pady=7).pack(side="right")
+        theme.PillButton(foot, "Abbrechen", win.destroy, kind="neutral",
+                         font_size=10, padx=16, pady=7).pack(side="right", padx=8)
+        win.grab_set()
+
+    def _wa_create(self, quelle, bemerkung, positions, rechnungsnummer=""):
+        """Legt einen avisierten Warenausgang mit Positionen an."""
+        jetzt = datetime.now().isoformat(timespec="seconds")
+        with self._conn() as con:
+            nummer = self._next_nummer(con, "WA")
+            cur = con.execute(
+                """INSERT INTO tbl_gdp_warenausgang
+                   (datum,nummer,quelle,ziel,status,bemerkung,rechnungsnummer,erstellt_von)
+                   VALUES(?,?,?, 'Verkaufsbestand', 'avisiert', ?,?, ?)""",
+                (jetzt, nummer, quelle, bemerkung, rechnungsnummer, ME()))
+            wa_id = cur.lastrowid
+            for pzn, name, charge, verfall, menge, ek in positions:
+                con.execute(
+                    "INSERT INTO tbl_gdp_warenausgang_pos(wa_id,pzn,artikelname,charge,verfall,menge,ek) "
+                    "VALUES(?,?,?,?,?,?,?)", (wa_id, pzn, name, charge, verfall, menge, ek))
+            con.commit()
+        self._log("Warenausgang", "Avisiert", wa_id,
+                  f"{nummer}: {len(positions)} Position(en) -> Verkaufs-Wareneingang")
+        self._refresh_warenausgang()
+        self._refresh_wareneingang()
+        messagebox.showinfo("Warenausgang",
+                            f"Warenausgang {nummer} avisiert. Erscheint im Verkaufs-Wareneingang "
+                            "zur Bestaetigung.", parent=self)
+        return wa_id
+
+    def _wa_import(self):
+        path = filedialog.askopenfilename(
+            parent=self, title="Warenausgangs-/Lieferliste waehlen (Excel, CSV oder TXT)",
+            filetypes=[("Tabellen", "*.xlsx *.xlsm *.csv *.txt"), ("Alle Dateien", "*.*")])
+        if not path:
+            return
+        try:
+            positions, rechnung = self._parse_lieferliste(path)
+        except Exception as e:
+            messagebox.showerror("Import", f"Datei konnte nicht gelesen werden:\n{e}", parent=self)
+            return
+        if not positions:
+            messagebox.showinfo("Import", "Keine gueltigen Positionen (PZN + Menge) gefunden.", parent=self)
+            return
+        if self._rechnung_pflicht() and not rechnung:
+            messagebox.showwarning("Import",
+                "Rechnungsnummer ist Pflicht, aber in der Liste wurde keine Spalte "
+                "'Rechnung/Rechnungsnummer' gefunden.", parent=self)
+            return
+        from pathlib import Path as _P
+        self._wa_create("Import: " + _P(path).name, "Importierte Liste", positions,
+                        rechnungsnummer=rechnung)
+
+    def _parse_lieferliste(self, path):
+        """Liest eine Liste (Excel/CSV/TXT) -> (positions, rechnungsnummer).
+        positions = [(pzn,name,charge,verfall,menge,ek), ...]. Nutzt dieselbe
+        Format-/Spaltenerkennung wie der Kasse-Import."""
+        from .file_loader import load_table, find_column
+        from .kasse_import import _cell, _to_int, _to_float
+        table = load_table(path)
+        headers = list(table.headers)
+        c_pzn = find_column(headers, ["PZN", "PZN-Code", "Artikel-PZN"], ["pzn"])
+        c_charge = find_column(headers, ["Charge", "Chargennummer", "Lot", "Los"], ["charge", "lot"])
+        c_verfall = find_column(headers, ["Verfall", "Verfalldatum", "Haltbarkeit", "MHD", "Verwendbar bis"],
+                                ["verfall", "mhd", "haltbar"])
+        c_menge = find_column(headers, ["Menge", "Anzahl", "Stück", "Stueck", "Bestand"],
+                              ["menge", "anzahl", "stueck", "stck"])
+        c_ek = find_column(headers, ["EK", "Einkaufspreis", "EK-Preis", "Einkauf"], ["ek", "einkauf"])
+        c_name = find_column(headers, ["Artikel", "Artikelname", "Bezeichnung", "Name"], ["artikel", "bezeich"])
+        c_rechnung = find_column(headers, ["Rechnungsnummer", "Rechnung", "Rechnungsnr", "RE-Nr", "Belegnummer"],
+                                 ["rechnung", "belegnr"])
+        if c_pzn is None or c_menge is None:
+            raise ValueError("Es werden mindestens eine PZN- und eine Mengen-Spalte benoetigt.")
+        out = []
+        rechnung = ""
+        with self._conn() as con:
+            for row in table.rows:
+                pzn = _cell(row, c_pzn)
+                menge = _to_int(_cell(row, c_menge))
+                if not pzn or not menge or menge <= 0:
+                    continue
+                name = _cell(row, c_name) if c_name is not None else ""
+                if not name:
+                    r = con.execute("SELECT artikelname FROM tbl_nmg_stamm WHERE pzn=? LIMIT 1", (pzn,)).fetchone()
+                    name = r[0] if r else ""
+                verfall = _normalize_verfall(_cell(row, c_verfall)) or _cell(row, c_verfall)
+                if not rechnung and c_rechnung is not None:
+                    rechnung = _cell(row, c_rechnung)
+                out.append((pzn, name, _cell(row, c_charge), verfall, menge, _to_float(_cell(row, c_ek))))
+        return out, rechnung
+
+    def _wa_confirm(self, wa_id, override_positions=None):
+        """Bestaetigt einen avisierten Warenausgang am Verkaufs-Wareneingang:
+        bucht die Positionen in den Verkaufsbestand (tbl_lagerbestand), legt einen
+        Wareneingang (art='bestand') an und markiert den Avis als bestaetigt.
+        override_positions (z.B. aus einer Anlieferliste) ersetzen die avisierten."""
+        with self._conn() as con:
+            hdr = con.execute("SELECT nummer, quelle, status FROM tbl_gdp_warenausgang WHERE id=?",
+                              (wa_id,)).fetchone()
+            if not hdr:
+                return False
+            if hdr[2] != "avisiert":
+                messagebox.showinfo("Bestaetigen", f"Warenausgang {hdr[0]} ist bereits '{hdr[2]}'.", parent=self)
+                return False
+            positions = override_positions if override_positions is not None else con.execute(
+                "SELECT pzn, artikelname, charge, verfall, menge, ek FROM tbl_gdp_warenausgang_pos "
+                "WHERE wa_id=?", (wa_id,)).fetchall()
+            # EK aus dem Avis (stammt z.B. aus der eRechnung-Uebernahme im
+            # Produktionsbestand) erhalten, falls die Anlieferliste keinen Preis
+            # enthaelt - sonst ginge der Einkaufspreis Richtung Verkaufsbestand verloren.
+            ek_lookup = {}
+            if override_positions is not None:
+                for apzn, _an, ach, _av, _am, aek in con.execute(
+                        "SELECT pzn, artikelname, charge, verfall, menge, ek "
+                        "FROM tbl_gdp_warenausgang_pos WHERE wa_id=?", (wa_id,)).fetchall():
+                    if aek:
+                        ek_lookup[((apzn or "").strip(), (ach or "").strip())] = aek
+                        ek_lookup.setdefault((apzn or "").strip(), aek)
+            jetzt = datetime.now().isoformat(timespec="seconds")
+            cur = con.execute(
+                "INSERT INTO tbl_wareneingang(datum,lieferant,lieferschein,bearbeiter,art) "
+                "VALUES(?,?,?,?, 'bestand')", (jetzt, hdr[1] or "Produktion", hdr[0], ME()))
+            we_id = cur.lastrowid
+            total = 0
+            for pzn, name, charge, verfall, menge, ek in positions:
+                if not menge or menge <= 0:
+                    continue
+                if not ek:  # Anlieferliste ohne Preis -> EK aus dem Avis nachziehen
+                    ek = (ek_lookup.get(((pzn or "").strip(), (charge or "").strip()))
+                          or ek_lookup.get((pzn or "").strip()))
+                con.execute(
+                    "INSERT INTO tbl_wareneingang_positionen(we_id,pzn,artikelname,charge,verfall,menge,ek) "
+                    "VALUES(?,?,?,?,?,?,?)", (we_id, pzn, name, charge, verfall, menge, ek))
+                upd = con.execute(
+                    "UPDATE tbl_lagerbestand SET menge=menge+?, ek=COALESCE(?,ek), aktualisiert_am=? "
+                    "WHERE pzn=? AND COALESCE(charge,'')=? AND COALESCE(verfall,'')=?",
+                    (menge, ek, jetzt, pzn, charge or "", verfall or ""))
+                if upd.rowcount == 0:
+                    con.execute(
+                        "INSERT INTO tbl_lagerbestand(pzn,artikelname,charge,verfall,menge,ek,aktualisiert_am) "
+                        "VALUES(?,?,?,?,?,?,?)", (pzn, name, charge, verfall, menge, ek, jetzt))
+                total += menge
+            con.execute("UPDATE tbl_gdp_warenausgang SET status='bestaetigt', bestaetigt_am=?, "
+                        "bestaetigt_von=?, we_id=? WHERE id=?", (jetzt, ME(), we_id, wa_id))
+            con.commit()
+        self._log("Wareneingang", "Avis bestaetigt", we_id,
+                  f"{hdr[0]}: {total} St in den Verkaufsbestand gebucht")
+        self._refresh_wareneingang()
+        self._refresh_warenausgang()
+        messagebox.showinfo("Bestaetigt",
+                            f"Warenausgang {hdr[0]} bestaetigt: {total} St im Verkaufsbestand. "
+                            "Damit verkaufbar (Kasse).", parent=self)
+        return True
 
     # =================================================== CHARGEN-RÜCKVERFOLGUNG
     def _outbound_rows(self, con, term=None, charge=None, kundennummer=None):
@@ -1886,56 +2985,637 @@ class GDPPanel(tk.Frame):
             ("bemerkung", "Bemerkung", "multiline", bem or ""),
         ], save, width=480)
 
-    # ===================================================== PROTOKOLL
-    def _build_protokoll(self, parent):
+    # ===================================================== WARENBEWEGUNGEN
+    def _build_bewegungen(self, parent):
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(1, weight=1)
+        parent.rowconfigure(2, weight=1)
         bar = tk.Frame(parent, bg=SHELL_BG)
-        bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        tk.Label(bar, text="Modul:", bg=SHELL_BG, fg=TEXT, font=(theme.FONT, 10)).pack(side="left")
-        self._log_filter = tk.StringVar(value="alle")
-        cb = ttk.Combobox(bar, textvariable=self._log_filter, state="readonly", width=20,
-                          style="NMG.TCombobox",
-                          values=["alle", "Wareneingang", "Rueckruf", "Retoure",
-                                  "Qualifizierung"])
-        cb.pack(side="left", padx=8)
-        cb.bind("<<ComboboxSelected>>", lambda _e: self._refresh_protokoll())
-        theme.PillButton(bar, "⬇  Export CSV", self._log_export, kind="neutral",
-                         font_size=10).pack(side="left", padx=8)
+        bar.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        tk.Label(bar, text="Suche:", bg=SHELL_BG, fg=TEXT, font=(theme.FONT, 10)).pack(side="left")
+        self._bw_var = tk.StringVar()
+        e = tk.Entry(bar, textvariable=self._bw_var, font=(theme.FONT, 11), width=24,
+                     relief="solid", bd=1)
+        e.pack(side="left", padx=8)
+        e.bind("<Return>", lambda _e: self._refresh_bewegungen())
+        tk.Label(bar, text="Richtung:", bg=SHELL_BG, fg=MUTED, font=(theme.FONT, 9)).pack(side="left", padx=(6, 2))
+        self._bw_richtung = tk.StringVar(value="Alle")
+        cb1 = ttk.Combobox(bar, textvariable=self._bw_richtung, state="readonly", width=10,
+                           style="NMG.TCombobox", values=["Alle", "Eingang", "Ausgang"])
+        cb1.pack(side="left")
+        cb1.bind("<<ComboboxSelected>>", lambda _e: self._refresh_bewegungen())
+        tk.Label(bar, text="Bereich:", bg=SHELL_BG, fg=MUTED, font=(theme.FONT, 9)).pack(side="left", padx=(6, 2))
+        self._bw_bereich = tk.StringVar(value="Alle")
+        cb2 = ttk.Combobox(bar, textvariable=self._bw_bereich, state="readonly", width=12,
+                           style="NMG.TCombobox", values=["Alle", "Verkauf", "Produktion"])
+        cb2.pack(side="left")
+        cb2.bind("<<ComboboxSelected>>", lambda _e: self._refresh_bewegungen())
+        theme.PillButton(bar, "\U0001F50E  Suchen", self._refresh_bewegungen,
+                         kind="primary", font_size=10).pack(side="left", padx=8)
+        theme.PillButton(bar, "⬇  Export CSV", self._bw_export, kind="neutral",
+                         font_size=10).pack(side="left")
+
+        self._bw_count = tk.Label(parent, text="", bg=SHELL_BG, fg=MUTED, font=(theme.FONT, 9))
+        self._bw_count.grid(row=1, column=0, sticky="w", pady=(0, 4))
 
         outer, body = _card(parent)
-        outer.grid(row=1, column=0, sticky="nsew")
+        outer.grid(row=2, column=0, sticky="nsew")
+        cols = ("Datum", "Richtung", "Bereich", "Beleg", "Partner", "PZN", "Artikel",
+                "Charge", "Verfall", "Menge", "Status")
+        self._bw_tree = _make_tree(
+            body, cols, (130, 75, 90, 95, 150, 75, 200, 90, 75, 55, 100),
+            anchors={"Menge": "center"})
+        self._bw_tree.tag_configure("ein", background="#EAF6EE")
+        self._bw_tree.tag_configure("aus", background="#EAF1FB")
+        self._refreshers["bewegungen"] = self._refresh_bewegungen
+
+    def _movements(self, con, term=None, richtung="Alle", bereich="Alle"):
+        """Vereinte Warenbewegungen aus drei Quellen -> Liste von
+        (datum,richtung,bereich,beleg,partner,pzn,artikel,charge,verfall,menge,ek,info)."""
+        like = f"%{term}%" if term else None
+        rows = []
+        want_ein = richtung in ("Alle", "Eingang")
+        want_aus = richtung in ("Alle", "Ausgang")
+        # 1) Wareneingaenge (art bestand=Verkauf, produktion=Produktion)
+        if want_ein and _table_exists(con, "tbl_wareneingang"):
+            has_art = "art" in {r[1] for r in con.execute("PRAGMA table_info(tbl_wareneingang)")}
+            art_sel = "COALESCE(w.art,'bestand')" if has_art else "'bestand'"
+            q = (f"SELECT w.datum, 'Eingang', "
+                 f"CASE {art_sel} WHEN 'produktion' THEN 'Produktion' ELSE 'Verkauf' END, "
+                 "COALESCE(w.lieferschein,''), COALESCE(w.lieferant,''), p.pzn, p.artikelname, "
+                 "p.charge, p.verfall, p.menge, p.ek, '' "
+                 "FROM tbl_wareneingang_positionen p JOIN tbl_wareneingang w ON w.id=p.we_id")
+            params = []
+            if like:
+                q += (" WHERE (p.pzn LIKE ? OR p.artikelname LIKE ? OR p.charge LIKE ? "
+                      "OR COALESCE(w.lieferant,'') LIKE ? OR COALESCE(w.lieferschein,'') LIKE ?)")
+                params += [like] * 5
+            rows.extend(con.execute(q, params).fetchall())
+        # 2) Warenausgaenge aus der Produktion
+        if want_aus and _table_exists(con, "tbl_gdp_warenausgang"):
+            q = ("SELECT w.datum, 'Ausgang', 'Produktion', w.nummer, COALESCE(w.quelle,''), "
+                 "p.pzn, p.artikelname, p.charge, p.verfall, p.menge, p.ek, COALESCE(w.status,'') "
+                 "FROM tbl_gdp_warenausgang_pos p JOIN tbl_gdp_warenausgang w ON w.id=p.wa_id")
+            params = []
+            if like:
+                q += (" WHERE (p.pzn LIKE ? OR p.artikelname LIKE ? OR p.charge LIKE ? "
+                      "OR COALESCE(w.nummer,'') LIKE ? OR COALESCE(w.rechnungsnummer,'') LIKE ?)")
+                params += [like] * 5
+            rows.extend(con.execute(q, params).fetchall())
+        # 3) Verkauf an Apotheken (Kasse)
+        if want_aus and _table_exists(con, "tbl_bestellpositionen") and _table_exists(con, "tbl_bestellungen"):
+            q = ("SELECT b.datum, 'Ausgang', 'Verkauf', ('Best-'||b.id), COALESCE(b.apotheke,''), "
+                 "p.pzn, p.artikelname, p.charge, p.verfall, p.menge, NULL, COALESCE(b.status,'') "
+                 "FROM tbl_bestellpositionen p JOIN tbl_bestellungen b ON b.id=p.bestell_id "
+                 "WHERE COALESCE(p.bestellart,'Bestellung')='Bestellung'")
+            params = []
+            if like:
+                q += (" AND (p.pzn LIKE ? OR p.artikelname LIKE ? OR p.charge LIKE ? "
+                      "OR COALESCE(b.apotheke,'') LIKE ?)")
+                params += [like] * 4
+            rows.extend(con.execute(q, params).fetchall())
+        if bereich != "Alle":
+            rows = [r for r in rows if r[2] == bereich]
+        rows.sort(key=lambda r: (r[0] or ""), reverse=True)
+        return rows
+
+    def _refresh_bewegungen(self):
+        t = getattr(self, "_bw_tree", None)
+        if t is None:
+            return
+        t.delete(*t.get_children())
+        term = self._bw_var.get().strip()
+        with self._conn() as con:
+            rows = self._movements(con, term or None, self._bw_richtung.get(), self._bw_bereich.get())
+        ein = aus = 0
+        for i, r in enumerate(rows[:2000]):
+            (datum, richtung, bereich, beleg, partner, pzn, artikel, charge, verfall, menge, ek, info) = r
+            if richtung == "Eingang":
+                ein += 1
+            else:
+                aus += 1
+            t.insert("", "end", values=((datum or "")[:16], richtung, bereich, beleg or "",
+                                        partner or "", pzn or "", artikel or "", charge or "",
+                                        verfall or "", menge, info or ""),
+                     tags=("ein" if richtung == "Eingang" else "aus",))
+        gezeigt = min(len(rows), 2000)
+        mehr = f" (von {len(rows)})" if len(rows) > 2000 else ""
+        self._bw_count.config(
+            text=f"{gezeigt} Bewegung(en){mehr} · {ein} Eingang · {aus} Ausgang"
+                 + (f" · Suche: '{term}'" if term else ""))
+
+    def _bw_export(self):
+        term = self._bw_var.get().strip()
+        with self._conn() as con:
+            rows = self._movements(con, term or None, self._bw_richtung.get(), self._bw_bereich.get())
+        if not rows:
+            messagebox.showinfo("Export", "Keine Bewegungen zum Exportieren.", parent=self)
+            return
+        path = filedialog.asksaveasfilename(
+            parent=self, title="Warenbewegungen exportieren", defaultextension=".csv",
+            initialfile=f"Warenbewegungen_{_heute_iso()}.csv", filetypes=[("CSV", "*.csv")])
+        if not path:
+            return
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            w = csv.writer(f, delimiter=";")
+            w.writerow(["Datum", "Richtung", "Bereich", "Beleg", "Partner", "PZN", "Artikel",
+                        "Charge", "Verfall", "Menge", "EK", "Status"])
+            for r in rows:
+                w.writerow([(r[0] or "")[:19], r[1], r[2], r[3], r[4], r[5], r[6], r[7],
+                            r[8], r[9], r[10] if r[10] is not None else "", r[11]])
+        messagebox.showinfo("Export", f"{len(rows)} Bewegung(en) gespeichert:\n{path}", parent=self)
+
+    # ===================================================== BESTANDSDIFFERENZEN
+    BD_GRUENDE = ["Inventur", "Bruch / Beschaedigung", "Schwund / Diebstahl",
+                  "Fund / Mehrbestand", "Buchungsfehler", "Verfall entsorgt", "Sonstiges"]
+
+    def _build_bestandsdiff(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(2, weight=1)
+        bar = tk.Frame(parent, bg=SHELL_BG)
+        bar.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        theme.PillButton(bar, "➕  Differenz erfassen", self._bd_new,
+                         kind="primary", font_size=10).pack(side="left")
+        tk.Label(bar, text="Bereich:", bg=SHELL_BG, fg=MUTED, font=(theme.FONT, 9)).pack(side="left", padx=(10, 2))
+        self._bd_filter = tk.StringVar(value="Alle")
+        cb = ttk.Combobox(bar, textvariable=self._bd_filter, state="readonly", width=12,
+                          style="NMG.TCombobox", values=["Alle", "Verkauf", "Produktion"])
+        cb.pack(side="left")
+        cb.bind("<<ComboboxSelected>>", lambda _e: self._refresh_bestandsdiff())
+        theme.PillButton(bar, "↻  Aktualisieren", self._refresh_bestandsdiff,
+                         kind="neutral", font_size=10).pack(side="left", padx=8)
+        theme.PillButton(bar, "⬇  Export CSV", self._bd_export, kind="neutral",
+                         font_size=10).pack(side="left")
+
+        self._bd_summary = tk.Label(parent, text="", bg=SHELL_BG, fg=MUTED, font=(theme.FONT, 9))
+        self._bd_summary.grid(row=1, column=0, sticky="w", pady=(0, 4))
+
+        outer, body = _card(parent)
+        outer.grid(row=2, column=0, sticky="nsew")
+        cols = ("Datum", "Bereich", "PZN", "Artikel", "Charge", "Verfall",
+                "Vorher", "Differenz", "Nachher", "Grund", "Bearbeiter")
+        self._bd_tree = _make_tree(
+            body, cols, (130, 90, 75, 190, 90, 75, 60, 75, 60, 140, 100),
+            anchors={"Vorher": "center", "Differenz": "center", "Nachher": "center"})
+        self._bd_tree.tag_configure("plus", foreground=OK_GREEN)
+        self._bd_tree.tag_configure("minus", foreground=DANGER)
+        self._refreshers["bestandsdiff"] = self._refresh_bestandsdiff
+
+    def _refresh_bestandsdiff(self):
+        t = getattr(self, "_bd_tree", None)
+        if t is None:
+            return
+        t.delete(*t.get_children())
+        flt = self._bd_filter.get()
+        where, params = ("", ())
+        if flt != "Alle":
+            where, params = "WHERE bereich=?", (flt,)
+        with self._conn() as con:
+            rows = con.execute(
+                f"""SELECT datum, bereich, pzn, artikelname, charge, verfall,
+                          menge_vorher, menge_diff, menge_nachher, grund, bearbeiter
+                   FROM tbl_gdp_bestandsdiff {where} ORDER BY id DESC""", params).fetchall()
+        plus = minus = 0
+        for r in rows:
+            diff = r[7] or 0
+            if diff > 0:
+                plus += diff
+            else:
+                minus += diff
+            diff_txt = f"+{diff}" if diff > 0 else str(diff)
+            t.insert("", "end",
+                     values=((r[0] or "")[:16], r[1] or "", r[2] or "", r[3] or "", r[4] or "",
+                             r[5] or "", r[6], diff_txt, r[8], r[9] or "", r[10] or ""),
+                     tags=("plus" if diff > 0 else ("minus" if diff < 0 else ""),))
+        self._bd_summary.config(
+            text=f"{len(rows)} Korrektur(en) · Summe Mehrbestand +{plus} · Summe Fehlbestand {minus}")
+
+    def _bd_new(self):
+        """Erfasst eine manuelle Bestandsdifferenz im Bestand des aktuellen Modus.
+        Zeigt den Soll-Bestand; Ist-Bestand ODER +/- Differenz eingebbar (verknuepft)."""
+        if self._we_produktion_aktiv():
+            bereich, tabelle = "Produktion", "tbl_gdp_produktionsbestand"
+        else:
+            bereich, tabelle = "Verkauf", "tbl_lagerbestand"
+        with self._conn() as con:
+            if not _table_exists(con, tabelle):
+                messagebox.showinfo("Bestandsdifferenz", f"Kein {bereich}-Bestand vorhanden.", parent=self)
+                return
+            lines = con.execute(
+                f"SELECT id, pzn, artikelname, charge, verfall, menge FROM {tabelle} "
+                "ORDER BY artikelname").fetchall()
+        if not lines:
+            messagebox.showinfo("Bestandsdifferenz",
+                                f"Im {bereich}-Bestand sind keine Artikel vorhanden.", parent=self)
+            return
+        labels = [f"{name} | Ch {ch or '-'} | {pzn}" for (_id, pzn, name, ch, vf, menge) in lines]
+        amap = {labels[i]: lines[i] for i in range(len(lines))}
+
+        win = tk.Toplevel(self)
+        win.title("Bestandsdifferenz erfassen")
+        win.configure(bg=SHELL_BG)
+        win.resizable(False, False)
+        win.transient(self.winfo_toplevel())
+        tk.Label(win, bg=ACCENT, fg="#FFFFFF", font=(theme.FONT, 13, "bold"), anchor="w",
+                 text=f"  Bestandsdifferenz erfassen ({bereich})").pack(fill="x", ipady=9)
+        body = tk.Frame(win, bg=SHELL_BG)
+        body.pack(fill="both", expand=True, padx=18, pady=14)
+
+        def row(label):
+            r = tk.Frame(body, bg=SHELL_BG)
+            r.pack(fill="x", pady=4)
+            tk.Label(r, text=label, bg=SHELL_BG, fg=TEXT, width=20, anchor="w",
+                     font=(theme.FONT, 10)).pack(side="left")
+            return r
+
+        art_var = tk.StringVar(value=labels[0])
+        r0 = row("Artikel / Charge")
+        ttk.Combobox(r0, textvariable=art_var, values=labels, state="readonly",
+                     style="NMG.TCombobox", width=34).pack(side="left", fill="x", expand=True)
+
+        rs = row("Soll-Bestand (System)")
+        soll_lbl = tk.Label(rs, text="–", bg=SHELL_BG, fg=ACCENT, font=(theme.FONT, 13, "bold"))
+        soll_lbl.pack(side="left")
+
+        ist_var = tk.StringVar()
+        ri = row("Ist-Bestand (gezaehlt)")
+        ist_entry = tk.Entry(ri, textvariable=ist_var, font=(theme.FONT, 11), width=10,
+                             relief="solid", bd=1)
+        ist_entry.pack(side="left")
+        tk.Label(ri, text="Stueck", bg=SHELL_BG, fg=MUTED, font=(theme.FONT, 9)).pack(side="left", padx=6)
+
+        diff_var = tk.StringVar()
+        rd = row("oder Differenz (+/-)")
+        diff_entry = tk.Entry(rd, textvariable=diff_var, font=(theme.FONT, 11), width=8,
+                              relief="solid", bd=1)
+        diff_entry.pack(side="left")
+        # Schnell-Schritt: meist geht der Bestand manuell nach unten -> "-" prominent
+        theme.PillButton(rd, "−1", lambda: step(-1), kind="danger",
+                         font_size=11, padx=10, pady=2).pack(side="left", padx=(8, 2))
+        theme.PillButton(rd, "+1", lambda: step(1), kind="neutral",
+                         font_size=11, padx=10, pady=2).pack(side="left", padx=2)
+        tk.Label(rd, text="oder Zahl eintippen", bg=SHELL_BG, fg=MUTED,
+                 font=(theme.FONT, 9)).pack(side="left", padx=6)
+
+        grund_var = tk.StringVar(value="Inventur")
+        rg = row("Grund")
+        ttk.Combobox(rg, textvariable=grund_var, values=self.BD_GRUENDE, state="readonly",
+                     style="NMG.TCombobox", width=24).pack(side="left")
+        bem_var = tk.StringVar()
+        rb = row("Bemerkung")
+        tk.Entry(rb, textvariable=bem_var, font=(theme.FONT, 10), width=30,
+                 relief="solid", bd=1).pack(side="left", fill="x", expand=True)
+
+        ergebnis = tk.Label(body, text="", bg=SHELL_BG, fg=MUTED, font=(theme.FONT, 10, "bold"))
+        ergebnis.pack(anchor="w", pady=(8, 0))
+
+        state = {"soll": 0}
+
+        def _i(s):
+            s = (s or "").strip().replace("+", "")
+            try:
+                return int(s)
+            except ValueError:
+                return None
+
+        def update_ergebnis():
+            soll = state["soll"]
+            ist = _i(ist_var.get())
+            if ist is None:
+                ergebnis.config(text="", fg=MUTED)
+                return
+            diff = ist - soll
+            ergebnis.config(
+                text=f"Ergebnis: {soll} → {ist}   ({'+' if diff > 0 else ''}{diff} Stueck)",
+                fg=(OK_GREEN if diff > 0 else DANGER if diff < 0 else MUTED))
+
+        def on_art(*_a):
+            line = amap[art_var.get()]
+            state["soll"] = line[5] or 0
+            soll_lbl.config(text=str(state["soll"]))
+            ist_var.set(str(state["soll"]))
+            diff_var.set("0")
+            update_ergebnis()
+
+        def on_ist(_e=None):
+            ist = _i(ist_var.get())
+            if ist is not None:
+                diff_var.set(f"{ist - state['soll']:+d}")
+            update_ergebnis()
+
+        def on_diff(_e=None):
+            diff = _i(diff_var.get())
+            if diff is not None:
+                ist_var.set(str(state["soll"] + diff))
+            update_ergebnis()
+
+        def step(delta):
+            cur = (_i(diff_var.get()) or 0) + delta
+            diff_var.set(f"{cur:+d}")
+            ist_var.set(str(state["soll"] + cur))
+            update_ergebnis()
+
+        art_var.trace_add("write", on_art)
+        ist_entry.bind("<KeyRelease>", on_ist)
+        diff_entry.bind("<KeyRelease>", on_diff)
+        on_art()
+
+        def save():
+            line = amap[art_var.get()]
+            lid, pzn, name, charge, verfall, vorher = line
+            vorher = vorher or 0
+            ist = _i(ist_var.get())
+            if ist is None:
+                messagebox.showwarning("Bestandsdifferenz", "Bitte Ist-Bestand oder Differenz eingeben.", parent=win)
+                return
+            if ist < 0:
+                messagebox.showwarning("Bestandsdifferenz", "Der Ist-Bestand darf nicht negativ sein.", parent=win)
+                return
+            diff = ist - vorher
+            if diff == 0:
+                messagebox.showinfo("Bestandsdifferenz",
+                                    "Ist-Bestand entspricht dem Soll - keine Differenz.", parent=win)
+                return
+            jetzt = datetime.now().isoformat(timespec="seconds")
+            with self._conn() as con:
+                con.execute(f"UPDATE {tabelle} SET menge=?, aktualisiert_am=? WHERE id=?",
+                            (ist, jetzt, lid))
+                con.execute(
+                    """INSERT INTO tbl_gdp_bestandsdiff
+                       (datum,bereich,pzn,artikelname,charge,verfall,menge_vorher,menge_diff,
+                        menge_nachher,grund,bemerkung,bearbeiter)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (jetzt, bereich, pzn, name, charge, verfall, vorher, diff, ist,
+                     grund_var.get(), bem_var.get().strip(), ME()))
+                con.commit()
+            self._log("Bestandsdifferenz", f"{bereich}: {'+' if diff > 0 else ''}{diff}", lid,
+                      f"{name} Ch {charge}: {vorher} -> {ist} ({grund_var.get()})")
+            self._refresh_bestandsdiff()
+            if hasattr(self, "_bw_tree"):
+                self._refresh_bewegungen()
+            win.destroy()
+            messagebox.showinfo("Bestandsdifferenz",
+                                f"Korrektur gebucht: {name} Ch {charge}\n"
+                                f"{vorher} → {ist} ({'+' if diff > 0 else ''}{diff} St).", parent=self)
+
+        foot = tk.Frame(win, bg=SHELL_BG)
+        foot.pack(fill="x", padx=18, pady=(0, 16))
+        theme.PillButton(foot, "Korrektur buchen", save, kind="success",
+                         font_size=10, padx=16, pady=7).pack(side="right")
+        theme.PillButton(foot, "Abbrechen", win.destroy, kind="neutral",
+                         font_size=10, padx=16, pady=7).pack(side="right", padx=8)
+        try:
+            x = self.winfo_rootx() + 90
+            y = self.winfo_rooty() + 70
+            win.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+        win.grab_set()
+        ist_entry.focus_set()
+
+    def _bd_export(self):
+        flt = self._bd_filter.get()
+        where, params = ("", ())
+        if flt != "Alle":
+            where, params = "WHERE bereich=?", (flt,)
+        with self._conn() as con:
+            rows = con.execute(
+                f"""SELECT datum,bereich,pzn,artikelname,charge,verfall,menge_vorher,menge_diff,
+                          menge_nachher,grund,bemerkung,bearbeiter
+                   FROM tbl_gdp_bestandsdiff {where} ORDER BY id DESC""", params).fetchall()
+        if not rows:
+            messagebox.showinfo("Export", "Keine Bestandsdifferenzen zum Exportieren.", parent=self)
+            return
+        path = filedialog.asksaveasfilename(
+            parent=self, title="Bestandsdifferenzen exportieren", defaultextension=".csv",
+            initialfile=f"Bestandsdifferenzen_{_heute_iso()}.csv", filetypes=[("CSV", "*.csv")])
+        if not path:
+            return
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            w = csv.writer(f, delimiter=";")
+            w.writerow(["Datum", "Bereich", "PZN", "Artikel", "Charge", "Verfall", "Vorher",
+                        "Differenz", "Nachher", "Grund", "Bemerkung", "Bearbeiter"])
+            w.writerows(rows)
+        messagebox.showinfo("Export", f"{len(rows)} Korrektur(en) gespeichert.", parent=self)
+
+    # ===================================================== EINSTELLUNGEN
+    MODUS_INFO = {
+        "verkauf": ("\U0001F6D2  Verkauf",
+                    "Dieser Arbeitsplatz nimmt Fertigware in den Verkaufsbestand, "
+                    "bestaetigt avisierte Lieferungen aus der Produktion und bearbeitet "
+                    "Retouren, Retourenbestand und Kundenqualifizierung.",
+                    "Sichtbar: Wareneingang (→ Verkaufsbestand) · Retouren · Retourenbestand · "
+                    "Kundenqualifizierung · Rueckverfolgung"),
+        "produktion": ("\U0001F3ED  Produktion",
+                       "Dieser Arbeitsplatz nimmt eingekaufte Ware fuer die Produktion an "
+                       "(getrennter Produktionsbestand) und erzeugt beim Produzieren einen "
+                       "Warenausgang, der an den Verkauf avisiert wird.",
+                       "Sichtbar: Wareneingang (Einkauf → Produktion) · Produktionsbestand · "
+                       "Warenausgang / Avis · Rueckverfolgung"),
+    }
+
+    def _build_einstellungen(self, parent):
+        parent.columnconfigure(0, weight=1)
+        outer, body = _card(parent, "Betriebsmodus", "Verkauf oder Produktion - pro Arbeitsplatz")
+        outer.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        tk.Label(body, text="Lege fest, ob dieser Arbeitsplatz im Verkauf oder in der Produktion "
+                            "arbeitet. Das Programm blendet automatisch die passenden Bereiche ein "
+                            "und aktiviert den richtigen Wareneingang. Beide Modi teilen sich "
+                            "dieselbe Datenbank - so reicht die Produktion ihren Warenausgang an "
+                            "den Verkauf weiter.",
+                 bg=BG, fg=MUTED, font=(theme.FONT, 10), justify="left", wraplength=760).pack(anchor="w", pady=(0, 10))
+
+        self._set_modus = tk.StringVar(value=self._modus())
+
+        def modus_row(key):
+            icon_title, desc, sicht = self.MODUS_INFO[key]
+            rowf = tk.Frame(body, bg=CARD_ALT, highlightbackground=BORDER, highlightthickness=1)
+            rowf.pack(fill="x", pady=4)
+            rb = tk.Radiobutton(rowf, variable=self._set_modus, value=key, bg=CARD_ALT,
+                                activebackground=CARD_ALT, selectcolor=CARD,
+                                command=self._on_modus_change)
+            rb.pack(side="left", padx=(10, 6), pady=12)
+            txt = tk.Frame(rowf, bg=CARD_ALT)
+            txt.pack(side="left", fill="x", expand=True, pady=8)
+            tk.Label(txt, text=icon_title, bg=CARD_ALT, fg=INK,
+                     font=(theme.FONT, 12, "bold")).pack(anchor="w")
+            tk.Label(txt, text=desc, bg=CARD_ALT, fg=MUTED, font=(theme.FONT, 9),
+                     justify="left", wraplength=700).pack(anchor="w")
+            tk.Label(txt, text=sicht, bg=CARD_ALT, fg=ACCENT, font=(theme.FONT, 8),
+                     justify="left", wraplength=700).pack(anchor="w", pady=(3, 0))
+
+        modus_row("verkauf")
+        modus_row("produktion")
+        self._set_hint = tk.Label(body, text="", bg=BG, fg=ACCENT, font=(theme.FONT, 9, "bold"))
+        self._set_hint.pack(anchor="w", pady=(8, 0))
+
+        # ---- Felder / Pflichtangaben ----
+        outer2, body2 = _card(parent, "Felder", "Pflichtangaben beim Warenausgang")
+        outer2.grid(row=1, column=0, sticky="ew")
+        self._set_rnr_pflicht = tk.IntVar(value=1 if self._rechnung_pflicht() else 0)
+        rowf = tk.Frame(body2, bg=CARD_ALT, highlightbackground=BORDER, highlightthickness=1)
+        rowf.pack(fill="x", pady=4)
+        tk.Checkbutton(rowf, variable=self._set_rnr_pflicht, bg=CARD_ALT, activebackground=CARD_ALT,
+                       command=self._on_rnr_pflicht_change).pack(side="left", padx=(10, 6), pady=10)
+        txt = tk.Frame(rowf, bg=CARD_ALT)
+        txt.pack(side="left", fill="x", expand=True, pady=6)
+        tk.Label(txt, text="Rechnungsnummer ist Pflichtfeld", bg=CARD_ALT, fg=INK,
+                 font=(theme.FONT, 11, "bold")).pack(anchor="w")
+        tk.Label(txt, text="Wenn aktiv, muss beim Anlegen/Importieren eines Warenausgangs eine "
+                           "Rechnungsnummer angegeben werden. Sonst ist sie optional.",
+                 bg=CARD_ALT, fg=MUTED, font=(theme.FONT, 9), justify="left",
+                 wraplength=700).pack(anchor="w")
+        self._refreshers["einstellungen"] = self._refresh_einstellungen
+
+    def _on_rnr_pflicht_change(self):
+        self._set_setting("rechnungsnummer_pflicht", self._set_rnr_pflicht.get())
+
+    def _refresh_einstellungen(self):
+        if hasattr(self, "_set_modus"):
+            self._set_modus.set(self._modus())
+        if hasattr(self, "_set_rnr_pflicht"):
+            self._set_rnr_pflicht.set(1 if self._rechnung_pflicht() else 0)
+
+    def _on_modus_change(self):
+        modus = self._set_modus.get()
+        self._set_setting("betriebsmodus", modus)
+        if hasattr(self, "_set_hint"):
+            self._set_hint.config(
+                text=f"Aktiver Modus: {self.MODUS_INFO[modus][0].strip()}. "
+                     "Die Bereiche wurden umgestellt.")
+        self._apply_nav_visibility()
+        self._we_sync_art_selector()
+        self._refresh_wareneingang()
+
+    # ===================================================== PROTOKOLL
+    LOG_MODULE = ["alle", "Wareneingang", "Warenausgang", "Produktionsbestand",
+                  "Bestandsdifferenz", "Retoure", "Retourenbestand", "Rueckruf",
+                  "Qualifizierung"]
+    LOG_ZEITRAUM = ["Alle", "Dieser Monat", "Dieses Quartal", "Dieses Jahr",
+                    "Vorjahr", "Manuell"]
+
+    def _build_protokoll(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(2, weight=1)
+        bar = tk.Frame(parent, bg=SHELL_BG)
+        bar.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        tk.Label(bar, text="Modul:", bg=SHELL_BG, fg=TEXT, font=(theme.FONT, 10)).pack(side="left")
+        self._log_filter = tk.StringVar(value="alle")
+        cb = ttk.Combobox(bar, textvariable=self._log_filter, state="readonly", width=18,
+                          style="NMG.TCombobox", values=self.LOG_MODULE)
+        cb.pack(side="left", padx=8)
+        cb.bind("<<ComboboxSelected>>", lambda _e: self._refresh_protokoll())
+        tk.Label(bar, text="Zeitraum:", bg=SHELL_BG, fg=TEXT, font=(theme.FONT, 10)).pack(side="left", padx=(8, 2))
+        self._log_zeitraum = tk.StringVar(value="Alle")
+        cbz = ttk.Combobox(bar, textvariable=self._log_zeitraum, state="readonly", width=15,
+                           style="NMG.TCombobox", values=self.LOG_ZEITRAUM)
+        cbz.pack(side="left", padx=4)
+        cbz.bind("<<ComboboxSelected>>", lambda _e: self._on_zeitraum_change())
+        # Manuell: von/bis (nur bei 'Manuell' sichtbar)
+        self._log_von = tk.StringVar()
+        self._log_bis = tk.StringVar()
+        self._log_manual = tk.Frame(bar, bg=SHELL_BG)
+        tk.Label(self._log_manual, text="von", bg=SHELL_BG, fg=MUTED, font=(theme.FONT, 9)).pack(side="left")
+        ev = tk.Entry(self._log_manual, textvariable=self._log_von, width=11, relief="solid", bd=1)
+        ev.pack(side="left", padx=3)
+        tk.Label(self._log_manual, text="bis", bg=SHELL_BG, fg=MUTED, font=(theme.FONT, 9)).pack(side="left")
+        eb = tk.Entry(self._log_manual, textvariable=self._log_bis, width=11, relief="solid", bd=1)
+        eb.pack(side="left", padx=3)
+        for e in (ev, eb):
+            e.bind("<Return>", lambda _e: self._refresh_protokoll())
+        theme.PillButton(self._log_manual, "Anwenden", self._refresh_protokoll,
+                         kind="neutral", font_size=9, padx=10, pady=2).pack(side="left", padx=4)
+        theme.PillButton(bar, "⬇  Export CSV", self._log_export, kind="neutral",
+                         font_size=10).pack(side="right")
+
+        self._log_count = tk.Label(parent, text="", bg=SHELL_BG, fg=MUTED, font=(theme.FONT, 9))
+        self._log_count.grid(row=1, column=0, sticky="w", pady=(0, 4))
+
+        outer, body = _card(parent)
+        outer.grid(row=2, column=0, sticky="nsew")
         self._log_tree = _make_tree(body, ("Zeitpunkt", "Bearbeiter", "Modul", "Aktion", "Details"),
-                                    (150, 110, 120, 180, 260))
+                                    (150, 110, 130, 190, 250))
         self._refreshers["protokoll"] = self._refresh_protokoll
+
+    def _on_zeitraum_change(self):
+        if self._log_zeitraum.get() == "Manuell":
+            self._log_manual.pack(side="left", padx=(6, 0))
+            # sinnvolle Vorbelegung: aktueller Monat
+            if not self._log_von.get():
+                self._log_von.set(HEUTE().replace(day=1).isoformat())
+                self._log_bis.set(_heute_iso())
+        else:
+            self._log_manual.pack_forget()
+        self._refresh_protokoll()
+
+    def _zeitraum_grenzen(self):
+        """Liefert (start_iso, end_iso) als 'JJJJ-MM-TT' fuer den gewaehlten
+        Zeitraum, oder (None, None) fuer 'Alle'."""
+        preset = self._log_zeitraum.get()
+        t = HEUTE()
+        def monatsende(y, m):
+            return (date(y, 12, 31) if m == 12 else date(y, m + 1, 1) - timedelta(days=1))
+        if preset == "Dieser Monat":
+            return t.replace(day=1).isoformat(), monatsende(t.year, t.month).isoformat()
+        if preset == "Dieses Quartal":
+            sm = ((t.month - 1) // 3) * 3 + 1
+            return date(t.year, sm, 1).isoformat(), monatsende(t.year, sm + 2).isoformat()
+        if preset == "Dieses Jahr":
+            return date(t.year, 1, 1).isoformat(), date(t.year, 12, 31).isoformat()
+        if preset == "Vorjahr":
+            return date(t.year - 1, 1, 1).isoformat(), date(t.year - 1, 12, 31).isoformat()
+        if preset == "Manuell":
+            return (self._log_von.get().strip() or None), (self._log_bis.get().strip() or None)
+        return None, None
+
+    def _log_where(self):
+        """Baut (clauses, params) aus Modul- und Zeitraum-Filter."""
+        clauses, params = [], []
+        modul = self._log_filter.get()
+        if modul != "alle":
+            clauses.append("modul=?")
+            params.append(modul)
+        start, end = self._zeitraum_grenzen()
+        if start:
+            clauses.append("substr(zeitpunkt,1,10) >= ?")
+            params.append(start[:10])
+        if end:
+            clauses.append("substr(zeitpunkt,1,10) <= ?")
+            params.append(end[:10])
+        return clauses, params
 
     def _refresh_protokoll(self):
         t = getattr(self, "_log_tree", None)
         if t is None:
             return
         t.delete(*t.get_children())
-        modul = self._log_filter.get()
+        clauses, params = self._log_where()
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         with self._conn() as con:
-            if modul == "alle":
-                rows = con.execute(
-                    "SELECT zeitpunkt,bearbeiter,modul,aktion,details FROM tbl_gdp_log "
-                    "ORDER BY id DESC LIMIT 500").fetchall()
-            else:
-                rows = con.execute(
-                    "SELECT zeitpunkt,bearbeiter,modul,aktion,details FROM tbl_gdp_log "
-                    "WHERE modul=? ORDER BY id DESC LIMIT 500", (modul,)).fetchall()
+            rows = con.execute(
+                f"SELECT zeitpunkt,bearbeiter,modul,aktion,details FROM tbl_gdp_log "
+                f"{where} ORDER BY id DESC LIMIT 1000", params).fetchall()
         for i, r in enumerate(rows):
             t.insert("", "end", values=r, tags=("even" if i % 2 else "odd",))
+        zr = self._log_zeitraum.get()
+        start, end = self._zeitraum_grenzen()
+        spanne = f" · {start} bis {end}" if start or end else ""
+        self._log_count.config(text=f"{len(rows)} Eintrag/Einträge · Zeitraum: {zr}{spanne}")
 
     def _log_export(self):
+        clauses, params = self._log_where()
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self._conn() as con:
+            rows = con.execute(
+                f"SELECT zeitpunkt,bearbeiter,modul,aktion,details FROM tbl_gdp_log "
+                f"{where} ORDER BY id", params).fetchall()
+        if not rows:
+            messagebox.showinfo("Export", "Keine Protokoll-Eintraege im gewaehlten Filter.", parent=self)
+            return
         path = filedialog.asksaveasfilename(
             parent=self, title="Protokoll exportieren", defaultextension=".csv",
             initialfile=f"GDP_Protokoll_{_heute_iso()}.csv", filetypes=[("CSV", "*.csv")])
         if not path:
             return
-        with self._conn() as con:
-            rows = con.execute(
-                "SELECT zeitpunkt,bearbeiter,modul,aktion,details FROM tbl_gdp_log ORDER BY id").fetchall()
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.writer(f, delimiter=";")
             w.writerow(["Zeitpunkt", "Bearbeiter", "Modul", "Aktion", "Details"])
