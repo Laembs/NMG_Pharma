@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Anmelden · Pharma-Suite</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="login-body">
+  <form class="login-card" method="post" action="/login">
+    <div class="brand brand-login">Pharma&nbsp;Suite</div>
+    <p class="login-sub">Bitte mit Ihren Firmen-Zugangsdaten anmelden.</p>
+
+    {% if fehler %}<div class="fehler">{{ fehler }}</div>{% endif %}
+
+    <label>Firma
+      <select name="firma" required>
+        {% for f in firmen %}<option value="{{ f.slug }}">{{ f.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Benutzer
+      <input type="text" name="login" autocomplete="username" required autofocus>
+    </label>
+    <label>Passwort
+      <input type="password" name="passwort" autocomplete="current-password" required>
+    </label>
+    <button type="submit" class="btn btn-primary">Anmelden</button>
+  </form>
+</body>
+</html>

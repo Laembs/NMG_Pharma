@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ titel|default("NMGone-Web") }} · Pharma-Suite</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body hx-boost="true">
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">Pharma&nbsp;Suite</div>
+      {% if user %}
+      <div class="firma">{{ user.firma_name }}</div>
+      <nav>
+        <a href="/dashboard" class="navlink {% if request.url.path == '/dashboard' %}aktiv{% endif %}">Übersicht</a>
+        {% for m in nav_module %}
+          {% if m.ready %}
+            <a href="/{{ m.key }}" class="navlink {% if request.url.path.startswith('/' ~ m.key) %}aktiv{% endif %}">{{ m.titel }}</a>
+          {% else %}
+            <span class="navlink gesperrt" title="In Vorbereitung">{{ m.titel }} <em>bald</em></span>
+          {% endif %}
+        {% endfor %}
+      </nav>
+      <div class="sidebar-foot">
+        <div class="who">{{ user.anzeigename }}</div>
+        <a href="/logout" class="abmelden">Abmelden</a>
+      </div>
+      {% endif %}
+    </aside>
+
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>

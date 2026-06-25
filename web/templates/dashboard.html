@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+  <header class="page-head">
+    <h1>Übersicht</h1>
+    <p class="muted">Freigeschaltete Module für {{ user.firma_name }}</p>
+  </header>
+
+  {% if kacheln %}
+  <div class="kacheln">
+    {% for m in kacheln %}
+      {% if m.ready %}
+      <a class="kachel" href="/{{ m.key }}">
+        <div class="kachel-titel">{{ m.titel }}</div>
+        <div class="kachel-desc">{{ m.desc }}</div>
+        <div class="kachel-cta">Öffnen →</div>
+      </a>
+      {% else %}
+      <div class="kachel kachel-aus">
+        <div class="kachel-titel">{{ m.titel }} <span class="badge">bald</span></div>
+        <div class="kachel-desc">{{ m.desc }}</div>
+      </div>
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">Für Ihre Firma ist aktuell kein Modul freigeschaltet.</p>
+  {% endif %}
+{% endblock %}

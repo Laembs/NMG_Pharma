@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+  <header class="page-head">
+    <h1>Abwesenheiten</h1>
+    <a class="btn" href="/personal">← Zur Mitarbeiterliste</a>
+  </header>
+
+  <section class="card card-form">
+    <h2>Neue Abwesenheit</h2>
+    {% if mitarbeiter %}
+    <form method="post" action="/personal/abwesenheiten">
+      <div class="grid2">
+        <label>Mitarbeiter
+          <select name="mitarbeiter_id" required>
+            {% for m in mitarbeiter %}
+              <option value="{{ m.id }}">{{ m.name }}, {{ m.vorname }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Art
+          <select name="art" required>
+            {% for a in arten %}<option value="{{ a }}">{{ a }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>Von
+          <input type="date" name="von" required>
+        </label>
+        <label>Bis
+          <input type="date" name="bis" required>
+        </label>
+        <label class="span2">Notiz
+          <input type="text" name="notiz" placeholder="optional">
+        </label>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Eintragen</button>
+      </div>
+    </form>
+    {% else %}
+    <p class="muted">Bitte zuerst Mitarbeiter anlegen.</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Eingetragene Abwesenheiten</h2>
+    {% if eintraege %}
+    <table class="tabelle">
+      <thead><tr>
+        <th>Mitarbeiter</th><th>Art</th><th>Von</th><th>Bis</th><th>Notiz</th><th></th>
+      </tr></thead>
+      <tbody>
+      {% for e in eintraege %}
+        <tr>
+          <td>{{ e.name }}, {{ e.vorname }}</td>
+          <td><span class="tag tag-{{ e.art|lower }}">{{ e.art }}</span></td>
+          <td>{{ e.von }}</td>
+          <td>{{ e.bis }}</td>
+          <td>{{ e.notiz or e.unterart or '' }}</td>
+          <td class="row-actions">
+            <form method="post" action="/personal/abwesenheiten/{{ e.id }}/loeschen">
+              <button class="link link-danger" type="submit">Löschen</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">Noch keine Abwesenheiten erfasst.</p>
+    {% endif %}
+  </section>
+{% endblock %}

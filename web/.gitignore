@@ -1,0 +1,7 @@
+# Generierte Daten – NIE committen (enthalten Firmen-/Fachdaten):
+data/
+tenants/
+
+# Python-Artefakte
+__pycache__/
+*.pyc

@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block content %}
+  <header class="page-head">
+    <h1>Personal</h1>
+    <div class="head-actions">
+      <a class="btn" href="/personal/abwesenheiten">Abwesenheiten</a>
+      <a class="btn btn-primary" href="/personal/neu">+ Mitarbeiter</a>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2>Mitarbeiter</h2>
+    {% if mitarbeiter %}
+    <table class="tabelle">
+      <thead><tr>
+        <th>Name</th><th>Abteilung</th><th>Position</th>
+        <th class="num">Urlaub/Jahr</th><th>PV</th><th></th>
+      </tr></thead>
+      <tbody>
+      {% for m in mitarbeiter %}
+        <tr>
+          <td>{{ m.name }}, {{ m.vorname }}</td>
+          <td>{{ m.abteilung }}</td>
+          <td>{{ m.position }}</td>
+          <td class="num">{{ m.urlaubsanspruch }}</td>
+          <td>{% if m.personalverantwortlich %}✓{% endif %}</td>
+          <td class="row-actions">
+            <a class="link" href="/personal/{{ m.id }}/bearbeiten">Bearbeiten</a>
+            <form method="post" action="/personal/{{ m.id }}/loeschen"
+                  onsubmit="return confirm('{{ m.vorname }} {{ m.name }} wirklich löschen?');">
+              <button class="link link-danger" type="submit">Löschen</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">Noch keine Mitarbeiter erfasst.</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Urlaubsübersicht (laufendes Jahr)</h2>
+    {% if urlaub %}
+    <table class="tabelle">
+      <thead><tr>
+        <th>Name</th><th class="num">Anspruch</th>
+        <th class="num">Genommen</th><th class="num">Rest</th>
+      </tr></thead>
+      <tbody>
+      {% for u in urlaub %}
+        <tr>
+          <td>{{ u.name }}, {{ u.vorname }}</td>
+          <td class="num">{{ u.anspruch }}</td>
+          <td class="num">{{ u.genommen }}</td>
+          <td class="num {% if u.rest < 0 %}link-danger{% endif %}">{{ u.rest }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">Keine Daten.</p>
+    {% endif %}
+  </section>
+{% endblock %}

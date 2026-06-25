@@ -1,0 +1,128 @@
+/* Farben aus app/theme.py / personal_app.py übernommen, damit Web & Desktop
+   optisch zusammenpassen. */
+:root {
+  --primary: #0B4A86;
+  --primary-d: #08365f;
+  --sidebar: #0B2C4A;
+  --sidebar-text: #D7E6F4;
+  --bg: #EEF2F7;
+  --card: #FFFFFF;
+  --ink: #1F2933;
+  --muted: #626E7D;
+  --faint: #9AA5B1;
+  --border: #DCE2E8;
+  --select-bg: #E8F1FB;
+  --danger: #C0392B;
+  --ok: #11823B;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: "Segoe UI", system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  font-size: 15px;
+}
+a { color: var(--primary); text-decoration: none; }
+
+/* ── Layout ───────────────────────────────────────────────── */
+.layout { display: flex; min-height: 100vh; }
+.sidebar {
+  width: 232px; flex: 0 0 232px;
+  background: var(--sidebar); color: var(--sidebar-text);
+  display: flex; flex-direction: column; padding: 18px 14px;
+}
+.brand { font-size: 19px; font-weight: 700; letter-spacing: .3px; color: #fff; }
+.firma { margin-top: 4px; font-size: 13px; color: var(--faint); }
+.sidebar nav { margin-top: 22px; display: flex; flex-direction: column; gap: 2px; }
+.navlink {
+  color: var(--sidebar-text); padding: 9px 12px; border-radius: 8px;
+  font-size: 14.5px;
+}
+.navlink:hover { background: rgba(255,255,255,.08); }
+.navlink.aktiv { background: var(--primary); color: #fff; }
+.navlink.gesperrt { color: var(--faint); cursor: default; }
+.navlink.gesperrt em { font-style: normal; font-size: 11px; opacity: .8; }
+.sidebar-foot { margin-top: auto; padding-top: 16px; border-top: 1px solid rgba(255,255,255,.12); }
+.who { font-size: 13px; color: var(--faint); margin-bottom: 6px; }
+.abmelden { color: var(--sidebar-text); font-size: 13px; }
+.abmelden:hover { text-decoration: underline; }
+
+.content { flex: 1; padding: 28px 34px; max-width: 1100px; }
+
+/* ── Kopf / Karten ────────────────────────────────────────── */
+.page-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.page-head h1 { font-size: 24px; margin: 0; }
+.head-actions { display: flex; gap: 10px; }
+.muted { color: var(--muted); }
+.card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 18px 20px; margin-bottom: 20px;
+}
+.card h2 { font-size: 16px; margin: 0 0 14px; }
+.card-form { max-width: 720px; }
+
+/* ── Kacheln ──────────────────────────────────────────────── */
+.kacheln { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); gap: 16px; }
+.kachel {
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 18px; display: block; transition: box-shadow .12s, transform .12s;
+}
+.kachel:hover { box-shadow: 0 6px 18px rgba(11,44,74,.12); transform: translateY(-2px); }
+.kachel-titel { font-weight: 700; font-size: 16px; color: var(--ink); }
+.kachel-desc { color: var(--muted); font-size: 13.5px; margin-top: 6px; }
+.kachel-cta { color: var(--primary); font-weight: 600; font-size: 13.5px; margin-top: 14px; }
+.kachel-aus { opacity: .65; }
+.badge { background: var(--select-bg); color: var(--primary); font-size: 11px; padding: 2px 7px; border-radius: 999px; vertical-align: middle; }
+
+/* ── Tabellen ─────────────────────────────────────────────── */
+.tabelle { width: 100%; border-collapse: collapse; }
+.tabelle th, .tabelle td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); }
+.tabelle th { font-size: 12.5px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+.tabelle tbody tr:hover { background: var(--select-bg); }
+.tabelle .num { text-align: right; }
+.row-actions { display: flex; gap: 12px; justify-content: flex-end; }
+.row-actions form { display: inline; margin: 0; }
+
+/* ── Buttons / Links ──────────────────────────────────────── */
+.btn {
+  display: inline-block; padding: 8px 14px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--border); background: #fff; color: var(--ink);
+  font-size: 14px; font-family: inherit;
+}
+.btn:hover { background: var(--select-bg); }
+.btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-d); }
+.link { background: none; border: none; padding: 0; cursor: pointer; color: var(--primary); font-size: 14px; font-family: inherit; }
+.link:hover { text-decoration: underline; }
+.link-danger { color: var(--danger); }
+
+/* ── Formulare ────────────────────────────────────────────── */
+label { display: flex; flex-direction: column; gap: 5px; font-size: 13.5px; color: var(--muted); }
+input, select { font-family: inherit; font-size: 14.5px; color: var(--ink);
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+input:focus, select:focus { outline: 2px solid var(--select-bg); border-color: var(--primary); }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.grid2 .span2 { grid-column: 1 / -1; }
+label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--ink); }
+label.check input { width: auto; }
+.form-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
+
+/* ── Tags (Abwesenheits-Art) ──────────────────────────────── */
+.tag { padding: 2px 9px; border-radius: 999px; font-size: 12.5px; color: #fff; }
+.tag-urlaub { background: #11823B; }
+.tag-sonderurlaub { background: #0E7C86; }
+.tag-krankheit { background: #C0392B; }
+.tag-fortbildung { background: #C88200; }
+.tag-sonstiges { background: #6B4FB3; }
+
+/* ── Login ────────────────────────────────────────────────── */
+.login-body { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: var(--sidebar); }
+.login-card { background: var(--card); border-radius: 14px; padding: 30px 28px; width: 340px;
+  display: flex; flex-direction: column; gap: 14px; box-shadow: 0 12px 40px rgba(0,0,0,.3); }
+.brand-login { color: var(--primary); text-align: center; font-size: 22px; }
+.login-sub { text-align: center; color: var(--muted); font-size: 13.5px; margin: -4px 0 4px; }
+.login-card label { color: var(--ink); font-weight: 600; }
+.login-card .btn-primary { margin-top: 6px; padding: 11px; }
+.fehler { background: #FBE9E7; color: var(--danger); border: 1px solid #F3C0BA; padding: 9px 12px; border-radius: 8px; font-size: 13.5px; }
