@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block content %}
+  <header class="page-head">
+    <h1>Zeiterfassung</h1>
+    <a class="btn" href="/personal">← Mitarbeiterliste</a>
+  </header>
+
+  {% if mitarbeiter %}
+  <section class="card">
+    <h2>Stempeluhr</h2>
+    <p class="muted">Ein Klick erfasst <strong>Kommen</strong>; der nächste Klick am selben
+      Tag setzt <strong>Gehen</strong>.</p>
+    <div class="stempel-leiste">
+      {% for m in mitarbeiter %}
+        <form method="post" action="/personal/zeiterfassung/stempeln" class="stempel">
+          <input type="hidden" name="mitarbeiter_id" value="{{ m.id }}">
+          <button type="submit" class="btn">{{ m.vorname }} {{ m.name }}</button>
+        </form>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="card card-form">
+    <h2>Zeit manuell erfassen</h2>
+    <form method="post" action="/personal/zeiterfassung">
+      <div class="grid2">
+        <label>Mitarbeiter
+          <select name="mitarbeiter_id" required>
+            {% for m in mitarbeiter %}
+              <option value="{{ m.id }}">{{ m.name }}, {{ m.vorname }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Datum
+          <input type="date" name="datum" value="{{ heute }}" required>
+        </label>
+        <label>Kommt
+          <input type="time" name="kommt">
+        </label>
+        <label>Geht
+          <input type="time" name="geht">
+        </label>
+        <label>Pause (Minuten)
+          <input type="number" name="pause_minuten" min="0" max="480" value="0">
+        </label>
+        <label>Notiz
+          <input type="text" name="notiz" placeholder="optional">
+        </label>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Speichern</button>
+      </div>
+    </form>
+  </section>
+  {% else %}
+  <section class="card"><p class="muted">Bitte zuerst Mitarbeiter anlegen.</p></section>
+  {% endif %}
+
+  <section class="card">
+    <div class="kal-kopf">
+      <a class="btn" href="/personal/zeiterfassung?jahr={{ jahr if monat > 1 else jahr - 1 }}&monat={{ monat - 1 if monat > 1 else 12 }}">←</a>
+      <h2>Monatsübersicht {{ '%02d'|format(monat) }}/{{ jahr }}</h2>
+      <a class="btn" href="/personal/zeiterfassung?jahr={{ jahr if monat < 12 else jahr + 1 }}&monat={{ monat + 1 if monat < 12 else 1 }}">→</a>
+    </div>
+    {% if summe %}
+    <table class="tabelle">
+      <thead><tr>
+        <th>Mitarbeiter</th><th class="num">Ist (Std)</th>
+        <th class="num">Soll (Std)</th><th class="num">Über-/Unterstunden</th>
+      </tr></thead>
+      <tbody>
+      {% for s in summe %}
+        <tr>
+          <td>{{ s.name }}, {{ s.vorname }}</td>
+          <td class="num">{{ s.ist_text }}</td>
+          <td class="num">{{ s.soll_text }}</td>
+          <td class="num {% if s.ueber_min < 0 %}link-danger{% elif s.ueber_min > 0 %}link-ok{% endif %}">{{ s.ueber_text }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="muted">Keine Mitarbeiter.</p>{% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Einzelbuchungen {{ '%02d'|format(monat) }}/{{ jahr }}</h2>
+    {% if zeiten %}
+    <table class="tabelle">
+      <thead><tr>
+        <th>Datum</th><th>Mitarbeiter</th><th>Kommt</th><th>Geht</th>
+        <th class="num">Pause</th><th class="num">Ist</th><th class="num">+/−</th><th></th>
+      </tr></thead>
+      <tbody>
+      {% for z in zeiten %}
+        <tr>
+          <td>{{ z.datum }}</td>
+          <td>{{ z.name }}, {{ z.vorname }}</td>
+          <td>{{ z.kommt or '—' }}</td>
+          <td>{{ z.geht or '—' }}</td>
+          <td class="num">{{ z.pause_minuten }}</td>
+          <td class="num">{{ z.ist_text }}</td>
+          <td class="num {% if z.ueber_min < 0 %}link-danger{% elif z.ueber_min > 0 %}link-ok{% endif %}">{{ z.ueber_text }}</td>
+          <td class="row-actions">
+            <form method="post" action="/personal/zeiterfassung/{{ z.id }}/loeschen">
+              <button class="link link-danger" type="submit">Löschen</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="muted">Keine Buchungen in diesem Monat.</p>{% endif %}
+  </section>
+{% endblock %}

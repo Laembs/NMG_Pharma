@@ -126,3 +126,41 @@ label.check input { width: auto; }
 .login-card label { color: var(--ink); font-weight: 600; }
 .login-card .btn-primary { margin-top: 6px; padding: 11px; }
 .fehler { background: #FBE9E7; color: var(--danger); border: 1px solid #F3C0BA; padding: 9px 12px; border-radius: 8px; font-size: 13.5px; }
+
+/* ── Genehmigungs-Status / Hinweise ───────────────────────── */
+.status { padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.status-beantragt { background: #FCF3E6; color: #9A6700; }
+.status-genehmigt { background: #E4F4EA; color: #11823B; }
+.status-abgelehnt { background: #FBE9E7; color: var(--danger); }
+.badge-warn { background: #FCF3E6; color: #9A6700; }
+.link-ok { color: var(--ok); }
+.hint { color: var(--muted); font-size: 13px; margin: 10px 0 0; }
+.tabelle td.offen { color: #9A6700; font-weight: 600; }
+
+/* ── Kalender ─────────────────────────────────────────────── */
+.kal-kopf { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; }
+.kal-kopf h2 { margin: 0; min-width: 200px; text-align: center; }
+.kalender { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.kalender th { font-size: 12px; text-transform: uppercase; letter-spacing: .4px;
+  color: var(--muted); padding: 6px; text-align: center; }
+.kalender td { border: 1px solid var(--border); vertical-align: top; height: 78px;
+  padding: 4px; width: 14.28%; }
+.kalender td.aus { background: #F7F9FB; }
+.kalender td.heute { outline: 2px solid var(--primary); outline-offset: -2px; }
+.kal-tag { font-size: 12.5px; color: var(--muted); text-align: right; margin-bottom: 3px; }
+.kal-eintrag { font-size: 11px; color: #fff; border-radius: 5px; padding: 1px 5px;
+  margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kal-eintrag.vorlaeufig { opacity: .85; border: 1px dashed rgba(255,255,255,.85); }
+.kal-legende { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+.kal-eintrag.tag-urlaub { background: #11823B; }
+.kal-eintrag.tag-sonderurlaub { background: #0E7C86; }
+.kal-eintrag.tag-krankheit { background: #C0392B; }
+.kal-eintrag.tag-fortbildung { background: #C88200; }
+.kal-eintrag.tag-sonstiges { background: #6B4FB3; }
+
+/* ── Zeiterfassung / Stempeluhr ───────────────────────────── */
+.stempel-leiste { display: flex; flex-wrap: wrap; gap: 10px; }
+.stempel-leiste form { margin: 0; }
+
+/* ── Personalakte ─────────────────────────────────────────── */
+.akte-meta { display: flex; gap: 26px; flex-wrap: wrap; font-size: 14px; }

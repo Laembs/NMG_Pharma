@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+  <header class="page-head">
+    <h1>Kalender</h1>
+    <div class="head-actions">
+      <a class="btn" href="/personal/abwesenheiten">Abwesenheiten</a>
+      <a class="btn" href="/personal">← Mitarbeiterliste</a>
+    </div>
+  </header>
+
+  <section class="card">
+    <div class="kal-kopf">
+      <a class="btn" href="/personal/kalender?jahr={{ kal.prev[0] }}&monat={{ kal.prev[1] }}">←</a>
+      <h2>{{ kal.monat_name }} {{ kal.jahr }}</h2>
+      <a class="btn" href="/personal/kalender?jahr={{ kal.next[0] }}&monat={{ kal.next[1] }}">→</a>
+    </div>
+
+    <table class="kalender">
+      <thead><tr>
+        {% for wt in kal.wochentage %}<th>{{ wt }}</th>{% endfor %}
+      </tr></thead>
+      <tbody>
+      {% for woche in kal.wochen %}
+        <tr>
+        {% for tag in woche %}
+          <td class="{% if not tag.im_monat %}aus{% endif %}{% if tag.ist_heute %} heute{% endif %}">
+            <div class="kal-tag">{{ tag.tag }}</div>
+            {% for e in tag.eintraege %}
+              <div class="kal-eintrag tag-{{ e.art|lower }} {% if e.status == 'beantragt' %}vorlaeufig{% endif %}"
+                   title="{{ e.name }} – {{ e.art }} ({{ e.status }})">{{ e.name }}</div>
+            {% endfor %}
+          </td>
+        {% endfor %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="kal-legende">
+      {% for art, klasse in [("Urlaub","urlaub"),("Sonderurlaub","sonderurlaub"),
+                             ("Krankheit","krankheit"),("Fortbildung","fortbildung"),
+                             ("Sonstiges","sonstiges")] %}
+        <span class="tag tag-{{ klasse }}">{{ art }}</span>
+      {% endfor %}
+      <span class="muted">· gestrichelt = noch nicht genehmigt</span>
+    </div>
+  </section>
+{% endblock %}

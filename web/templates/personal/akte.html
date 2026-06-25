@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+  <header class="page-head">
+    <h1>Personalakte</h1>
+    <a class="btn" href="/personal">← Mitarbeiterliste</a>
+  </header>
+
+  <section class="card">
+    <h2>{{ ma.vorname }} {{ ma.name }}</h2>
+    <div class="akte-meta">
+      <span><span class="muted">Abteilung:</span> {{ ma.abteilung or '—' }}</span>
+      <span><span class="muted">Position:</span> {{ ma.position or '—' }}</span>
+      <span><span class="muted">Urlaub/Jahr:</span> {{ ma.urlaubsanspruch }} Tage</span>
+    </div>
+  </section>
+
+  <section class="card card-form">
+    <h2>Dokument hochladen</h2>
+    <form method="post" action="/personal/{{ ma.id }}/akte/upload" enctype="multipart/form-data">
+      <div class="grid2">
+        <label>Kategorie
+          <select name="kategorie">
+            {% for k in kategorien %}<option value="{{ k }}">{{ k }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>Titel
+          <input type="text" name="titel" placeholder="z. B. Arbeitsvertrag 2026">
+        </label>
+        <label class="span2">Datei (PDF, Bild, Word, Text)
+          <input type="file" name="datei" required
+                 accept=".pdf,.png,.jpg,.jpeg,.docx,.doc,.txt,.odt">
+        </label>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Hochladen</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Dokumente</h2>
+    {% if dokumente %}
+    <table class="tabelle">
+      <thead><tr>
+        <th>Kategorie</th><th>Titel</th><th>Datei</th>
+        <th class="num">Größe</th><th>Hochgeladen</th><th></th>
+      </tr></thead>
+      <tbody>
+      {% for d in dokumente %}
+        <tr>
+          <td><span class="status status-genehmigt">{{ d.kategorie }}</span></td>
+          <td>{{ d.titel }}</td>
+          <td><a class="link" href="/personal/dokument/{{ d.id }}">{{ d.dateiname }}</a></td>
+          <td class="num">{{ (d.groesse / 1024) | round(1) }} KB</td>
+          <td>{{ d.hochgeladen_am[:16] }}</td>
+          <td class="row-actions">
+            <a class="link" href="/personal/dokument/{{ d.id }}">Download</a>
+            <form method="post" action="/personal/dokument/{{ d.id }}/loeschen"
+                  onsubmit="return confirm('Dokument wirklich löschen?');">
+              <button class="link link-danger" type="submit">Löschen</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">Noch keine Dokumente in dieser Akte.</p>
+    {% endif %}
+  </section>
+{% endblock %}

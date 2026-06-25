@@ -4,6 +4,8 @@
     <h1>Personal</h1>
     <div class="head-actions">
       <a class="btn" href="/personal/abwesenheiten">Abwesenheiten</a>
+      <a class="btn" href="/personal/kalender">Kalender</a>
+      <a class="btn" href="/personal/zeiterfassung">Zeiterfassung</a>
       <a class="btn btn-primary" href="/personal/neu">+ Mitarbeiter</a>
     </div>
   </header>
@@ -25,6 +27,7 @@
           <td class="num">{{ m.urlaubsanspruch }}</td>
           <td>{% if m.personalverantwortlich %}✓{% endif %}</td>
           <td class="row-actions">
+            <a class="link" href="/personal/{{ m.id }}/akte">Akte</a>
             <a class="link" href="/personal/{{ m.id }}/bearbeiten">Bearbeiten</a>
             <form method="post" action="/personal/{{ m.id }}/loeschen"
                   onsubmit="return confirm('{{ m.vorname }} {{ m.name }} wirklich löschen?');">
@@ -46,7 +49,7 @@
     <table class="tabelle">
       <thead><tr>
         <th>Name</th><th class="num">Anspruch</th>
-        <th class="num">Genommen</th><th class="num">Rest</th>
+        <th class="num">Genommen</th><th class="num">Offen</th><th class="num">Rest</th>
       </tr></thead>
       <tbody>
       {% for u in urlaub %}
@@ -54,6 +57,7 @@
           <td>{{ u.name }}, {{ u.vorname }}</td>
           <td class="num">{{ u.anspruch }}</td>
           <td class="num">{{ u.genommen }}</td>
+          <td class="num {% if u.offen %}offen{% endif %}">{{ u.offen }}</td>
           <td class="num {% if u.rest < 0 %}link-danger{% endif %}">{{ u.rest }}</td>
         </tr>
       {% endfor %}

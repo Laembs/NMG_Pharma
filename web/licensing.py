@@ -14,7 +14,7 @@ from .tenancy import platform_con
 
 # key, Anzeige-Titel, Kurzbeschreibung, ist im Pilot lauffähig?
 MODULE_CATALOG: list[dict] = [
-    {"key": "personal",  "titel": "Personal",  "desc": "Mitarbeiter & Abwesenheiten",        "ready": True},
+    {"key": "personal",  "titel": "Personal",  "desc": "Mitarbeiter, Urlaub, Zeit & Akte",   "ready": True},
     {"key": "faktura",   "titel": "Faktura",   "desc": "Rechnungen & Gutschriften",          "ready": False},
     {"key": "kasse",     "titel": "Kasse",     "desc": "Verkauf & Wareneingang",             "ready": False},
     {"key": "einkauf",   "titel": "Einkauf",   "desc": "Beschaffung EU-Ausland",             "ready": False},

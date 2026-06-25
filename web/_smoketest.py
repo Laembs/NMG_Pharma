@@ -9,7 +9,9 @@ import urllib.request
 import urllib.parse
 import http.cookiejar
 
-BASE = "http://127.0.0.1:8000"
+import os
+
+BASE = os.environ.get("SMOKE_BASE", "http://127.0.0.1:8000")
 
 
 def session():
@@ -27,6 +29,15 @@ def get(op, path, allow_redirect=True):
         return e.code, e.read().decode("utf-8", "replace")
 
 
+def get_bytes(op, path):
+    req = urllib.request.Request(BASE + path)
+    try:
+        r = op.open(req)
+        return r.getcode(), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+
+
 def post(op, path, data):
     body = urllib.parse.urlencode(data).encode()
     req = urllib.request.Request(BASE + path, data=body, method="POST")
@@ -35,6 +46,24 @@ def post(op, path, data):
         return r.getcode(), r.read().decode("utf-8", "replace"), r.geturl()
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", "replace"), BASE + path
+
+
+def post_file(op, path, fields, filefield, filename, filebytes):
+    """Multipart-POST (für Datei-Upload)."""
+    boundary = "----nmgsmoke1234567890"
+    parts = []
+    for k, v in fields.items():
+        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n")
+    head = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{filefield}\"; "
+            f"filename=\"{filename}\"\r\nContent-Type: text/plain\r\n\r\n")
+    body = "".join(parts).encode() + head.encode() + filebytes + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request(BASE + path, data=body, method="POST")
+    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+    try:
+        r = op.open(req)
+        return r.getcode(), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
 
 
 def login(op, firma, login_, pw):
@@ -87,6 +116,46 @@ def main():
                                         "notiz": "Sommer"})
     code, html = get(a, "/personal/abwesenheiten")
     check("Firma A: Abwesenheit gespeichert", "Sommer" in html)
+    check("Firma A: Urlaub geht als Antrag (Status beantragt)", "beantragt" in html.lower())
+
+    # 3b) Genehmigungs-Workflow: ersten offenen Antrag genehmigen
+    import re
+    m = re.search(r'/personal/abwesenheiten/(\d+)/genehmigen', html)
+    check("Firma A: Genehmigen-Button vorhanden", bool(m))
+    if m:
+        aid = m.group(1)
+        post(a, f"/personal/abwesenheiten/{aid}/genehmigen", {})
+        code, html = get(a, "/personal/abwesenheiten")
+        check("Firma A: Antrag ist genehmigt", "genehmigt" in html.lower())
+
+    # 3c) Kalender lädt und zeigt den Monat
+    code, html = get(a, "/personal/kalender")
+    check("Firma A: Kalender == 200", code == 200)
+    check("Firma A: Kalender zeigt Wochentage", "Mo" in html and "So" in html)
+
+    # 3d) Zeiterfassung: stempeln + Übersicht
+    code, html = get(a, "/personal/zeiterfassung")
+    check("Firma A: Zeiterfassung == 200", code == 200)
+    post(a, "/personal/zeiterfassung/stempeln", {"mitarbeiter_id": "1"})
+    post(a, "/personal/zeiterfassung", {"mitarbeiter_id": "1", "datum": f"{yr}-06-02",
+                                        "kommt": "08:00", "geht": "16:30", "pause_minuten": "30"})
+    code, html = get(a, "/personal/zeiterfassung")
+    check("Firma A: Zeitbuchung sichtbar (08:00)", "08:00" in html)
+
+    # 3e) Digitale Personalakte: Upload + Download
+    code, html = get(a, "/personal/1/akte")
+    check("Firma A: Personalakte == 200", code == 200)
+    code, _ = post_file(a, "/personal/1/akte/upload",
+                        {"kategorie": "Vertrag", "titel": "Arbeitsvertrag"},
+                        "datei", "vertrag.txt", b"DEMO-VERTRAG-INHALT")
+    code, html = get(a, "/personal/1/akte")
+    check("Firma A: Dokument in Akte sichtbar", "Arbeitsvertrag" in html)
+    m = re.search(r'/personal/dokument/(\d+)"', html)
+    if m:
+        code, raw = get_bytes(a, f"/personal/dokument/{m.group(1)}")
+        check("Firma A: Dokument-Download liefert Inhalt", b"DEMO-VERTRAG-INHALT" in raw)
+    else:
+        check("Firma A: Dokument-Download-Link vorhanden", False)
 
     # 4) Firma B: KEIN Personal -> Lizenz-Gate
     b = session()

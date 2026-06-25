@@ -73,6 +73,13 @@ def tenant_db_path(slug: str) -> Path:
     return p
 
 
+def tenant_dir(slug: str) -> Path:
+    """Ordner einer Firma – für Datei-Ablage (z. B. Personalakte-Dokumente)."""
+    p = TENANTS_DIR / slug
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def tenant_con(slug: str) -> sqlite3.Connection:
     """Öffnet die Fachdaten-DB einer Firma und stellt das Schema sicher."""
     con = sqlite3.connect(tenant_db_path(slug))
@@ -82,11 +89,19 @@ def tenant_con(slug: str) -> sqlite3.Connection:
     return con
 
 
-def _ensure_tenant_schema(con: sqlite3.Connection) -> None:
-    """Personal-Schema – 1:1 abgeleitet aus app/personal_app.py:init_db.
+def _add_col(con: sqlite3.Connection, table: str, col: str, ddl: str) -> None:
+    """Fügt eine Spalte hinzu, falls sie noch fehlt (einfache Migration)."""
+    cols = {r["name"] for r in con.execute(f"PRAGMA table_info({table})").fetchall()}
+    if col not in cols:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
-    Bewusst identisch gehalten, damit Logik/Queries zwischen Desktop und Web
-    austauschbar bleiben. Weitere Module ergänzen hier später ihre Tabellen.
+
+def _ensure_tenant_schema(con: sqlite3.Connection) -> None:
+    """Personal-Schema – abgeleitet aus app/personal_app.py:init_db, erweitert um
+    Genehmigungs-Workflow (Abwesenheiten), Zeiterfassung und Personalakte.
+
+    Bewusst schema-kompatibel gehalten, damit Logik/Queries zwischen Desktop und
+    Web austauschbar bleiben. Spaltenerweiterungen laufen über _add_col (idempotent).
     """
     con.execute("""CREATE TABLE IF NOT EXISTS tbl_mitarbeiter (
         id INTEGER PRIMARY KEY AUTOINCREMENT, vorname TEXT, name TEXT,
@@ -99,6 +114,25 @@ def _ensure_tenant_schema(con: sqlite3.Connection) -> None:
     con.execute("""CREATE TABLE IF NOT EXISTS tbl_abwesenheit (
         id INTEGER PRIMARY KEY AUTOINCREMENT, mitarbeiter_id INTEGER NOT NULL,
         art TEXT DEFAULT 'Urlaub', von TEXT, bis TEXT, notiz TEXT, unterart TEXT)""")
+
+    # Zeiterfassung (Kommt/Geht je Tag, Pause in Minuten)
+    con.execute("""CREATE TABLE IF NOT EXISTS tbl_zeiterfassung (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, mitarbeiter_id INTEGER NOT NULL,
+        datum TEXT NOT NULL, kommt TEXT, geht TEXT,
+        pause_minuten INTEGER DEFAULT 0, notiz TEXT)""")
+
+    # Digitale Personalakte (Metadaten; Dateien liegen im Tenant-Ordner)
+    con.execute("""CREATE TABLE IF NOT EXISTS tbl_dokument (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, mitarbeiter_id INTEGER NOT NULL,
+        kategorie TEXT DEFAULT 'Sonstiges', titel TEXT, dateiname TEXT,
+        ablage TEXT, groesse INTEGER DEFAULT 0,
+        hochgeladen_am TEXT DEFAULT (datetime('now')))""")
+
+    # ── Migrationen für Bestands-DBs ─────────────────────────────────────────
+    _add_col(con, "tbl_abwesenheit", "status", "status TEXT DEFAULT 'beantragt'")
+    _add_col(con, "tbl_abwesenheit", "entschieden_am", "entschieden_am TEXT")
+    _add_col(con, "tbl_abwesenheit", "erstellt_am", "erstellt_am TEXT")
+    _add_col(con, "tbl_mitarbeiter", "sollstunden_tag", "sollstunden_tag REAL DEFAULT 8")
     con.commit()
 
 
