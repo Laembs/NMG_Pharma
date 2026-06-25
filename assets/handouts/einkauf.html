@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8">
+<title>Handout · Einkauf – NMGone</title>
+<link rel="stylesheet" href="_handout.css">
+</head><body>
+<div class="sheet">
+  <header>
+    <div class="kicker">NMGone · Einkauf</div>
+    <h1>Einkauf</h1>
+    <p>Beschaffung aus dem EU-Ausland, §129-Margen, Aufgaben &amp; Meldungen</p>
+  </header>
+  <div class="body">
+
+    <p class="lead">Die Einkauf-App ist ein eigenes Programm mit eigenem Taskleisten-Symbol – das
+    „Sorglos-Paket" für den Einkäufer. Sie bündelt Aufgaben/Wiedervorlagen, die Lieferanten und
+    Beschaffungsquellen aus dem EU-Ausland sowie die Margenkalkulation nach §129 SGB V. Alles teilt
+    sich die NMGone-Datenbank.</p>
+    <div class="box tip"><h4>💡 Zum Ausprobieren</h4>
+      Unter „Einstellungen" → „Beispieldaten anlegen" (oder den Button auf dem leeren Dashboard) legst
+      du Beispiel-Lieferanten, -Quellen und -Aufgaben an; vorhandene Daten bleiben erhalten.</div>
+
+    <h2>1 · Aufgaben &amp; Meldungen</h2>
+    <p>Jede Wiedervorlage, Anfrage, Reklamation oder ein Rückruf wird als Aufgabe mit Fälligkeit und
+    Priorität erfasst – optional einem Lieferanten zugeordnet. Fällige und überfällige Aufgaben
+    erscheinen automatisch als Meldungen oben auf dem Dashboard.</p>
+    <ol class="steps">
+      <li>Links <b>„Aufgaben &amp; Meldungen"</b> öffnen, <b>„Neue Aufgabe"</b> wählen.</li>
+      <li><b>Titel, Kategorie, Priorität und Fälligkeit</b> eintragen (Schnell-Buttons: Heute, +1 Woche …).</li>
+      <li>Optional einen <b>Lieferanten</b> zuordnen.</li>
+      <li><b>Erledigte</b> Aufgaben verschwinden aus den Meldungen.</li>
+    </ol>
+
+    <h2>2 · Lieferanten &amp; Beschaffungsquellen</h2>
+    <p>Unter <b>„Lieferanten"</b> pflegst du Bezugsquellen je Land mit Währung, Lieferzeit,
+    Mindestbestellwert, Zahlungsziel und GDP-Zertifizierung. Unter <b>„Beschaffungsquellen"</b>
+    hinterlegst du pro Artikel (PZN) den Einkaufspreis in Fremdwährung und die Mindestabnahme – die
+    Basis für Marge und Bestellvorschlag.</p>
+
+    <h2>3 · Margenrechner §129</h2>
+    <p>Der Margenrechner führt Import-EK (Fremdwährung) → deutscher AVP/Festbetrag → garantierter
+    Preisabstand zusammen. Du gibst eine PZN ein (oder lädst sie aus den NMG-Stammdaten); der Rechner
+    prüft den nach §129 erforderlichen Preisabstand, zeigt den maximal zulässigen Import-AVP, die
+    Ersparnis für die Kasse und deine eigene Marge.</p>
+
+    <h2>4 · Beschaffungsvorschlag</h2>
+    <p>Der „Beschaffungsvorschlag" wertet alle aktiven Quellen aus und zeigt je Artikel automatisch die
+    <b>beste Quelle</b> (höchste Marge) – mit §129-Status, EK in EUR, Marge und dem Absatz aus den
+    Kasse-Verkäufen. Über die Filter blendest du nur §129-konforme Artikel oder nur Artikel mit Absatz
+    ein. Per <b>„Nachbestellen"</b> legst du direkt eine Aufgabe beim passenden Lieferanten an.</p>
+
+    <h2>5 · Export</h2>
+    <p>Lieferanten, Beschaffungsquellen und der Beschaffungsvorschlag lassen sich jeweils per
+    <b>„⤓ Excel"</b> als formatierte Tabelle exportieren (Ablage im Ausgaben-Ordner).</p>
+    <div class="box tip"><h4>💡 Parameter pflegen</h4>
+      Die §129-Staffel (z. B. AVP bis 100 € → 15 %) ist in den Einstellungen anpassbar. Wechselkurse
+      pflegst du unter „Wechselkurse" als Tageskurs (EUR je 1 Einheit). Alle Tabellen sortierst du per
+      Klick auf die Spaltenüberschrift.</div>
+
+  </div>
+  <footer>
+    <span>NMGone · Einkauf · Mitarbeiter-Handout</span>
+    <span>Stand: Juni 2026</span>
+  </footer>
+</div></body></html>

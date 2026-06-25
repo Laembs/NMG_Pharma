@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8">
+<title>Handout · Bedarfsanalyse – NMGone</title>
+<link rel="stylesheet" href="_handout.css">
+</head><body>
+<div class="sheet">
+  <header>
+    <div class="kicker">NMGone · Bedarfsanalyse</div>
+    <h1>Bedarfsanalyse erstellen</h1>
+    <p>Apotheken-Abverkäufe einlesen, mit dem NMG-Sortiment abgleichen, Einsparpotenzial zeigen</p>
+  </header>
+  <div class="body">
+
+    <p class="lead">Die Bedarfsanalyse (früher „Neue Auswertung") liest die Abverkaufs- bzw.
+    Verbrauchsdaten einer Apotheke ein und gleicht jede PZN mit dem NMG-Sortiment ab. Sie zeigt,
+    welche Artikel auf NMG-Produkte umgestellt werden können, welches Einsparpotenzial entsteht und
+    welche wirkstoffgleichen NMG-Alternativen es gibt – getrennt nach Partnerkondition (PK) und
+    Zukunftswerk (ZW).</p>
+
+    <h2>1 · Bedarfsanalyse öffnen</h2>
+    <p>In der linken Navigation auf <b>„Bedarfsanalyse"</b> klicken.</p>
+
+    <h2>2 · Schritt für Schritt zur Auswertung</h2>
+    <ol class="steps">
+      <li><b>Kundentyp wählen</b> – Partnerkondition (PK) oder Zukunftswerk (ZW). Die Auswahl wird gemerkt.</li>
+      <li><b>Kundennummer (optional)</b> – kann leer bleiben; die Zuordnung ist auch nach der Auswertung möglich.</li>
+      <li><b>Kundenname / Apotheke</b> eintragen, z. B. „Rosen Apotheke Forst".</li>
+      <li><b>Auswertungsname</b> vergeben – Name für Ausgabeordner und die gespeicherte Analyse.</li>
+      <li><b>Rohdaten auswählen</b> – die Abverkaufs-/Verbrauchsdatei der Apotheke laden (Formate siehe Schritt 3).</li>
+      <li><b>Auswertungsvorlage (optional)</b> – optisches Layout der Ausgabe; kann leer bleiben.</li>
+      <li><b>Auswertung starten</b> – läuft im Hintergrund; am Ende öffnet sich der Ergebnis-Ordner.</li>
+    </ol>
+
+    <h2>3 · Welche Dateien gehen?</h2>
+    <table>
+      <tr><th>Format</th><th>Hinweis</th></tr>
+      <tr><td>.xlsx / .xlsm</td><td>Modernes Excel.</td></tr>
+      <tr><td>.xls</td><td>Auch „unechte" .xls aus Apothekensoftware (intern XML/HTML) werden gelesen.</td></tr>
+      <tr><td>.csv / .txt</td><td>Trennzeichen (; , Tab |) und Umlaut-Kodierung werden automatisch erkannt.</td></tr>
+    </table>
+    <p><b>Pflichtspalten:</b> PZN und eine Mengen-/Absatzspalte (z. B. „Packungen", „Abverkäufe 6 Monate",
+    „Verbrauch", „Menge"). Optional: Artikelname, DF, Pck, Hersteller, EK.</p>
+    <div class="box warn"><h4>⚠ Format nicht erkannt?</h4>
+      Bei einem nicht unterstützten Format kommt sofort eine Meldung. Sind nur die Spalten unklar,
+      öffnet sich der <b>Rohdaten-Format-Assistent</b>, in dem PZN- und Mengenspalte manuell zugeordnet
+      werden.</div>
+
+    <h2>4 · Mehrfache PZN – Mengen summieren</h2>
+    <p>Verkaufslisten enthalten dieselbe PZN oft mehrfach (jede Zeile = ein Verkauf), teils mit
+    negativen Mengen (Retouren). Beim Start fragt das Programm:</p>
+    <ul>
+      <li><b>Ja (empfohlen bei Verkaufslisten):</b> Je PZN eine Zeile, Mengen addiert (Retouren gegengerechnet) – schneller und echter Bedarf.</li>
+      <li><b>Nein:</b> Jede Zeile bleibt einzeln stehen.</li>
+    </ul>
+    <div class="box tip"><h4>💡 Tipp bei großen Listen</h4>
+      25.000 Verkaufszeilen werden durch Summieren auf wenige tausend eindeutige PZN verdichtet – die
+      Auswertung läuft dadurch in Sekunden statt Minuten.</div>
+
+    <h2>5 · Drei Ergebnis-Bausteine</h2>
+    <p>Für jede Auswertung wird ein eigener Kundenordner (getrennt nach PK/ZW) angelegt und nach
+    Abschluss geöffnet. Er enthält:</p>
+    <ul>
+      <li><b>Detail-Auswertung (Excel)</b> – jede PZN mit NMG-Treffer, Rabatt und Umsatz.</li>
+      <li><b>Tabellenblatt „Wirkstoff &amp; NMG-Austausch"</b> – Wirkstoff je Artikel und passende NMG-Produkte (z. B. Adalimumab → YUFLYMA, Infliximab → REMSIMA).</li>
+      <li><b>Kurzbericht (Excel + PDF)</b> – verdichtete Management-Übersicht mit Diagrammen fürs Gespräch.</li>
+    </ul>
+
+    <h2>6 · Die Detail-Auswertung – wichtigste Spalten</h2>
+    <table>
+      <tr><th>Spalte</th><th>Bedeutung</th></tr>
+      <tr><td>im Sortiment</td><td>„X" = NMG-Treffer bzw. Austausch möglich.</td></tr>
+      <tr><td>PZN NMG / APU NMG</td><td>NMG-Artikel, auf den umgestellt werden kann, samt Apothekeneinkaufspreis.</td></tr>
+      <tr><td>NMG Rabatt</td><td>Rabattsatz auf den NMG-Artikel.</td></tr>
+      <tr><td>NMG Rabatt in Euro</td><td>APU × Rabattsatz (je Packung).</td></tr>
+      <tr><td>NMG Rabatt Gesamt</td><td>Rabatt in Euro × Menge = Einsparpotenzial.</td></tr>
+      <tr><td>austauschbar gegen</td><td>Alternativen – leer, wenn bereits „PZN NMG" vorhanden ist (Details im Wirkstoff-Blatt).</td></tr>
+    </table>
+
+    <h2>7 · Der Kurzbericht</h2>
+    <p>Verdichtete Übersicht für den Apotheken-Inhaber bzw. das Vertriebsgespräch: Einsparpotenzial 6
+    und 12 Monate nebeneinander, Top-10 Hebel-Artikel (Balkendiagramm), Umstellungsgrad (Donut) und
+    Kennzahlen (Positionen gesamt, davon umstellbar, Gesamtumsatz).</p>
+
+    <h2>8 · Gelbe Liste (Biosimilars) pflegen</h2>
+    <p>Über <b>Daten aktualisieren → Kachel „Gelbe Liste (Biosimilars)" → Import</b> wird die
+    Biosimilar-Wissensbasis eingelesen (Spalten: Wirkstoff, Arzneimittel, Referenzprodukt). Nach dem
+    Import meldet das Programm, wie viele Wirkstoff-Gruppen, Produkte und PZN erkannt wurden.</p>
+    <div class="box"><h4>Gut zu wissen</h4>
+      Das Wirkstoff-Blatt funktioniert bereits ohne die Gelbe Liste. Der Import erweitert künftig den
+      Biosimilar-Abgleich (Original ↔ Biosimilar-Gruppen).</div>
+
+  </div>
+  <footer>
+    <span>NMGone · Bedarfsanalyse · Mitarbeiter-Handout</span>
+    <span>Stand: Juni 2026</span>
+  </footer>
+</div></body></html>

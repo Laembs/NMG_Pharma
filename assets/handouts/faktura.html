@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8">
+<title>Handout · Faktura – NMGone</title>
+<link rel="stylesheet" href="_handout.css">
+</head><body>
+<div class="sheet">
+  <header>
+    <div class="kicker">NMGone · Faktura</div>
+    <h1>Faktura</h1>
+    <p>Rechnungen, Gutschriften &amp; Quartalsvergütung – als fertiges PDF mit deinem Layout</p>
+  </header>
+  <div class="body">
+
+    <p class="lead">Die Faktura ist ein eigenes Programm mit eigenem Taskleisten-Symbol. Sie erstellt
+    Rechnungen, Gutschriften und Stornos sowie die Quartalsvergütung – jeweils als fertiges PDF mit
+    deinem Layout.</p>
+
+    <h2>1 · Eine neue Rechnung erstellen</h2>
+    <ol class="steps">
+      <li>Links <b>„Neue Rechnung"</b> öffnen (oder über „Aufträge" einen Auftrag wählen).</li>
+      <li><b>Kunde wählen</b> und <b>Positionen erfassen</b> (PZN, Menge, APU).</li>
+      <li><b>Belegdaten prüfen</b> (Belegnummer, Datum, Leistungsdatum).</li>
+      <li><b>Als PDF erzeugen</b> – der Beleg wird abgelegt und kann geöffnet werden.</li>
+    </ol>
+
+    <h2>2 · Belegnummern &amp; Layout</h2>
+    <p>Unter <b>„Einstellungen"</b> pflegst du Firmendaten, die Belegnummern und das Layout. Die
+    Nummernkreise sind frei konfigurierbar über Platzhalter:</p>
+    <table>
+      <tr><th>Platzhalter</th><th>Bedeutung</th></tr>
+      <tr><td class="mono">{JJJJ}</td><td>Jahr</td></tr>
+      <tr><td class="mono">{MM}</td><td>Monat</td></tr>
+      <tr><td class="mono">{NR}</td><td>Zähler (z. B. {NR:5} = 5-stellig)</td></tr>
+    </table>
+    <p>Im Layout legst du Akzentfarbe und Logo der Belege fest.</p>
+
+    <h2>3 · Quartalsvergütung</h2>
+    <p>Im Bereich <b>„Quartalsvergütung"</b> erzeugst du die Vergütungsbelege eines Quartals; die
+    zugehörige <b>„Staffel"</b> legst du unter Konfiguration fest.</p>
+
+    <div class="box tip"><h4>💡 Wie die PDFs entstehen</h4>
+      Die PDFs werden über Edge/Chrome im Hintergrund erzeugt. Ist kein Browser vorhanden, bleibt eine
+      HTML-Fassung des Belegs erhalten.</div>
+    <div class="box"><h4>Verbindung zu Retouren</h4>
+      Erzeugst du im Wareneingang &amp; Retouren-Modul eine Gutschrift, wird in der Faktura automatisch
+      ein offener Gutschrift-Beleg angelegt.</div>
+
+  </div>
+  <footer>
+    <span>NMGone · Faktura · Mitarbeiter-Handout</span>
+    <span>Stand: Juni 2026</span>
+  </footer>
+</div></body></html>

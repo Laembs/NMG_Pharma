@@ -369,11 +369,13 @@ def nmgone_steps() -> list[TourStep]:
 def kasse_steps() -> list[TourStep]:
     return [
         TourStep("Willkommen in der NMG Kasse",
-                 "Diese Einfuehrung zeigt dir den Ablauf: vom Wareneingang ueber "
-                 "das Lager bis zum Verkauf."),
-        TourStep("Wareneingang",
-                 "Erfasse hier eingehende Ware. Sie wandert anschliessend ins "
-                 "Lager und steht fuer den Verkauf bereit."),
+                 "Diese Einfuehrung zeigt dir den Ablauf: vom Lagerbestand bis "
+                 "zum Verkauf."),
+        TourStep("Artikel & Lager",
+                 "Unter 'Artikel' siehst du Artikelstamm und aktuellen "
+                 "Lagerbestand. Per Doppelklick auf eine Charge korrigierst du "
+                 "den Bestand. Ware angenommen wird in der App 'Wareneingang & "
+                 "Retouren'."),
         TourStep("Verkauf",
                  "Artikel suchen, in den Warenkorb legen, kassieren – der "
                  "Tagesabschluss fasst die Verkaeufe zusammen."),

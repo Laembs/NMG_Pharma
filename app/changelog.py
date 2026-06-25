@@ -5,6 +5,13 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V2.1 SP1", "2026-06-25", [
+        "Vier neue eigenstaendige Apps rund um die gemeinsame NMGone-Datenbank: 'Wareneingang & Retouren' (GDP-Chargenrueckverfolgung, Kundenqualifizierung, Retouren mit Gutschrift), 'Meldungen' (GDP-Meldewesen, Kuehlsachenkontrolle, Selbstinspektion), 'Einkauf' (Beschaffung EU-Ausland, §129-Margenrechner, Aufgaben/Meldungen) und 'Parameter' (Berechtigungen: wer darf was - Rollen, Overrides, Admin-PIN).",
+        "Demo-Modus: liegt nur eine Demo-Datenbank vor, startet das Programm automatisch im Demo-Betrieb und ist ueberall sichtbar als 'NMGone Demo' / [DEMO] markiert - Demo- und Echtbetrieb sind nicht mehr verwechselbar.",
+        "Kunden: Offline-Deutschlandkarte (ohne Internetzugang) fuer die Kundenuebersicht.",
+        "Kasse, Mitarbeiter & Personal, Hilfe und Dashboard ueberarbeitet und erweitert; neue Datenbank-Migrationen fuer die neuen Apps.",
+        "Neue Start-Verknuepfungen (.bat) fuer Wareneingang, Meldungen und Parameter.",
+    ]),
     ("V2.1.0", "2026-06-24", [
         "Neuer Meilenstein V2.1.0 - fasst den kompletten V2.0-Zyklus (V2.0 inkl. SP1-SP4: Bedarfsanalyse, Mitarbeiter & Personal, Kasse, Faktura, Report, neues Theme) zu einer stabilen Gesamtversion zusammen.",
         "Faktura ist jetzt direkt aus NMGone startbar - eigene Kachel auf der Apps-Seite und im Dashboard-Schnellzugriff (eigenes Fenster/Taskleisten-Icon).",

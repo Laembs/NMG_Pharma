@@ -1,11 +1,14 @@
 """NMG Kasse-App (ehem. Bestell-App) - gemeinsame Oberflaeche fuer NMGone
 (Toplevel) und die eigenstaendige Kasse-.exe (eigenes Fenster / Taskleisten-Icon).
 
-Warenkreislauf: Wareneingang -> Lagerbestand -> Verkauf. UI in KassePanel
-(tk.Frame) mit zwei Reitern:
-  - Verkauf      = Warenausgang an Apotheke (globale Kunden-/Artikelsuche,
-                   Bestand/Charge-Auswahl, Rabatt-Kaskade, Speichern -> Lager ab)
-  - Wareneingang = NMG-Artikel mit Charge/Verfall/Menge ins Lager buchen
+Warenkreislauf: Wareneingang -> Lagerbestand -> Verkauf. Der Wareneingang
+(Ware annehmen) wird in der App "Wareneingang & Retouren" (gdp_app.py) gebucht;
+die Kasse zeigt den resultierenden Lagerbestand in der Artikel-Uebersicht und
+verkauft daraus. UI in KassePanel (tk.Frame), u. a.:
+  - Verkauf = Warenausgang an Apotheke (globale Kunden-/Artikelsuche,
+              Bestand/Charge-Auswahl, Rabatt-Kaskade, Speichern -> Lager ab)
+  - Artikel = Artikelstamm + Lagerbestand (Doppelklick auf Charge = Bestand
+              korrigieren)
 
 Datenmodell siehe migrations.py.
 """
@@ -21,7 +24,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, filedialog
 
-from .config import DB_PATH, ASSETS_DIR, BASE_DIR
+from .config import DB_PATH, ASSETS_DIR, BASE_DIR, DEMO_SUFFIX
 from . import kasse_import
 from . import auftrag
 from . import lieferschein
@@ -372,7 +375,7 @@ class SearchBox(tk.Frame):
 
 
 class KassePanel(tk.Frame):
-    """Kasse-Oberflaeche: Reiter Verkauf + Wareneingang."""
+    """Kasse-Oberflaeche: Verkauf + Artikel/Lager (Wareneingang siehe gdp_app)."""
 
     def __init__(self, master, db_path=DB_PATH, on_close=None, nmgone_action=None):
         super().__init__(master, bg=SHELL_BG)
@@ -386,7 +389,6 @@ class KassePanel(tk.Frame):
         self.vk_cur = None            # aktuell gewaehlter Artikel (dict)
         self.vk_positions = []        # Liste ALLER Verkaufspositionen (dicts)
         self._vk_tree_map = {}        # Tree-iid -> Position (nur Bestellungen sichtbar)
-        self.we_pzn = None
         self.dm_kunde = None          # Defektmeldung: gewaehlte Apotheke
         self.dm_cur = None            # Defektmeldung: aktuell gewaehlter Artikel
         self.dm_positions = []        # Defektmeldung: Artikelliste
@@ -658,11 +660,11 @@ class KassePanel(tk.Frame):
         nav.grid(row=2, column=0, sticky="new", padx=8)
         self._nav_buttons = {}
         self._nav_bars = {}
-        for key, text, icon in (("verkauf", "Verkauf", "🛒"),
+        for key, text, icon in (("uebersicht", "Übersicht", "📊"),
+                                 ("verkauf", "Verkauf", "🛒"),
                                  ("vorbestellungen", "Vorbestellungen", "🕓"),
                                  ("verkaeufe", "Verkäufe", "🧾"),
                                  ("artikel", "Artikel", "🔍"),
-                                 ("wareneingang", "Wareneingang", "📦"),
                                  ("defektmeldung", "Defektmeldung", "⚠"),
                                  ("auswertung", "Auswertung", "📈"),
                                  ("protokoll", "Protokoll", "📝"),
@@ -715,11 +717,11 @@ class KassePanel(tk.Frame):
         page.rowconfigure(0, weight=1)
 
         self._views = {}
-        for key, builder in (("verkauf", self._build_verkauf),
+        for key, builder in (("uebersicht", self._build_uebersicht),
+                             ("verkauf", self._build_verkauf),
                              ("vorbestellungen", self._build_vorbestellungen),
                              ("verkaeufe", self._build_verkaeufe),
                              ("artikel", self._build_artikel),
-                             ("wareneingang", self._build_wareneingang),
                              ("defektmeldung", self._build_defektmeldung),
                              ("auswertung", self._build_auswertung),
                              ("protokoll", self._build_protokoll),
@@ -729,7 +731,7 @@ class KassePanel(tk.Frame):
             builder(frame)
             self._views[key] = frame
 
-        self._show_view("verkauf")
+        self._show_view("uebersicht")
         self._restyle_buttons(self)
 
     def _nav_hover(self, key, on):
@@ -742,27 +744,29 @@ class KassePanel(tk.Frame):
     def _show_view(self, key):
         self._current_view = key
         self._views[key].tkraise()
-        titel = {"verkauf": "Verkauf",
+        titel = {"uebersicht": "Übersicht",
+                 "verkauf": "Verkauf",
                  "vorbestellungen": "Vorbestellungen",
                  "verkaeufe": "Verkäufe",
                  "artikel": "Artikel-Übersicht",
-                 "wareneingang": "Wareneingang",
                  "defektmeldung": "Defektmeldung",
                  "auswertung": "Auswertung",
                  "protokoll": "Änderungs-Protokoll",
                  "einstellungen": "Einstellungen"}.get(key, key)
-        untertitel = {"verkauf": "Warenausgang an die Apotheke erfassen",
+        untertitel = {"uebersicht": "Tagesgeschäft, offene Aufgaben und Lager auf einen Blick",
+                      "verkauf": "Warenausgang an die Apotheke erfassen",
                       "vorbestellungen": "Offene Vorbestellungen disponieren – Kunden anrufen",
                       "verkaeufe": "Abgeschlossene Verkäufe & MSK-Status",
                       "artikel": "Artikelstamm und aktueller Lagerbestand",
-                      "wareneingang": "NMG-Ware mit Charge/Verfall ins Lager buchen",
                       "defektmeldung": "Nichtverfügbarkeit für die Apotheke bescheinigen",
                       "auswertung": "Verfall, Inventur und Umsatz/Tagesabschluss",
                       "protokoll": "Wer hat was wann geändert",
                       "einstellungen": "Firmendaten, Dokument-Texte und Parameter anpassen"}.get(key, "")
         self._view_title.config(text=titel)
         self._view_subtitle.config(text=untertitel)
-        if key == "vorbestellungen":
+        if key == "uebersicht":
+            self._refresh_uebersicht()
+        elif key == "vorbestellungen":
             self._refresh_vorbestellungen()
         elif key == "verkaeufe":
             self._refresh_verkaeufe()
@@ -800,6 +804,149 @@ class KassePanel(tk.Frame):
         except Exception as e:
             messagebox.showerror("NMGone", f"NMGone konnte nicht geöffnet werden:\n{e}",
                                  parent=self.winfo_toplevel())
+
+    # =============================================================== Übersicht
+    def _build_uebersicht(self, parent):
+        """Startseite: Tagesgeschäft, offene Aufgaben und Lager auf einen Blick."""
+        bar = tk.Frame(parent, bg=BG)
+        bar.pack(fill="x", padx=8, pady=(10, 0))
+        self._db_greeting = tk.Label(bar, text="", bg=BG, fg="#666", font=(theme.FONT, 10))
+        self._db_greeting.pack(side="left")
+        tk.Button(bar, text="🔄 Aktualisieren", command=self._refresh_uebersicht,
+                  bg="#d8e2ee", fg=ACCENT, relief="flat", font=(theme.FONT, 9, "bold"),
+                  padx=10, pady=4, cursor="hand2").pack(side="right")
+
+        # Reihe 1: Tagesgeschäft & offene Aufgaben
+        _, self._db_cards = self._metric_cards(parent, [
+            ("umsatz_heute", "Umsatz heute (netto)"),
+            ("verkaeufe_heute", "Verkäufe heute"),
+            ("offene_auftraege", "Offene Aufträge", "#b45309"),
+            ("offene_vorbestellungen", "Offene Vorbestellungen", "#b45309"),
+        ])
+        # Reihe 2: Lager & Verfall
+        _, self._db_cards2 = self._metric_cards(parent, [
+            ("verkaufswert", "Verkaufswert (APU)"),
+            ("lagerwert", "Lagerwert (EK)"),
+            ("bald_anzahl", "Bald ablaufend", "#b45309"),
+            ("abgelaufen_anzahl", "Abgelaufen", "#b00020"),
+        ])
+
+        # Zwei Panels nebeneinander: Verfall-Warnungen | letzte Verkäufe
+        mid = tk.Frame(parent, bg=BG)
+        mid.pack(fill="both", expand=True, padx=8, pady=(2, 10))
+        mid.columnconfigure(0, weight=1, uniform="db")
+        mid.columnconfigure(1, weight=1, uniform="db")
+        mid.rowconfigure(0, weight=1)
+
+        # -- Panel links: Handlungsbedarf Verfall --
+        left = tk.Frame(mid, bg="#f2f6fb", highlightbackground="#dde7f1", highlightthickness=1)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        lhead = tk.Frame(left, bg="#f2f6fb")
+        lhead.pack(fill="x", padx=10, pady=(8, 2))
+        tk.Label(lhead, text="⚠  Verfall im Blick", bg="#f2f6fb", fg=ACCENT,
+                 font=(theme.FONT, 11, "bold")).pack(side="left")
+        tk.Button(lhead, text="→ Auswertung", command=lambda: self._show_view("auswertung"),
+                  bg="#f2f6fb", fg=ACCENT, relief="flat", font=(theme.FONT, 9, "bold"),
+                  cursor="hand2", bd=0).pack(side="right")
+        ltf = tk.Frame(left, bg="#f2f6fb")
+        ltf.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        vcols = ("artikel", "charge", "verfall", "menge", "status")
+        self._db_verfall_tree = ttk.Treeview(ltf, columns=vcols, show="headings",
+                                              height=8, style="Kasse.Treeview")
+        for c, t, w in (("artikel", "Artikel", 170), ("charge", "Charge", 90),
+                        ("verfall", "Verfall", 70), ("menge", "Menge", 55),
+                        ("status", "Status", 90)):
+            self._db_verfall_tree.heading(c, text=t)
+            self._db_verfall_tree.column(c, width=w, anchor="w")
+        self._db_verfall_tree.tag_configure("abgelaufen", background="#fde2e2")
+        self._db_verfall_tree.tag_configure("bald", background="#fff4d6")
+        self._db_verfall_tree.pack(side="left", fill="both", expand=True)
+        vsb = tk.Scrollbar(ltf, orient="vertical", command=self._db_verfall_tree.yview)
+        vsb.pack(side="right", fill="y")
+        self._db_verfall_tree.configure(yscrollcommand=vsb.set)
+
+        # -- Panel rechts: letzte Verkäufe --
+        right = tk.Frame(mid, bg="#f2f6fb", highlightbackground="#dde7f1", highlightthickness=1)
+        right.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        rhead = tk.Frame(right, bg="#f2f6fb")
+        rhead.pack(fill="x", padx=10, pady=(8, 2))
+        tk.Label(rhead, text="🧾  Letzte Verkäufe", bg="#f2f6fb", fg=ACCENT,
+                 font=(theme.FONT, 11, "bold")).pack(side="left")
+        tk.Button(rhead, text="→ Verkäufe", command=lambda: self._show_view("verkaeufe"),
+                  bg="#f2f6fb", fg=ACCENT, relief="flat", font=(theme.FONT, 9, "bold"),
+                  cursor="hand2", bd=0).pack(side="right")
+        rtf = tk.Frame(right, bg="#f2f6fb")
+        rtf.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        lcols = ("nr", "datum", "apotheke", "status", "netto")
+        self._db_letzte_tree = ttk.Treeview(rtf, columns=lcols, show="headings",
+                                             height=8, style="Kasse.Treeview")
+        for c, t, w in (("nr", "Nr", 50), ("datum", "Datum", 80),
+                        ("apotheke", "Apotheke", 170), ("status", "Status", 70),
+                        ("netto", "Netto €", 80)):
+            self._db_letzte_tree.heading(c, text=t)
+            self._db_letzte_tree.column(c, width=w, anchor="w")
+        self._db_letzte_tree.pack(side="left", fill="both", expand=True)
+        rsb = tk.Scrollbar(rtf, orient="vertical", command=self._db_letzte_tree.yview)
+        rsb.pack(side="right", fill="y")
+        self._db_letzte_tree.configure(yscrollcommand=rsb.set)
+        self._db_letzte_tree.bind("<Double-1>", self._db_open_letzter)
+        tk.Label(right, text="Doppelklick öffnet den Verkauf.", bg="#f2f6fb", fg="#888",
+                 font=(theme.FONT, 8)).pack(anchor="w", padx=10, pady=(0, 8))
+
+    def _db_open_letzter(self, _e=None):
+        sel = self._db_letzte_tree.selection()
+        if not sel:
+            return
+        try:
+            bid = int(self._db_letzte_tree.item(sel[0], "values")[0])
+        except (ValueError, IndexError):
+            return
+        self._verkauf_detail_window(bid)
+
+    def _refresh_uebersicht(self):
+        if not hasattr(self, "_db_cards"):
+            return
+        try:
+            k = kasse_reports.dashboard_kennzahlen(self.db_path)
+        except Exception as exc:
+            self._db_greeting.config(text=f"Kennzahlen konnten nicht geladen werden: {exc}")
+            return
+        std = datetime.now().hour
+        gruss = "Guten Morgen" if std < 11 else "Guten Tag" if std < 18 else "Guten Abend"
+        self._db_greeting.config(
+            text=f"{gruss} – Überblick für {datetime.now():%d.%m.%Y}, "
+                 f"{k['pakete_heute']} Packungen heute verkauft.")
+        warn = k.get("warn_tage", 90)
+        self._db_cards["umsatz_heute"].config(text=_eur(k["umsatz_heute"]))
+        self._db_cards["verkaeufe_heute"].config(text=str(k["verkaeufe_heute"]))
+        self._db_cards["offene_auftraege"].config(text=str(k["offene_auftraege"]))
+        self._db_cards["offene_vorbestellungen"].config(text=str(k["offene_vorbestellungen"]))
+        self._db_cards2["verkaufswert"].config(text=_eur(k["verkaufswert"]))
+        self._db_cards2["lagerwert"].config(text=_eur(k["lagerwert"]))
+        self._db_cards2["bald_anzahl"].config(text=str(k["bald_anzahl"]))
+        self._db_cards2["abgelaufen_anzahl"].config(text=str(k["abgelaufen_anzahl"]))
+
+        self._db_verfall_tree.delete(*self._db_verfall_tree.get_children())
+        verfall = list(k["abgelaufen"]) + list(k["bald"])
+        if verfall:
+            for r in verfall:
+                label = "Abgelaufen" if r["status"] == "abgelaufen" else f"≤{warn} Tage"
+                self._db_verfall_tree.insert(
+                    "", "end",
+                    values=(r["artikelname"] or r["pzn"], r["charge"] or "—",
+                            r["verfall"] or "—", r["menge"], label),
+                    tags=(r["status"],))
+        else:
+            self._db_verfall_tree.insert("", "end", values=("Keine Verfall-Warnungen 👍", "", "", "", ""))
+
+        self._db_letzte_tree.delete(*self._db_letzte_tree.get_children())
+        if k["letzte_verkaeufe"]:
+            for bid, datum, apotheke, status, netto in k["letzte_verkaeufe"]:
+                self._db_letzte_tree.insert(
+                    "", "end",
+                    values=(bid, (datum or "")[:10], apotheke or "—", status, _eur(netto)))
+        else:
+            self._db_letzte_tree.insert("", "end", values=("", "", "Noch keine Verkäufe", "", ""))
 
     # ================================================================= Verkauf
     def _build_verkauf(self, parent):
@@ -1512,7 +1659,7 @@ class KassePanel(tk.Frame):
         self.vk_kunde = None
         self.vk_kunde_search.clear()
         self._render_kunde_card(None)
-        self._refresh_lager()
+        self._refresh_artikel()
         if hasattr(self, "vb_tree"):
             self._refresh_vorbestellungen()
         if hasattr(self, "vh_tree"):
@@ -2447,7 +2594,7 @@ class KassePanel(tk.Frame):
                 con.commit()
             self._log("Verkauf storniert", bid, apotheke, "Bestand zurückgebucht")
             self._refresh_verkaeufe()
-            self._refresh_lager()
+            self._refresh_artikel()
             win.destroy()
             messagebox.showinfo("Storniert", f"Verkauf #{bid} storniert, Bestand zurückgebucht.",
                                 parent=top)
@@ -2581,6 +2728,8 @@ class KassePanel(tk.Frame):
         tk.Label(win, text=art or pzn, font=(theme.FONT, 13, "bold"), fg=ACCENT,
                  bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
         tk.Label(win, text=f"PZN {pzn}", font=(theme.FONT, 9), fg="#555", bg=BG).pack(padx=18, anchor="w")
+        tk.Label(win, text="Doppelklick auf eine Charge: Bestand korrigieren.",
+                 font=(theme.FONT, 9), fg="#666", bg=BG).pack(padx=18, anchor="w", pady=(2, 0))
         tf = tk.Frame(win, bg=BG)
         tf.pack(fill="both", expand=True, padx=18, pady=(8, 8))
         tree = ttk.Treeview(tf, columns=("charge", "verfall", "bestand"), show="headings",
@@ -2593,12 +2742,31 @@ class KassePanel(tk.Frame):
         sb.pack(side="right", fill="y")
         tree.configure(yscrollcommand=sb.set)
         _make_treeview_sortable(tree)
-        chargen = self._lager_chargen(pzn)
-        if chargen:
-            for ch, vf, m in chargen:
-                tree.insert("", "end", values=(ch or "—", vf or "—", m))
-        else:
-            tree.insert("", "end", values=("(kein Bestand)", "", ""))
+        # iid -> (charge, verfall, menge) mit Rohwerten (fuer die Korrektur).
+        row_map = {}
+
+        def _fill():
+            tree.delete(*tree.get_children())
+            row_map.clear()
+            chargen = self._lager_chargen(pzn)
+            if chargen:
+                for ch, vf, m in chargen:
+                    iid = tree.insert("", "end", values=(ch or "—", vf or "—", m))
+                    row_map[iid] = (ch or "", vf or "", m)
+            else:
+                tree.insert("", "end", values=("(kein Bestand)", "", ""))
+
+        def _korr(_ev=None):
+            sel2 = tree.selection()
+            if not sel2 or sel2[0] not in row_map:
+                return
+            ch, vf, m = row_map[sel2[0]]
+            if self._lager_korrektur_dialog(pzn, ch, vf, int(m)):
+                _fill()
+                self._refresh_artikel()
+
+        _fill()
+        tree.bind("<Double-1>", _korr)
         tk.Button(win, text="Schließen", command=win.destroy, padx=14, pady=4).pack(pady=(0, 14))
         self._restyle_buttons(win)
         win.lift()
@@ -3383,172 +3551,19 @@ class KassePanel(tk.Frame):
         self._run_report(lambda: kasse_reports.protokoll_pdf(
             zeilen, untertitel=untertitel or None))
 
-    # ============================================================ Wareneingang
-    def _build_wareneingang(self, parent):
-        rbar = tk.Frame(parent, bg=BG)
-        rbar.pack(fill="x", padx=8, pady=(10, 0))
-        tk.Button(rbar, text="🕓  Vorbestellungs-Report (offene Vorbestellungen / Kunden anrufen)",
-                  command=lambda: self._show_view("vorbestellungen"), bg="#d8e2ee", fg=ACCENT,
-                  relief="flat", font=(theme.FONT, 9, "bold"), padx=10, pady=4,
-                  cursor="hand2").pack(side="left")
-
-        form_card, form = _make_card(parent, "Artikel ins Lager buchen", "nur NMG")
-        form_card.pack(fill="x", padx=8, pady=(8, 6))
-
-        whead = tk.Frame(form, bg=BG)
-        whead.pack(fill="x")
-        tk.Label(whead, text="Artikel suchen:", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left")
-        tk.Button(whead, text="📥 Wareneingangs-Liste importieren", command=self._import_wareneingang,
-                  font=(theme.FONT, 8), padx=6, pady=1).pack(side="right")
-        self.we_search = SearchBox(
-            form,
-            fetch=lambda t: [(f"{pzn}  ·  {name}", (pzn, name)) for pzn, name in self._search_nmg(t)],
-            on_select=self._we_pick_artikel, height=5,
-        )
-        self.we_search.pack(fill="x", pady=(2, 4))
-        self.we_artikel_label = tk.Label(form, text="Kein Artikel gewählt.", bg=BG,
-                                         fg="#999", font=(theme.FONT, 9, "italic"))
-        self.we_artikel_label.pack(anchor="w")
-
-        row = tk.Frame(form, bg=BG)
-        row.pack(fill="x", pady=(6, 0))
-        self.we_charge_var = tk.StringVar()
-        self.we_verfall_var = tk.StringVar()
-        self.we_menge_var = tk.StringVar()
-        self.we_ek_var = tk.StringVar()
-        # EK ist mit dem APU vorbelegt (Standard), kann aber abweichend erfasst werden.
-        for label, var, w in (("Charge", self.we_charge_var, 12), ("Verfall", self.we_verfall_var, 10),
-                              ("Menge", self.we_menge_var, 6), ("EK €", self.we_ek_var, 8)):
-            tk.Label(row, text=label + ":", bg=BG, font=(theme.FONT, 9, "bold")).pack(side="left", padx=(0, 4))
-            tk.Entry(row, textvariable=var, width=w).pack(side="left", padx=(0, 12))
-        tk.Button(row, text="Einbuchen", command=self._wareneingang_buchen,
-                  bg=ACCENT, fg="white", font=(theme.FONT, 10, "bold"),
-                  padx=12, pady=3).pack(side="left")
-
-        lager_card, lager = _make_card(parent, "Lagerbestand",
-                                       "Doppelklick = Bestand korrigieren")
-        lager_card.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-        lcols = ("pzn", "artikel", "charge", "verfall", "menge", "ek", "wert")
-        lh = {"pzn": "PZN", "artikel": "Artikel", "charge": "Charge", "verfall": "Verfall",
-              "menge": "Bestand", "ek": "EK €", "wert": "Lagerwert €"}
-        tf = tk.Frame(lager, bg=BG)
-        tf.pack(fill="both", expand=True)
-        tree = ttk.Treeview(tf, columns=lcols, show="headings", height=10,
-                            style="Kasse.Treeview")
-        for c in lcols:
-            tree.heading(c, text=lh[c])
-            tree.column(c, width=240 if c == "artikel" else 90,
-                        anchor="e" if c in ("ek", "wert") else "w")
-        tree.pack(side="left", fill="both", expand=True)
-        sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
-        sb.pack(side="right", fill="y")
-        tree.configure(yscrollcommand=sb.set)
-        _make_treeview_sortable(tree)
-        tree.bind("<Double-1>", self._lager_korrektur)
-        self.we_lager_tree = tree
-        self._refresh_lager()
-
-    def _we_pick_artikel(self, payload):
-        pzn, name = payload
-        self.we_pzn = pzn
-        self.we_artikel_label.config(text=f"Gewählt: {pzn} · {name}", fg=ACCENT)
-        # EK mit dem APU vorbelegen (Standard); kann ueberschrieben werden.
-        det = self._artikel_details(pzn)
-        apu = det.get("apu") if det else None
-        self.we_ek_var.set(f"{apu:.2f}".replace(".", ",") if apu is not None else "")
-
-    def _refresh_lager(self):
-        self.we_lager_tree.delete(*self.we_lager_tree.get_children())
-        with self._conn() as con:
-            rows = con.execute(
-                "SELECT pzn, artikelname, charge, verfall, menge, ek FROM tbl_lagerbestand "
-                "WHERE menge <> 0 ORDER BY artikelname, verfall"
-            ).fetchall()
-        for pzn, art, charge, verfall, menge, ek in rows:
-            wert = _eur((ek or 0) * (menge or 0)) if ek is not None else "—"
-            self.we_lager_tree.insert("", "end", values=(
-                pzn, art or "", charge or "", verfall or "", menge, _eur(ek), wert))
-
-    def _wareneingang_buchen(self):
+    # ====================================================== Bestandskorrektur
+    def _lager_korrektur_dialog(self, pzn, charge, verfall, menge):
+        """Bestand einer Lagerzeile (PZN/Charge/Verfall) manuell korrigieren.
+        Grund ist Pflicht (revisionssicher protokolliert). Buchen von Ware
+        erfolgt in der App 'Wareneingang & Retouren'. -> True wenn geaendert."""
         top = self.winfo_toplevel()
-        pzn = self.we_pzn
-        if not pzn:
-            messagebox.showwarning("Wareneingang", "Bitte zuerst einen NMG-Artikel wählen.", parent=top)
-            return
-        charge = self.we_charge_var.get().strip()
-        verfall = _normalize_verfall(self.we_verfall_var.get())
-        if verfall is None:
-            messagebox.showwarning("Wareneingang", "Verfalldatum ungültig. Bitte als MM/JJ oder "
-                                   "MM/JJJJ eingeben (Monat 1–12), z. B. 01/2027.", parent=top)
-            return
-        try:
-            menge = int(self.we_menge_var.get().strip())
-            if menge <= 0:
-                raise ValueError
-        except ValueError:
-            messagebox.showwarning("Wareneingang", "Menge muss eine positive Zahl sein.", parent=top)
-            return
-        with self._conn() as con:
-            row = con.execute(
-                "SELECT artikelname, apu FROM tbl_nmg_stamm WHERE pzn=? LIMIT 1", (pzn,)
-            ).fetchone()
-            if not row:
-                messagebox.showwarning("Wareneingang",
-                                       f"PZN {pzn} ist kein NMG-Artikel.", parent=top)
-                return
-            artikelname = row[0]
-            apu = row[1]
-            # EK aus dem Feld (deutsche Eingabe), leer/ungueltig -> APU als Standard.
-            ek_text = self.we_ek_var.get().strip().replace(",", ".")
-            try:
-                ek = float(ek_text) if ek_text else apu
-            except ValueError:
-                ek = apu
-            jetzt = datetime.now().isoformat(timespec="seconds")
-            cur = con.execute(
-                "INSERT INTO tbl_wareneingang(datum, lieferant, bearbeiter) VALUES(?,?,?)",
-                (jetzt, "NMG", getpass.getuser()))
-            we_id = cur.lastrowid
-            con.execute(
-                "INSERT INTO tbl_wareneingang_positionen(we_id,pzn,artikelname,charge,verfall,menge,ek) "
-                "VALUES(?,?,?,?,?,?,?)",
-                (we_id, pzn, artikelname, charge, verfall, menge, ek))
-            upd = con.execute(
-                "UPDATE tbl_lagerbestand SET menge = menge + ?, ek=COALESCE(?, ek), aktualisiert_am = ? "
-                "WHERE pzn=? AND COALESCE(charge,'')=? AND COALESCE(verfall,'')=?",
-                (menge, ek, jetzt, pzn, charge, verfall))
-            if upd.rowcount == 0:
-                con.execute(
-                    "INSERT INTO tbl_lagerbestand(pzn,artikelname,charge,verfall,menge,ek,aktualisiert_am) "
-                    "VALUES(?,?,?,?,?,?,?)",
-                    (pzn, artikelname, charge, verfall, menge, ek, jetzt))
-            con.commit()
-        self._log("Wareneingang", details=f"{artikelname} (PZN {pzn}) +{menge} · "
-                  f"Charge {charge or '–'} · Verf {verfall or '–'}")
-
-        self.we_pzn = None
-        self.we_search.clear()
-        self.we_artikel_label.config(text="Kein Artikel gewählt.", fg="#999")
-        for var in (self.we_charge_var, self.we_verfall_var, self.we_menge_var, self.we_ek_var):
-            var.set("")
-        self._refresh_lager()
-
-    def _lager_korrektur(self, _e):
-        top = self.winfo_toplevel()
-        sel = self.we_lager_tree.selection()
-        if not sel:
-            return
-        vals = self.we_lager_tree.item(sel[0], "values")
-        pzn, _art, charge, verfall, menge = vals[:5]
         neu = simpledialog.askinteger(
             "Bestand korrigieren",
             f"Neuer Bestand für\nPZN {pzn} · Charge {charge or '—'} · Verf {verfall or '—'}\n"
             f"(0 entfernt die Zeile):",
             parent=top, initialvalue=int(menge), minvalue=0)
-        if neu is None:
-            return
-        if neu == int(menge):
-            return
+        if neu is None or neu == int(menge):
+            return False
         # Pflicht-Kommentar: WARUM wird manuell korrigiert? (Abbrechen = keine Aenderung.)
         grund = simpledialog.askstring(
             "Bestandskorrektur – Grund (Pflicht)",
@@ -3557,13 +3572,13 @@ class KassePanel(tk.Frame):
             + (" (0 entfernt die Lagerzeile).\n\n" if neu == 0 else ".\n\n")
             + "Bitte den Grund eingeben (Pflicht):", parent=top)
         if grund is None:
-            return
+            return False
         grund = grund.strip()
         if not grund:
             messagebox.showwarning("Bestandskorrektur",
                                    "Ein Grund (Kommentar) ist Pflicht – Korrektur abgebrochen.",
                                    parent=top)
-            return
+            return False
         with self._conn() as con:
             if neu == 0:
                 con.execute(
@@ -3577,7 +3592,7 @@ class KassePanel(tk.Frame):
             con.commit()
         self._log("Bestandskorrektur", details=f"PZN {pzn} · Charge {charge or '–'} · "
                   f"{menge} -> {neu} · Grund: {grund}")
-        self._refresh_lager()
+        return True
 
     # ==================================================================== Import
     def _pick_file(self):
@@ -3604,23 +3619,6 @@ class KassePanel(tk.Frame):
             f"Erkannte Spalten: {', '.join(r['spalten'])}\n\n"
             f"Neu: {r['neu']} · Aktualisiert: {r['aktualisiert']} · "
             f"Übersprungen: {r['uebersprungen']}", parent=top)
-
-    def _import_wareneingang(self):
-        top = self.winfo_toplevel()
-        path = self._pick_file()
-        if not path:
-            return
-        try:
-            r = kasse_import.import_wareneingang(self.db_path, path)
-        except Exception as e:
-            messagebox.showerror("Wareneingang-Import", self._import_fehlertext(path, e), parent=top)
-            return
-        self._refresh_lager()
-        messagebox.showinfo(
-            "Wareneingang-Import",
-            f"Quelle: {r['quelle']} · {r['gelesen']} Zeilen gelesen.\n\n"
-            f"Neue Chargen: {r['neu_chargen']} · Bestand erhöht: {r['erhoehte_chargen']}\n"
-            f"Kein NMG-Artikel: {r['kein_nmg']} · Übersprungen: {r['uebersprungen']}", parent=top)
 
     def _import_historie(self, als_vorbestellung):
         top = self.winfo_toplevel()
@@ -3678,7 +3676,7 @@ def run_standalone():
     except Exception:
         pass
     root = tk.Tk()
-    root.title("NMG Kasse")
+    root.title(f"NMG Kasse{DEMO_SUFFIX}")
     root.geometry("1040x660")          # Groesse im wiederhergestellten Zustand
     root.minsize(860, 580)
     # Im Vollbild (maximiert) starten. 'zoomed' = Windows; sonst -zoomed/Bildschirmgroesse.

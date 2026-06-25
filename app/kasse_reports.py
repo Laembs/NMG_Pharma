@@ -222,6 +222,57 @@ def tage_mit_umsatz(db_path) -> list[str]:
     return [r[0] for r in rows if r[0]]
 
 
+def dashboard_kennzahlen(db_path, heute: date | None = None, warn_tage: int = 90) -> dict:
+    """Buendelt alle Kennzahlen fuer die Uebersicht/Startseite der Kasse in EINEM
+    Aufruf: Umsatz heute, offene Aufgaben, Lager-/Verkaufswert, Verfall-Warnungen
+    und die letzten Verkaeufe. Liest nur, schreibt nichts."""
+    heute = heute or date.today()
+    heute_str = heute.isoformat()
+    ta = tagesabschluss_data(db_path, heute_str)
+    inv = inventur_rows(db_path)
+    verf = verfall_rows(db_path, heute=heute, warn_tage=warn_tage)
+    bald = [r for r in verf if r["status"] == "bald"]
+    abgelaufen = [r for r in verf if r["status"] == "abgelaufen"]
+    with sqlite3.connect(db_path) as con:
+        # Offene Aufträge = noch nicht kommissioniert (MSK), nicht storniert, mit
+        # mindestens einer echten Bestellposition (reine Vorbestellungen zaehlen nicht).
+        offene_auftraege = con.execute(
+            "SELECT COUNT(*) FROM tbl_bestellungen b "
+            "WHERE COALESCE(b.status,'offen')<>'storniert' AND COALESCE(b.msk_erfasst,0)=0 "
+            "AND EXISTS(SELECT 1 FROM tbl_bestellpositionen p WHERE p.bestell_id=b.id "
+            "AND COALESCE(p.bestellart,'Bestellung')='Bestellung')"
+        ).fetchone()[0]
+        offene_vorbestellungen = con.execute(
+            "SELECT COUNT(*) FROM tbl_bestellpositionen "
+            "WHERE COALESCE(bestellart,'Bestellung')='Vorbestellung'"
+        ).fetchone()[0]
+        letzte = con.execute(
+            "SELECT b.id, COALESCE(b.datum,''), COALESCE(b.apotheke,''), "
+            "COALESCE(b.status,'offen'), "
+            "COALESCE(SUM(CASE WHEN COALESCE(p.bestellart,'Bestellung')='Bestellung' "
+            "THEN p.apu*p.menge*(1-COALESCE(p.rabatt_prozent,0)/100.0) ELSE 0 END),0) "
+            "FROM tbl_bestellungen b LEFT JOIN tbl_bestellpositionen p ON p.bestell_id=b.id "
+            "GROUP BY b.id ORDER BY b.id DESC LIMIT 8"
+        ).fetchall()
+    return {
+        "heute": heute_str,
+        "umsatz_heute": ta["netto"],
+        "verkaeufe_heute": ta["anzahl"],
+        "pakete_heute": ta["pakete"],
+        "offene_auftraege": offene_auftraege,
+        "offene_vorbestellungen": offene_vorbestellungen,
+        "verkaufswert": sum((r["wert"] or 0) for r in inv),
+        "lagerwert": sum((r["lagerwert"] or 0) for r in inv),
+        "artikel_im_lager": len({r["pzn"] for r in inv if (r["menge"] or 0) > 0}),
+        "bald_anzahl": len(bald),
+        "abgelaufen_anzahl": len(abgelaufen),
+        "bald": bald[:8],
+        "abgelaufen": abgelaufen[:8],
+        "letzte_verkaeufe": letzte,
+        "warn_tage": warn_tage,
+    }
+
+
 # ── PDF-Bausteine ────────────────────────────────────────────────────────────
 def _new_pdf(orientation="P"):
     from fpdf import FPDF

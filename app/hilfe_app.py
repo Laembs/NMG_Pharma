@@ -16,15 +16,40 @@ from __future__ import annotations
 
 import os
 import sys
+import webbrowser
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 
-from .config import ASSETS_DIR
+from .config import ASSETS_DIR, DEMO_SUFFIX
 from . import theme
 
 # Wurzel fuer die Hilfe-Bilder:  assets/hilfe/<thema-key>/<datei>
 HELP_IMG_DIR = ASSETS_DIR / "hilfe"
+# Druckbare Handouts (HTML -> im Browser als PDF druckbar):  assets/handouts/<datei>.html
+HANDOUT_DIR = ASSETS_DIR / "handouts"
+
+# Thema -> zugehoeriges druckbares Handout. Jedes Thema mit Eintrag bekommt im
+# Kopf den Button "Handout drucken (PDF)". "faq" hat bewusst keins.
+TOPIC_HANDOUTS = {
+    "start":          "index.html",
+    "dashboard":      "dashboard.html",
+    "bedarfsanalyse": "bedarfsanalyse.html",
+    "produktanalyse": "produktanalyse.html",
+    "kunden":         "kunden.html",
+    "auskunft":       "pzn_auskunft.html",
+    "markt":          "markt_insights.html",
+    "kasse":          "kasse.html",
+    "gdp":            "gdp.html",
+    "meldungen":      "meldungen.html",
+    "einkauf":        "einkauf.html",
+    "faktura":        "faktura.html",
+    "personal":       "personal.html",
+    "auswertungen":   "auswertungen.html",
+    "schulbank":      "schulbank.html",
+    "daten":          "daten.html",
+    "backup":         "backup.html",
+}
 
 
 # ── Inhalt ───────────────────────────────────────────────────────────────────
@@ -43,7 +68,12 @@ TOPICS = [
     ("bedarfsanalyse","📊", "Bedarfsanalyse"),
     ("produktanalyse","📈", "Produktanalyse"),
     ("kunden",        "👥", "Kunden"),
+    ("auskunft",      "🔎", "PZN-Schnellauskunft"),
+    ("markt",         "📦", "Markt-Insights"),
     ("kasse",         "🛒", "Kasse"),
+    ("gdp",           "📦", "Wareneingang & Retouren"),
+    ("meldungen",     "🔔", "Meldungen"),
+    ("einkauf",       "🛒", "Einkauf"),
     ("faktura",       "🧾", "Faktura"),
     ("personal",      "👤", "Mitarbeiter"),
     ("auswertungen",  "📑", "Auswertungen"),
@@ -150,30 +180,90 @@ HELP_CONTENT = {
                     "zusammen – sie sollte eindeutig und gepflegt sein."),
         ],
     },
+    "auskunft": {
+        "title": "PZN-Schnellauskunft",
+        "subtitle": "Alles zu einem Artikel auf einen Blick – ohne ganze Auswertung.",
+        "blocks": [
+            ("p", "Die PZN-Schnellauskunft beantwortet in Sekunden „Was wissen wir über diesen "
+                  "Artikel?“. Sie sammelt zu einer PZN alle verfügbaren Informationen aus allen "
+                  "Tabellen der Datenbank. Reine Anzeige – es werden keine Daten verändert."),
+            ("h", "Artikel suchen"),
+            ("step", [
+                "Suchbegriff eingeben – eine PZN (auch unvollständig) oder Teil des Artikelnamens.",
+                "In der Trefferliste den gewünschten Artikel anklicken.",
+            ]),
+            ("img", "01_auskunft.png", "Die PZN-Schnellauskunft mit Suchfeld und 360°-Artikelinfo."),
+            ("h", "Was die Auskunft zeigt"),
+            ("ul", [
+                "NMG-Stamm: Artikelname, Hersteller, APU, Taxe-EK/-VK, Menge, Einheit, Wirkstoffe.",
+                "Artikelstamm: Darreichungsform, Packung, Hersteller, Einkaufspreis (EK).",
+                "Rabatt: hinterlegter NMG-Rabattsatz und Quelle.",
+                "Lieferfähigkeit, bester effektiver EK, Biosimilar-Gruppe und Austausch zu NMG.",
+            ]),
+            ("tip", "Ruft eine Apotheke an und fragt nach Preis, Rabatt oder einer NMG-Alternative, "
+                    "hast du die Antwort sofort – ohne in mehreren Listen zu blättern."),
+        ],
+    },
+    "markt": {
+        "title": "Markt-Insights",
+        "subtitle": "Was fragen unsere Apotheken-Kunden tatsächlich nach?",
+        "blocks": [
+            ("p", "Die Markt-Insights aggregieren über alle bisher erstellten Auswertungen hinweg, "
+                  "was die Apotheken-Kunden wirklich nachfragen – das Gesamtbild statt einer einzelnen "
+                  "Apotheke."),
+            ("h", "Zwei Sichtweisen"),
+            ("ul", [
+                "NMG-Sicht – sortiert nach Rabatt-Potenzial: wo steckt für uns der größte Hebel "
+                "(nur NMG-Treffer).",
+                "Bedarf-Sicht – sortiert nach Gesamt-Absatz: was wird am meisten nachgefragt, egal ob "
+                "NMG oder nicht.",
+            ]),
+            ("img", "01_markt.png", "Markt-Insights mit umschaltbarer NMG- und Bedarf-Sicht."),
+            ("tip", "Die Bedarf-Sicht ist ideal für Einkauf und Sortimentsplanung, die NMG-Sicht für "
+                    "den Vertrieb. Je mehr Bedarfsanalysen erstellt wurden, desto aussagekräftiger."),
+        ],
+    },
     "kasse": {
         "title": "Kasse",
-        "subtitle": "Wareneingang → Lager → Verkauf an Apotheken.",
+        "subtitle": "Lagerbestand führen und an Apotheken verkaufen.",
         "blocks": [
             ("p", "Die Kasse ist ein eigenes Programm mit eigenem Taskleisten-Symbol. "
-                  "Sie bildet den Weg der Ware ab: Wareneingang buchen, Lagerbestand "
-                  "führen und an Apotheken verkaufen."),
-            ("tip", "Beim Wareneingang ist das Feld „EK €“ (Einkaufspreis) mit dem APU "
-                    "vorbelegt und kann überschrieben werden. Daraus errechnet die Kasse "
-                    "überall den Lagerwert (EK × Bestand) – zusätzlich zum Verkaufswert "
-                    "(APU × Bestand). Beim Import wird eine EK-Spalte automatisch übernommen."),
+                  "Sie führt den Lagerbestand und verkauft an Apotheken. Die "
+                  "Warenannahme (Wareneingang mit Charge und Verfall) läuft über die "
+                  "eigene App „Wareneingang & Retouren“ – beide teilen sich dieselbe "
+                  "Datenbank, gebuchte Ware steht also sofort in der Kasse bereit."),
+            ("h", "Übersicht – die Startseite"),
+            ("p", "Beim Öffnen zeigt die Kasse jetzt zuerst den Reiter „Übersicht“: "
+                  "Umsatz und Verkäufe von heute, offene Aufträge und Vorbestellungen, "
+                  "Verkaufs- und Lagerwert sowie eine Warnliste mit bald ablaufenden und "
+                  "abgelaufenen Chargen. Rechts stehen die letzten Verkäufe – ein "
+                  "Doppelklick öffnet den jeweiligen Verkauf. Über „🔄 Aktualisieren“ "
+                  "werden alle Kennzahlen neu berechnet."),
+            ("tip", "Der Einkaufspreis (EK) wird bei der Warenannahme in der App "
+                    "„Wareneingang & Retouren“ erfasst (dort mit dem APU vorbelegt und "
+                    "überschreibbar). Die Kasse zeigt daraus überall den Lagerwert "
+                    "(EK × Bestand) – zusätzlich zum Verkaufswert (APU × Bestand)."),
             ("img", "01_kasse.png", "Die Kasse mit Verkaufsmaske."),
             ("h", "Typischer Ablauf"),
             ("step", [
-                "Wareneingang erfassen – der Lagerbestand erhöht sich.",
+                "Ware annehmen – in der App „Wareneingang & Retouren“; der Lagerbestand erhöht sich.",
                 "Verkauf an eine Apotheke anlegen (Kunde wählen).",
                 "Artikel/Mengen erfassen, abschließen.",
                 "Der Verkauf landet sofort in den Auswertungen.",
             ]),
-            ("img", "02_wareneingang.png", "Reiter „Wareneingang“: NMG-Ware mit Charge, Verfall und EK ins Lager buchen."),
-            ("h", "Artikel-Übersicht mit Verkaufswert"),
-            ("p", "Im Reiter „Artikel“ zeigt eine Leiste unten den Gesamtbestand und den "
-                  "Verkaufswert (APU × Bestand). Sobald du nach PZN oder Artikel suchst, "
-                  "beziehen sich die Summen nur noch auf die angezeigte Auswahl."),
+            ("h", "Artikel-Übersicht & Lagerbestand"),
+            ("p", "Im Reiter „Artikel“ siehst du den Artikelstamm und den aktuellen "
+                  "Lagerbestand. Eine Leiste unten zeigt Gesamtbestand, Verkaufswert "
+                  "(APU × Bestand) und Lagerwert (EK × Bestand); sobald du nach PZN oder "
+                  "Artikel suchst, beziehen sich die Summen nur noch auf die angezeigte "
+                  "Auswahl. Ein Doppelklick auf einen Artikel öffnet seine Chargen und Verfälle."),
+            ("h", "Bestand korrigieren"),
+            ("p", "Im Chargen-Fenster (Doppelklick auf einen Artikel) korrigierst du den "
+                  "Bestand einer einzelnen Charge per Doppelklick – z. B. nach Inventur "
+                  "oder Bruch. Ein Grund ist Pflicht und wird revisionssicher im Protokoll "
+                  "festgehalten. Das Einbuchen neu eingetroffener Ware geschieht dagegen in "
+                  "der App „Wareneingang & Retouren“."),
+            ("img", "02_artikel.png", "Reiter „Artikel“: Artikelstamm, Lagerbestand und Bestandskorrektur per Doppelklick auf eine Charge."),
             ("h", "Freie Position"),
             ("p", "Über „➕ Freie Position“ (unter der Positionsliste) erfasst du einen "
                   "frei benannten Posten mit eigenem Preis, Menge und Rabatt – z. B. einen "
@@ -237,6 +327,159 @@ HELP_CONTENT = {
                      "nicht mitgezählt."),
         ],
     },
+    "einkauf": {
+        "title": "Einkauf",
+        "subtitle": "Beschaffung EU-Ausland, §129-Margen, Aufgaben & Meldungen.",
+        "blocks": [
+            ("p", "Die Einkauf-App ist ein eigenes Programm mit eigenem Taskleisten-Symbol – "
+                  "das „Sorglos-Paket“ für den Einkäufer. Sie bündelt Aufgaben/Wiedervorlagen, "
+                  "die Lieferanten und Beschaffungsquellen aus dem EU-Ausland sowie die "
+                  "Margenkalkulation nach §129 SGB V. Alles teilt sich die NMGone-Datenbank."),
+            ("img", "01_dashboard.png", "Das Einkauf-Dashboard mit Kennzahlen und Meldungen."),
+            ("tip", "Zum Ausprobieren: unter „Einstellungen“ → „Beispieldaten anlegen“ klicken (oder "
+                    "den Button auf dem leeren Dashboard). Das legt Beispiel-Lieferanten, -Quellen und "
+                    "-Aufgaben an; vorhandene Daten bleiben erhalten."),
+            ("h", "Aufgaben & Meldungen"),
+            ("p", "Jede Wiedervorlage, Anfrage, Reklamation oder ein Rückruf wird als Aufgabe mit "
+                  "Fälligkeit und Priorität erfasst – optional einem Lieferanten zugeordnet. "
+                  "Fällige und überfällige Aufgaben erscheinen automatisch als Meldungen oben auf "
+                  "dem Dashboard („melde dich bei …“) und lassen sich dort direkt abhaken."),
+            ("step", [
+                "Links „Aufgaben & Meldungen“ öffnen, „Neue Aufgabe“ wählen.",
+                "Titel, Kategorie, Priorität und Fälligkeit eintragen (Schnell-Buttons: Heute, +1 Woche …).",
+                "Optional einen Lieferanten zuordnen.",
+                "Erledigte Aufgaben verschwinden aus den Meldungen.",
+            ]),
+            ("h", "Lieferanten & Beschaffungsquellen"),
+            ("p", "Unter „Lieferanten“ pflegst du Bezugsquellen je Land mit Währung, Lieferzeit, "
+                  "Mindestbestellwert, Zahlungsziel und GDP-Zertifizierung. Unter "
+                  "„Beschaffungsquellen“ hinterlegst du pro Artikel (PZN) den Einkaufspreis in "
+                  "Fremdwährung und die Mindestabnahme – die Basis für Marge und Bestellvorschlag."),
+            ("img", "02_quellen.png", "Beschaffungsquellen mit EK in Fremdwährung, EUR-Umrechnung und Marge."),
+            ("h", "Margenrechner §129"),
+            ("p", "Der Margenrechner führt Import-EK (Fremdwährung) → deutscher AVP/Festbetrag → "
+                  "garantierter Preisabstand zusammen. Du gibst eine PZN ein (oder lädst sie aus den "
+                  "NMG-Stammdaten), der Rechner prüft den nach §129 erforderlichen Preisabstand, zeigt "
+                  "den maximal zulässigen Import-AVP, die Ersparnis für die Kasse und deine eigene Marge."),
+            ("img", "03_marge.png", "Margenrechner §129 mit Status-Banner, Kennzahlen und Marge."),
+            ("h", "Beschaffungsvorschlag"),
+            ("p", "Der „Beschaffungsvorschlag“ wertet alle aktiven Quellen aus und zeigt je Artikel "
+                  "automatisch die beste Quelle (höchste Marge) – mit §129-Status, EK in EUR, Marge "
+                  "und dem Absatz aus den Kasse-Verkäufen. Über die Filter blendest du nur "
+                  "§129-konforme Artikel oder nur Artikel mit Absatz ein. Per „Nachbestellen“ legst "
+                  "du direkt eine Aufgabe beim passenden Lieferanten an."),
+            ("h", "Export"),
+            ("p", "Lieferanten, Beschaffungsquellen und der Beschaffungsvorschlag lassen sich jeweils "
+                  "per „⤓ Excel“ als formatierte Tabelle exportieren (Ablage im Ausgaben-Ordner)."),
+            ("tip", "Die §129-Staffel (z. B. AVP bis 100 € → 15 %) ist in den Einstellungen anpassbar. "
+                    "Die Wechselkurse pflegst du unter „Wechselkurse“ als Tageskurs (EUR je 1 Einheit). "
+                    "Alle Tabellen lassen sich per Klick auf die Spaltenüberschrift sortieren."),
+        ],
+    },
+    "gdp": {
+        "title": "Wareneingang & Retouren (GDP)",
+        "subtitle": "Chargen-Rückverfolgung, Kundenqualifizierung & Retouren.",
+        "blocks": [
+            ("p", "Diese App ist das Großhandelsmodul. Hier nimmst du Ware an "
+                  "(Wareneingang mit Charge und Verfall) und wickelst sie GDP-konform "
+                  "ab: Chargen-Rückverfolgung, Kundenqualifizierung und Retouren. Eigenes "
+                  "Fenster mit eigenem Taskleisten-Symbol, gemeinsame Datenbank mit NMGone – "
+                  "eingebuchte Ware steht sofort im Lager der Kasse bereit."),
+            ("tip", "Kühlsachenkontrolle, Selbstinspektion und das Meldewesen liegen "
+                    "jetzt in der eigenen App „Meldungen“ – so bleibt der Wareneingang "
+                    "übersichtlich."),
+            ("img", "01_uebersicht.png", "Die Übersicht mit Kennzahlen und offenen GDP-Pflichten."),
+            ("h", "Übersicht (Ampel)"),
+            ("p", "Die Startseite zeigt offene Retouren, ungeprüfte Wareneingänge, "
+                  "abgelaufene Lizenzen und Chargen mit baldigem Verfall. Jede Meldung "
+                  "springt direkt in den passenden Bereich."),
+            ("h", "Wareneingang annehmen & GDP-Prüfung"),
+            ("p", "Oben buchst du eingetroffene NMG-Ware ins Lager: Artikel suchen, "
+                  "Charge, Verfall, Menge und EK erfassen, Lieferant/Lieferschein angeben "
+                  "und „Einbuchen“. Die Ware steht damit sofort im Lager der Kasse. "
+                  "Alternativ importierst du eine Wareneingangs-Liste (Excel/CSV/TXT)."),
+            ("step", [
+                "Ware einbuchen (oder Liste importieren) – sie erscheint in der Liste darunter.",
+                "Eingang wählen und „GDP-Prüfung erfassen“: Transport-Temperatur, Unversehrtheit und Dokumente prüfen.",
+                "Ergebnis wird als GDP-konform / nicht konform festgeschrieben.",
+            ]),
+            ("h", "Chargen-Rückverfolgung & Rückruf"),
+            ("p", "Charge oder PZN eingeben: links siehst du den Eingang, rechts jede "
+                  "Apotheke, die diese Charge erhalten hat. Im Rückruffall „Rückruf "
+                  "auslösen“ und über „Verteiler exportieren“ die Liste der betroffenen "
+                  "Apotheken (mit E-Mail) als CSV sichern."),
+            ("img", "02_rueckverfolgung.png", "Chargen-Rückverfolgung Kunde ↔ Charge mit Rückruf-Verteiler."),
+            ("h", "Kundenqualifizierung"),
+            ("p", "Nur lizenzierte Apotheken dürfen beliefert werden. Hier hinterlegst du "
+                  "Lizenznummer, -typ und Gültigkeit. Abgelaufene oder nicht freigegebene "
+                  "Apotheken werden rot markiert."),
+            ("h", "Retouren & Reklamationen"),
+            ("p", "Meldet eine Apotheke telefonisch oder per E-Mail eine Rücksendung, "
+                  "erfasst ein Mitarbeiter sie hier. Danach ist sie für alle sichtbar "
+                  "(das Dashboard zeigt die Zahl offener Retouren)."),
+            ("step", [
+                "„Neue Retoure / Reklamation“: Apotheke, Artikel/Charge, Menge und Grund erfassen.",
+                "„Prüfen“ nimmt den Vorgang in Bearbeitung.",
+                "„Gutschrift“ erzeugt einen Gutschrift-Beleg (Anbindung an die Faktura).",
+                "„In Retourenbestand“ nimmt die Ware in Quarantäne, „Vernichten“ dokumentiert die Entsorgung.",
+            ]),
+            ("img", "03_retouren.png", "Retouren-Workflow von der Erfassung bis zur Gutschrift."),
+            ("h", "Retourenbestand: freigeben oder abschreiben"),
+            ("p", "Zurückgenommene Ware geht NICHT direkt in den Verkauf, sondern in "
+                  "einen gesperrten Retourenbestand (Quarantäne). Im Bereich "
+                  "„Retourenbestand“ steht der Bestand als „Normalbestand (Retourenbestand)“, "
+                  "z. B. 25 (5) – also 25 verkaufbar, 5 in Quarantäne."),
+            ("step", [
+                "Zeile im Retourenbestand wählen.",
+                "„In Bestand freigeben“ – einwandfreie Ware wird wieder verkaufbar (geht in den Normalbestand).",
+                "oder „Abschreiben“ – mit Grund; die Menge wird ausgebucht und der EK-Wert dokumentiert.",
+            ]),
+            ("img", "04_retourenbestand.png", "Retourenbestand mit Freigabe und Abschreibung."),
+            ("tip", "Jeder Schritt landet im revisionssicheren Protokoll – inklusive "
+                    "Wer/Was/Wann. Protokoll und Abschreibungen lassen sich als CSV exportieren."),
+        ],
+    },
+    "meldungen": {
+        "title": "Meldungen",
+        "subtitle": "GDP-Meldewesen, Kühlsachenkontrolle & Selbstinspektion.",
+        "blocks": [
+            ("p", "Die Meldungen-App bündelt die Qualitäts- und Überwachungsaufgaben an "
+                  "einem Ort – früher steckten sie verstreut im Wareneingang. Eigenes "
+                  "Fenster mit eigenem Taskleisten-Symbol, gemeinsame Datenbank mit NMGone."),
+            ("img", "01_uebersicht.png", "Die Übersicht mit offenen Meldungen und Überwachungspflichten."),
+            ("h", "Übersicht (Ampel)"),
+            ("p", "Die Startseite zeigt offene und kritische Meldungen, überfällige "
+                  "Vorgänge, offene Temperatur-Abweichungen und fällige Selbstinspektionen. "
+                  "Jede Meldung springt direkt in den passenden Bereich."),
+            ("h", "Meldungen erfassen & bearbeiten"),
+            ("step", [
+                "„Neue Meldung“: Art (Abweichung, Qualitätsmangel, Reklamation …), Titel, "
+                "Priorität, Betrifft, Verantwortlichen und Fälligkeit erfassen.",
+                "Über „In Bearbeitung“ und „Erledigt“ den Status führen.",
+                "„Maßnahme / CAPA“ dokumentiert die Korrektur- und Vorbeugemaßnahme.",
+                "Doppelklick öffnet die Detailansicht mit dem kompletten Verlauf.",
+            ]),
+            ("img", "02_meldung_neu.png", "Eine neue Meldung mit Typ, Priorität und Verantwortlichem."),
+            ("tip", "Über den Status-Filter siehst du wahlweise nur offene oder alle "
+                    "Meldungen; „Export CSV“ sichert die Liste."),
+            ("h", "Kühlsachenkontrolle / Temperatur"),
+            ("p", "Messpunkte mit Soll-Grenzen (z. B. Kühlschrank 2–8 °C) verwalten und "
+                  "Messungen erfassen. Liegt ein Wert außerhalb der Grenze, wird er als "
+                  "Abweichung markiert – dazu eine Maßnahme (CAPA) dokumentieren und auf "
+                  "„behoben“ setzen."),
+            ("img", "03_kuehlkette.png", "Messpunkte mit Soll-Grenzen und erfasste Temperaturmessungen."),
+            ("h", "Selbstinspektion"),
+            ("step", [
+                "„Neue Inspektion (Vorlage)“ erzeugt eine GDP-Checkliste.",
+                "Jeden Prüfpunkt per Doppelklick auf ok / Abweichung / n.z. setzen.",
+                "Zu Abweichungen eine Maßnahme erfassen, am Ende abschließen.",
+            ]),
+            ("img", "04_inspektion.png", "Selbstinspektion mit Checkliste und Maßnahmen."),
+            ("tip", "Alle Vorgänge (Meldungen, Kühlkette, Inspektion) landen im "
+                    "revisionssicheren Protokoll – es ist dasselbe Protokoll wie im "
+                    "Wareneingang und lässt sich als CSV exportieren."),
+        ],
+    },
     "faktura": {
         "title": "Faktura",
         "subtitle": "Rechnungen, Gutschriften & Quartalsvergütung.",
@@ -286,6 +529,20 @@ HELP_CONTENT = {
             ("p", "Urlaub und andere Abwesenheiten pflegst du im Kalender (Monats- oder "
                   "Jahresansicht). Der Urlaubsverfall wird mitgeführt."),
             ("img", "03_abwesenheiten.png", "Abwesenheiten: Urlaubskalender mit Monats- und Jahresansicht."),
+            ("h", "Anträge genehmigen oder ablehnen"),
+            ("p", "Jede neu eingetragene Abwesenheit ist zunächst ein Antrag (Status "
+                  "„Beantragt“) und wird im Kalender schraffiert mit ⏳ dargestellt. In der "
+                  "Ansicht „Anträge“ entscheiden die als personalverantwortlich markierten "
+                  "Mitarbeiter über jeden Antrag: Genehmigen oder Ablehnen (mit Grund). Erst "
+                  "ein genehmigter Antrag zählt auf das Urlaubskonto."),
+            ("step", [
+                "Mitarbeiter trägt seine Abwesenheit ein → Status „Beantragt“.",
+                "In „Anträge“ den Eintrag wählen und „Genehmigen“ oder „Ablehnen“ klicken.",
+                "Die Entscheidung (wer/wann, ggf. Ablehnungsgrund) wird mitgespeichert.",
+            ]),
+            ("tip", "Zweite Stufe: In der Parameter-App (Einstellungen) lässt sich aktivieren, "
+                    "dass die Geschäftsführung jeden vom Personalverantwortlichen genehmigten "
+                    "Antrag zusätzlich freigeben muss."),
         ],
     },
     "auswertungen": {
@@ -423,10 +680,19 @@ class HilfePanel(tk.Frame):
 
         self.header = tk.Frame(content, bg=theme.BG)
         self.header.grid(row=0, column=0, sticky="ew", padx=28, pady=(22, 8))
-        self._title_lbl = tk.Label(self.header, text="", bg=theme.BG, fg=theme.INK,
+        # Rechts: Handout als druckbares PDF oeffnen (nur Themen mit Handout)
+        self._handout_btn = tk.Button(
+            self.header, text="📄  Handout drucken (PDF)", relief="flat",
+            bg=theme.PRIMARY, fg="white", activebackground=theme.SIDEBAR_ACTIVE,
+            activeforeground="white", bd=0, font=(theme.FONT, 10, "bold"),
+            cursor="hand2", padx=14, pady=8, command=self._open_handout)
+        # Links: Titel + Untertitel
+        head_text = tk.Frame(self.header, bg=theme.BG)
+        head_text.pack(side="left", fill="x", expand=True)
+        self._title_lbl = tk.Label(head_text, text="", bg=theme.BG, fg=theme.INK,
                                     font=(theme.FONT, 22, "bold"))
         self._title_lbl.pack(anchor="w")
-        self._subtitle_lbl = tk.Label(self.header, text="", bg=theme.BG, fg=theme.MUTED,
+        self._subtitle_lbl = tk.Label(head_text, text="", bg=theme.BG, fg=theme.MUTED,
                                        font=(theme.FONT, 12))
         self._subtitle_lbl.pack(anchor="w", pady=(2, 0))
 
@@ -464,6 +730,13 @@ class HilfePanel(tk.Frame):
         data = HELP_CONTENT.get(key, {})
         self._title_lbl.configure(text=data.get("title", ""))
         self._subtitle_lbl.configure(text=data.get("subtitle", ""))
+        # Handout-Button passend zum Thema ein-/ausblenden
+        self._current_handout = TOPIC_HANDOUTS.get(key)
+        if self._current_handout:
+            if not self._handout_btn.winfo_ismapped():
+                self._handout_btn.pack(side="right", anchor="n", padx=(12, 0))
+        else:
+            self._handout_btn.pack_forget()
         self._render_blocks(key, data.get("blocks", []))
         self._canvas.yview_moveto(0.0)
 
@@ -573,6 +846,25 @@ class HilfePanel(tk.Frame):
             except Exception:
                 return None
 
+    # ── Handout drucken ──────────────────────────────────────────────────────
+    def _open_handout(self):
+        """Oeffnet das Handout zum aktuellen Thema im Standardbrowser. Dort laesst
+        es sich ueber Strg+P als PDF speichern/ausdrucken."""
+        fn = getattr(self, "_current_handout", None)
+        if not fn:
+            return
+        path = HANDOUT_DIR / fn
+        if not path.exists():
+            messagebox.showinfo(
+                "Handout",
+                f"Das Handout wurde nicht gefunden:\n{path}\n\n"
+                "Es sollte unter assets/handouts/ liegen.")
+            return
+        try:
+            webbrowser.open(path.as_uri())
+        except Exception as exc:
+            messagebox.showwarning("Handout", f"Das Handout konnte nicht geöffnet werden:\n{exc}")
+
     # ── NMGone-Verbindung ────────────────────────────────────────────────────
     def _open_nmgone(self):
         if self._nmgone_action:
@@ -602,7 +894,7 @@ def run_standalone():
         except Exception:
             pass
     root = tk.Tk()
-    root.title("NMGone Hilfe")
+    root.title(f"NMGone{DEMO_SUFFIX} Hilfe")
     root.geometry("1180x800")
     root.minsize(980, 640)
     root.configure(bg=theme.BG)
