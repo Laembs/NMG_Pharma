@@ -17,6 +17,8 @@ Datenmodell siehe migrations.py (tbl_einkauf_*). Optik aus app/theme.py
 from __future__ import annotations
 
 import getpass
+import json
+import math
 import os
 import re
 import sqlite3
@@ -54,6 +56,49 @@ P129_DEFAULTS = {
 
 SETTING_DEFAULTS = {"standard_waehrung": "EUR"}
 SETTING_DEFAULTS.update(P129_DEFAULTS)
+
+# Annahmen für die Importkandidaten-Bewertung (in den Einstellungen pflegbar):
+#   kandidat_eu_ek_proz   = angenommener EU-Einkaufspreis als % des deutschen Preisniveaus
+#   kandidat_min_marge_proz = Schwelle für die §129-Machbarkeits-Ampel (grün ab dieser Marge)
+KANDIDAT_SETTINGS = {"kandidat_eu_ek_proz": "65", "kandidat_min_marge_proz": "5",
+                     "kandidat_fixkosten": "0"}
+SETTING_DEFAULTS.update(KANDIDAT_SETTINGS)
+
+# Pipeline-Status eines Importkandidaten.
+KANDIDAT_STATUS = ["Neu", "Angefragt", "Angebot/Muster", "Eingelistet", "Verworfen"]
+
+# Maximal gerenderte Tabellenzeilen (Performance). Filter/Export nutzen alle Treffer.
+IK_MAX_ROWS = 400
+
+# Optionale Spalten der Importkandidaten-Tabelle (key, Anzeigename) – in den
+# Einstellungen ein-/ausblendbar. PZN/Artikel/Hersteller sind immer sichtbar.
+IK_OPT_COLUMNS = [
+    ("typ", "Typ"), ("wirkstoff", "Wirkstoff"), ("absatz", "Absatz 6M"),
+    ("apo", "Apotheken"), ("konkurrenz", "Konkurrenz"), ("trend", "Trend"),
+    ("preis", "Preis"), ("ampel", "§129-Ampel"), ("potenzial", "Potenzial/Jahr"),
+    ("status", "Status"),
+]
+
+
+def kandidat_spalten() -> dict[str, bool]:
+    """Sichtbarkeit der optionalen Spalten (key->bool). Fehlende = sichtbar."""
+    vis = {k: True for k, _ in IK_OPT_COLUMNS}
+    raw = get_setting("kandidat_spalten", "")
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                for k in vis:
+                    if k in data:
+                        vis[k] = bool(data[k])
+        except (ValueError, TypeError):
+            pass
+    return vis
+
+
+def set_kandidat_spalten(vis: dict[str, bool]) -> None:
+    set_setting("kandidat_spalten", json.dumps({k: bool(v) for k, v in vis.items()},
+                                               ensure_ascii=False))
 
 # Start-Wechselkurse (EUR je 1 Einheit der Fremdwaehrung). Werden beim ersten
 # Start angelegt und sind danach in der App pflegbar (Tageskurs eintragen).
@@ -165,11 +210,42 @@ def _log(aktion: str, details: str = "") -> None:
         pass
 
 
+def _ensure_kandidat_status_tabelle(con) -> None:
+    """Pipeline-Status + Merkliste je Importkandidat (PZN). Idempotent."""
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS tbl_einkauf_kandidat_status("
+        "pzn TEXT PRIMARY KEY, status TEXT DEFAULT 'Neu', notiz TEXT DEFAULT '', "
+        "wiedervorlage TEXT DEFAULT '', beobachtet INTEGER DEFAULT 0, "
+        "geaendert_am TEXT, bearbeiter TEXT)")
+    # ALTER-Guard für bestehende DBs ohne 'beobachtet'.
+    cols = {r[1] for r in con.execute("PRAGMA table_info(tbl_einkauf_kandidat_status)")}
+    if "beobachtet" not in cols:
+        con.execute("ALTER TABLE tbl_einkauf_kandidat_status ADD COLUMN beobachtet INTEGER DEFAULT 0")
+
+
+def _ensure_lieferant_hersteller_tabelle(con) -> None:
+    """n:m-Verknüpfung Lieferant ↔ Hersteller (welcher Lieferant beschafft wessen
+    Produkte). Lieferant und Hersteller bleiben getrennte Stammdaten. Idempotent."""
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS tbl_einkauf_lieferant_hersteller("
+        "lieferant_id INTEGER NOT NULL, hersteller TEXT NOT NULL, "
+        "PRIMARY KEY(lieferant_id, hersteller), "
+        "FOREIGN KEY(lieferant_id) REFERENCES tbl_einkauf_lieferanten(id) ON DELETE CASCADE)")
+
+
 def _ensure_seed() -> None:
     """Legt beim ersten Start die Standard-Wechselkurse an (idempotent)."""
     try:
         with _con() as con:
+            _ensure_kandidat_status_tabelle(con)
+            _ensure_lieferant_hersteller_tabelle(con)
+            # Lieferanten: Flag 'bevorzugt' nachrüsten (ALTER-Guard).
+            if _table_exists(con, "tbl_einkauf_lieferanten"):
+                lcols = {r[1] for r in con.execute("PRAGMA table_info(tbl_einkauf_lieferanten)")}
+                if "bevorzugt" not in lcols:
+                    con.execute("ALTER TABLE tbl_einkauf_lieferanten ADD COLUMN bevorzugt INTEGER DEFAULT 0")
             if not _table_exists(con, "tbl_einkauf_wechselkurse"):
+                con.commit()
                 return
             for waehrung, kurs in WECHSELKURS_SEED.items():
                 con.execute(
@@ -209,14 +285,20 @@ def waehrungen() -> list[str]:
 
 
 # ── §129-Logik ───────────────────────────────────────────────────────────────
-def erforderlicher_abstand(avp: float) -> tuple[float, str]:
+def _p129_staffel() -> tuple:
+    """Die fünf §129-Staffelparameter einmalig aus den Einstellungen lesen.
+    Für Schleifen (z. B. Importkandidaten) einmal laden und an
+    erforderlicher_abstand() durchreichen, statt 5 get_setting() je Artikel."""
+    return (_parse_num(get_setting("p129_t1_grenze")), _parse_num(get_setting("p129_t1_proz")),
+            _parse_num(get_setting("p129_t2_grenze")), _parse_num(get_setting("p129_t2_eur")),
+            _parse_num(get_setting("p129_t3_proz")))
+
+
+def erforderlicher_abstand(avp: float, staffel: tuple | None = None) -> tuple[float, str]:
     """Liefert (erforderlicher Preisabstand in €, Regel-Text) fuer einen
-    Referenz-AVP nach der konfigurierten §129-Staffel."""
-    t1_grenze = _parse_num(get_setting("p129_t1_grenze"))
-    t1_proz = _parse_num(get_setting("p129_t1_proz"))
-    t2_grenze = _parse_num(get_setting("p129_t2_grenze"))
-    t2_eur = _parse_num(get_setting("p129_t2_eur"))
-    t3_proz = _parse_num(get_setting("p129_t3_proz"))
+    Referenz-AVP nach der konfigurierten §129-Staffel. `staffel` optional
+    vorgeladen (siehe _p129_staffel), sonst werden die Einstellungen gelesen."""
+    t1_grenze, t1_proz, t2_grenze, t2_eur, t3_proz = staffel if staffel else _p129_staffel()
     avp = max(0.0, avp)
     if avp <= t1_grenze:
         return avp * t1_proz / 100.0, f"≥ {t1_proz:.0f} % (AVP bis {t1_grenze:.0f} €)"
@@ -322,6 +404,558 @@ def quelle_kennzahlen(row) -> dict:
         erg.update({"marge": m["marge"], "marge_proz": m["marge_proz"],
                     "p129_ok": m["p129_ok"], "max_import_avp": m["max_import_avp"]})
     return erg
+
+
+# ── Importkandidaten (Marktchancen aus Bedarfsanalysen) ──────────────────────
+def wichtige_hersteller() -> set[str]:
+    """Manuell als 'wichtig im Markt' markierte Hersteller (Setting-Key, JSON-Liste)."""
+    raw = get_setting("wichtige_hersteller", "")
+    if not raw:
+        return set()
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return {str(x) for x in data}
+    except (ValueError, TypeError):
+        pass
+    return set()
+
+
+def set_hersteller_wichtig(name: str, wichtig: bool) -> None:
+    name = (name or "").strip()
+    if not name:
+        return
+    s = wichtige_hersteller()
+    if wichtig:
+        s.add(name)
+    else:
+        s.discard(name)
+    set_setting("wichtige_hersteller", json.dumps(sorted(s), ensure_ascii=False))
+    _log("Hersteller-Wichtigkeit gesetzt", f"{name}={'wichtig' if wichtig else 'normal'}")
+
+
+# Bekannte Reimporteure / Parallelimporteure: Lauer-Herstellerkürzel + Namensbestandteile.
+# Artikel dieser Anbieter sind bereits Parallelimporte und daher KEINE neuen
+# Importkandidaten. In der App erweiterbar (Setting 'reimporteur_hersteller').
+REIMPORTEUR_CODES = {
+    "KOHL", "EURIM", "EMRA", "ORIF", "CCPHA", "ABACU", "ACAMU", "AXICO", "AXIC",
+    "BERAG", "HAEMA", "PARAN", "MILIN", "WESTE", "GERKE", "DOCPH", "FDPHA", "2CARE",
+    "EMRAM", "ORIFA",
+}
+REIMPORTEUR_NAMEN = {
+    "KOHLPHARMA", "EURIM", "EMRA-MED", "EMRAMED", "EMRA MED", "ORIFARM", "CC-PHARMA",
+    "CC PHARMA", "ABACUS", "ACA MULLER", "ACA MÜLLER", "AXICORP", "BERAGENA", "HAEMATO",
+    "PARANOVA", "MILINDA", "WESTEN PHARMA", "GERKE", "DOCPHARM", "FD PHARMA", "2CARE4",
+    "MTK PHARMA", "PHARMORE",
+}
+
+
+def benutzer_reimporteure() -> set[str]:
+    """Vom Nutzer zusätzlich als Reimporteur markierte Hersteller (Setting, JSON-Liste)."""
+    raw = get_setting("reimporteur_hersteller", "")
+    if not raw:
+        return set()
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return {str(x) for x in data}
+    except (ValueError, TypeError):
+        pass
+    return set()
+
+
+def set_hersteller_reimporteur(name: str, reimport: bool) -> None:
+    name = (name or "").strip()
+    if not name:
+        return
+    s = benutzer_reimporteure()
+    if reimport:
+        s.add(name)
+    else:
+        s.discard(name)
+    set_setting("reimporteur_hersteller", json.dumps(sorted(s), ensure_ascii=False))
+    _log("Reimporteur-Markierung gesetzt", f"{name}={'reimport' if reimport else 'original'}")
+
+
+def _ist_reimporteur(hersteller: str, benutzer: set[str]) -> bool:
+    """True, wenn der Anbieter ein (Re-)Parallelimporteur ist. `benutzer` = einmal
+    vorab geladene Nutzer-Markierungen (kein DB-Zugriff je Zeile)."""
+    name = (hersteller or "").strip()
+    if not name:
+        return False
+    if name in benutzer:
+        return True
+    up = name.upper()
+    if up in REIMPORTEUR_CODES:
+        return True
+    return any(sub in up for sub in REIMPORTEUR_NAMEN)
+
+
+def hersteller_typ(hersteller: str) -> str:
+    """'Reimport' oder 'Original' für einen einzelnen Anbieter (mit DB-Lookup)."""
+    return "Reimport" if _ist_reimporteur(hersteller, benutzer_reimporteure()) else "Original"
+
+
+def kandidat_status_map() -> dict[str, dict]:
+    """PZN -> {status, notiz, wiedervorlage} aller gepflegten Pipeline-Einträge."""
+    out: dict[str, dict] = {}
+    try:
+        with _con() as con:
+            con.row_factory = sqlite3.Row
+            _ensure_kandidat_status_tabelle(con)
+            for r in con.execute("SELECT * FROM tbl_einkauf_kandidat_status"):
+                out[str(r["pzn"])] = {"status": r["status"] or "Neu",
+                                      "notiz": r["notiz"] or "",
+                                      "wiedervorlage": r["wiedervorlage"] or "",
+                                      "beobachtet": bool(r["beobachtet"])}
+    except sqlite3.Error:
+        pass
+    return out
+
+
+def lieferant_hersteller(lieferant_id) -> list[str]:
+    """Hersteller, die dieser Lieferant beschaffen kann."""
+    try:
+        with _con() as con:
+            _ensure_lieferant_hersteller_tabelle(con)
+            return [r[0] for r in con.execute(
+                "SELECT hersteller FROM tbl_einkauf_lieferant_hersteller "
+                "WHERE lieferant_id=? ORDER BY hersteller", (lieferant_id,))]
+    except sqlite3.Error:
+        return []
+
+
+def set_lieferant_hersteller(lieferant_id, herstellers: list[str]) -> None:
+    """Setzt die Hersteller-Zuordnung eines Lieferanten (ersetzt die bisherige)."""
+    with _con() as con:
+        _ensure_lieferant_hersteller_tabelle(con)
+        con.execute("DELETE FROM tbl_einkauf_lieferant_hersteller WHERE lieferant_id=?",
+                    (lieferant_id,))
+        for h in sorted({(x or "").strip() for x in herstellers if (x or "").strip()}):
+            con.execute("INSERT OR IGNORE INTO tbl_einkauf_lieferant_hersteller"
+                        "(lieferant_id, hersteller) VALUES(?,?)", (lieferant_id, h))
+        con.commit()
+
+
+def lieferanten_fuer_hersteller(hersteller: str) -> list[tuple]:
+    """Aktive Lieferanten, die den genannten Hersteller beschaffen können
+    (bevorzugte zuerst). Liefert (id, name, bevorzugt)."""
+    hersteller = (hersteller or "").strip()
+    if not hersteller:
+        return []
+    try:
+        with _con() as con:
+            con.row_factory = sqlite3.Row
+            _ensure_lieferant_hersteller_tabelle(con)
+            rows = con.execute(
+                "SELECT l.id, l.name, COALESCE(l.bevorzugt,0) AS bevorzugt "
+                "FROM tbl_einkauf_lieferant_hersteller lh "
+                "JOIN tbl_einkauf_lieferanten l ON l.id=lh.lieferant_id "
+                "WHERE lh.hersteller=? AND l.aktiv=1 "
+                "ORDER BY l.bevorzugt DESC, l.name", (hersteller,)).fetchall()
+        return [(r["id"], r["name"], bool(r["bevorzugt"])) for r in rows]
+    except sqlite3.Error:
+        return []
+
+
+def lieferanten_erfolg() -> list[dict]:
+    """Erfolgs-/Aktivitätskennzahlen je Lieferant für die Statistik: Anzahl
+    Beschaffungsquellen, Ø-Marge, Aufgaben/Kontakte, Bestellungen."""
+    rows: list[dict] = []
+    with _con() as con:
+        con.row_factory = sqlite3.Row
+        if not _table_exists(con, "tbl_einkauf_lieferanten"):
+            return rows
+        liefs = con.execute("SELECT * FROM tbl_einkauf_lieferanten").fetchall()
+        for l in liefs:
+            lid = l["id"]
+            quellen = con.execute("SELECT * FROM tbl_einkauf_quellen WHERE lieferant_id=? AND aktiv=1",
+                                  (lid,)).fetchall()
+            margen = [k["marge_proz"] for k in (quelle_kennzahlen(q) for q in quellen)
+                      if k["marge"] is not None]
+            aufg = con.execute("SELECT COUNT(*) FROM tbl_einkauf_aufgaben WHERE lieferant_id=?",
+                               (lid,)).fetchone()[0] if _table_exists(con, "tbl_einkauf_aufgaben") else 0
+            erl = con.execute("SELECT COUNT(*) FROM tbl_einkauf_aufgaben WHERE lieferant_id=? "
+                              "AND status='erledigt'", (lid,)).fetchone()[0] if _table_exists(con, "tbl_einkauf_aufgaben") else 0
+            best = con.execute("SELECT COUNT(*) FROM tbl_einkauf_aufgaben WHERE lieferant_id=? "
+                               "AND kategorie='Bestellung'", (lid,)).fetchone()[0] if _table_exists(con, "tbl_einkauf_aufgaben") else 0
+            rows.append({
+                "id": lid, "name": l["name"], "land": l["land"] or "",
+                "bevorzugt": bool(l["bevorzugt"]) if "bevorzugt" in l.keys() else False,
+                "aktiv": bool(l["aktiv"]), "quellen": len(quellen),
+                "marge_proz": (sum(margen) / len(margen)) if margen else None,
+                "aufgaben": aufg, "erledigt": erl, "bestellungen": best,
+            })
+    rows.sort(key=lambda r: (r["bevorzugt"], r["bestellungen"], r["quellen"]), reverse=True)
+    return rows
+
+
+def hersteller_erfolg() -> list[dict]:
+    """Pipeline-Erfolg je Hersteller aus den Kandidaten-Status: wie viele Artikel
+    angefragt/eingelistet/verworfen wurden + Erfolgsquote (eingelistet / bearbeitet)."""
+    out: dict[str, dict] = {}
+    with _con() as con:
+        con.row_factory = sqlite3.Row
+        if not _table_exists(con, "tbl_einkauf_kandidat_status"):
+            return []
+        _ensure_kandidat_status_tabelle(con)
+        rows = con.execute(
+            "SELECT ks.pzn, ks.status, ks.beobachtet, "
+            "(SELECT herstellerkuerzel FROM tbl_auswertungspositionen p "
+            " WHERE p.pzn=ks.pzn AND COALESCE(herstellerkuerzel,'')<>'' LIMIT 1) AS herst "
+            "FROM tbl_einkauf_kandidat_status ks").fetchall()
+    for r in rows:
+        herst = (r["herst"] or "").strip() or "(unbekannt)"
+        d = out.setdefault(herst, {"hersteller": herst, "gesamt": 0, "beobachtet": 0,
+                                    "angefragt": 0, "angebot": 0, "eingelistet": 0, "verworfen": 0})
+        d["gesamt"] += 1
+        if r["beobachtet"]:
+            d["beobachtet"] += 1
+        s = r["status"] or "Neu"
+        if s == "Angefragt":
+            d["angefragt"] += 1
+        elif s == "Angebot/Muster":
+            d["angebot"] += 1
+        elif s == "Eingelistet":
+            d["eingelistet"] += 1
+        elif s == "Verworfen":
+            d["verworfen"] += 1
+    res = list(out.values())
+    for d in res:
+        bearbeitet = d["angefragt"] + d["angebot"] + d["eingelistet"] + d["verworfen"]
+        d["erfolgsquote"] = (d["eingelistet"] / bearbeitet * 100.0) if bearbeitet else None
+    res.sort(key=lambda d: (d["eingelistet"], d["gesamt"]), reverse=True)
+    return res
+
+
+def set_kandidat_beobachtet(pzn: str, beobachtet: bool) -> None:
+    """Setzt/entfernt die Merk-Markierung eines Artikels (legt Zeile bei Bedarf an)."""
+    pzn = str(pzn or "").strip()
+    if not pzn:
+        return
+    with _con() as con:
+        _ensure_kandidat_status_tabelle(con)
+        con.execute(
+            "INSERT INTO tbl_einkauf_kandidat_status(pzn, beobachtet, geaendert_am, bearbeiter) "
+            "VALUES(?,?,?,?) ON CONFLICT(pzn) DO UPDATE SET beobachtet=excluded.beobachtet, "
+            "geaendert_am=excluded.geaendert_am, bearbeiter=excluded.bearbeiter",
+            (pzn, 1 if beobachtet else 0, _now(), bearbeiter()))
+        con.commit()
+    _log("Artikel gemerkt" if beobachtet else "Merkung entfernt", f"PZN {pzn}")
+
+
+def set_kandidat_status(pzn: str, status: str, notiz: str = "", wiedervorlage: str = "") -> None:
+    pzn = str(pzn or "").strip()
+    if not pzn:
+        return
+    with _con() as con:
+        _ensure_kandidat_status_tabelle(con)
+        con.execute(
+            "INSERT INTO tbl_einkauf_kandidat_status(pzn, status, notiz, wiedervorlage, geaendert_am, bearbeiter) "
+            "VALUES(?,?,?,?,?,?) ON CONFLICT(pzn) DO UPDATE SET status=excluded.status, "
+            "notiz=excluded.notiz, wiedervorlage=excluded.wiedervorlage, "
+            "geaendert_am=excluded.geaendert_am, bearbeiter=excluded.bearbeiter",
+            (pzn, status, notiz, wiedervorlage, _now(), bearbeiter()))
+        con.commit()
+    _log("Kandidaten-Status gesetzt", f"PZN {pzn} -> {status}")
+
+
+def _trend_map(con, dq_sql: str, dq_p: list, id_sql: str, id_p: list) -> dict[str, tuple]:
+    """PZN -> (symbol, label, prozent) als Nachfrage-Trend über die Bedarfsanalysen.
+    Vergleicht den Ø-Absatz der neueren gegen die älteren Auswertungen (nach Datum).
+    Weniger als 2 Auswertungen -> ('—','n/a',0)."""
+    rows = con.execute(
+        f"SELECT p.pzn AS pzn, a.datum AS datum, SUM(COALESCE(p.absatz_6m,0)) AS ab "
+        f"FROM tbl_auswertungspositionen p JOIN tbl_auswertungen a ON a.id=p.auswertung_id "
+        f"WHERE COALESCE(p.absatz_6m,0)>0 AND p.pzn IS NOT NULL AND p.pzn<>'' "
+        f"AND ({dq_sql}) AND ({id_sql}) GROUP BY p.pzn, p.auswertung_id",
+        dq_p + id_p).fetchall()
+    series: dict[str, list] = {}
+    for r in rows:
+        series.setdefault(str(r["pzn"]), []).append((r["datum"] or "", float(r["ab"] or 0)))
+    out: dict[str, tuple] = {}
+    for pzn, vals in series.items():
+        if len(vals) < 2:
+            out[pzn] = ("—", "n/a", 0.0)
+            continue
+        vals.sort(key=lambda t: t[0])
+        mid = len(vals) // 2
+        alt = [v for _, v in vals[:mid]] or [vals[0][1]]
+        neu = [v for _, v in vals[mid:]]
+        a_avg = sum(alt) / len(alt)
+        n_avg = sum(neu) / len(neu)
+        if a_avg <= 0:
+            out[pzn] = ("—", "n/a", 0.0)
+            continue
+        ch = (n_avg - a_avg) / a_avg * 100.0
+        if ch >= 15:
+            out[pzn] = ("↑", "steigend", ch)
+        elif ch <= -15:
+            out[pzn] = ("↓", "fallend", ch)
+        else:
+            out[pzn] = ("→", "stabil", ch)
+    return out
+
+
+def _reimporteur_je_wirkstoff(con, wmap: dict[str, str], benutzer: set[str]) -> dict[str, set]:
+    """Wirkstoff -> Menge der Reimporteur-Anbieter, die ihn bereits bedienen.
+    Basis für die Wettbewerbsdichte (wie viele Parallelimporteure sind schon aktiv)."""
+    out: dict[str, set] = {}
+    for pzn, herst in con.execute(
+            "SELECT DISTINCT pzn, herstellerkuerzel FROM tbl_auswertungspositionen "
+            "WHERE COALESCE(absatz_6m,0)>0 AND COALESCE(herstellerkuerzel,'')<>''"):
+        if not _ist_reimporteur(herst, benutzer):
+            continue
+        w = wmap.get(str(pzn))
+        if w:
+            out.setdefault(w, set()).add(herst)
+    return out
+
+
+def _bedarf_dq_clause(datenquelle: str) -> tuple[str, list]:
+    """Datenquelle-Filter auf tbl_auswertungen.datenquelle (analog produktanalyse_neu)."""
+    dq = (datenquelle or "ALLE").upper()
+    if dq in ("NMG", "PK"):
+        return "COALESCE(a.datenquelle,'NMG')='NMG'", []
+    if dq in ("ZF", "ZW"):
+        return "COALESCE(a.datenquelle,'NMG') IN ('ZW','ZF')", []
+    return "1=1", []
+
+
+def _wirkstoff_map(con) -> dict[str, str]:
+    """PZN -> Wirkstoff(e) aus tbl_wirkstoff_staerke (breite Marktquelle, 1:N je PZN).
+    Separat geladen, damit der 1:N-JOIN die Absatz-Summen nicht aufbläht."""
+    out: dict[str, str] = {}
+    if not _table_exists(con, "tbl_wirkstoff_staerke"):
+        return out
+    # Nur Wirkstoffe zu PZN, die überhaupt in Bedarfsanalysen vorkommen (statt der
+    # kompletten ~160k-Zeilen-Tabelle) – deutlich schneller beim Laden.
+    sql = ("SELECT w.pzn, GROUP_CONCAT(DISTINCT w.wirkstoff) FROM tbl_wirkstoff_staerke w "
+           "WHERE COALESCE(w.wirkstoff,'')<>'' ")
+    if _table_exists(con, "tbl_auswertungspositionen"):
+        sql += ("AND w.pzn IN (SELECT DISTINCT pzn FROM tbl_auswertungspositionen "
+                "WHERE COALESCE(absatz_6m,0)>0 AND pzn IS NOT NULL AND pzn<>'') ")
+    sql += "GROUP BY w.pzn"
+    for pzn, wirk in con.execute(sql):
+        out[str(pzn)] = wirk or ""
+    return out
+
+
+def _apu_hap_map(con) -> dict[str, tuple]:
+    """PZN -> (APU, HAP) aus tbl_apu_hap_import (gepflegte Preisreferenz), separat geladen."""
+    out: dict[str, tuple] = {}
+    if not _table_exists(con, "tbl_apu_hap_import"):
+        return out
+    for pzn, apu, hap in con.execute(
+            "SELECT pzn, MAX(apu), MAX(hap) FROM tbl_apu_hap_import GROUP BY pzn"):
+        out[str(pzn)] = (apu, hap)
+    return out
+
+
+def _austausch_pzn_set(con) -> set[str]:
+    """PZN mit aktivem Eintrag in der Austauschdatenbank (zusätzliche Ersatz-Quelle)."""
+    s: set[str] = set()
+    if _table_exists(con, "tbl_austauschdatenbank"):
+        for (pzn,) in con.execute(
+                "SELECT DISTINCT pzn_alt FROM tbl_austauschdatenbank "
+                "WHERE COALESCE(status,'aktiv')='aktiv' AND COALESCE(pzn_alt,'')<>''"):
+            s.add(str(pzn))
+    return s
+
+
+def lade_importkandidaten(datenquelle: str = "ALLE", auswertung_id=None) -> list[dict]:
+    """Aggregiert alle Bedarfsanalyse-Positionen zu Importkandidaten je PZN.
+
+    Kandidat = Artikel mit Nachfrage (absatz_6m>0), der NICHT im NMG-Stamm liegt und
+    für den KEIN NMG-Austausch bekannt ist ('Neue Produktchance'). Liefert je Kandidat
+    Nachfrage, Apothekenbreite, abgeleiteten Preis (APU/HAP wenn gepflegt, sonst
+    Ø-Stückpreis aus Umsatz/Absatz), Wirkstoff sowie Hersteller-Kennzahlen.
+    """
+    with _con() as con:
+        con.row_factory = sqlite3.Row
+        if not (_table_exists(con, "tbl_auswertungspositionen")
+                and _table_exists(con, "tbl_auswertungen")):
+            return []
+        dq_sql, dq_p = _bedarf_dq_clause(datenquelle)
+        id_sql, id_p = ("a.id=?", [int(auswertung_id)]) if auswertung_id else ("1=1", [])
+        has_aa = _table_exists(con, "tbl_austauschartikel")
+        aa_join = "LEFT JOIN tbl_austauschartikel aa ON aa.original_pzn=p.pzn" if has_aa else ""
+        aa_case = "WHEN aa.original_pzn IS NOT NULL THEN 1" if has_aa else ""
+        sql = f"""
+            SELECT p.pzn AS pzn,
+                COALESCE(MAX(NULLIF(p.artikelname,'')), MAX(NULLIF(n.artikelname,'')), '') AS artikel,
+                COALESCE(MAX(NULLIF(p.df,'')), '') AS df,
+                COALESCE(MAX(NULLIF(p.pck,'')), '') AS pck,
+                COALESCE(MAX(NULLIF(p.herstellerkuerzel,'')), MAX(NULLIF(n.herstellerkuerzel,'')), '') AS hersteller,
+                COUNT(DISTINCT a.apotheke) AS apotheken,
+                SUM(COALESCE(p.absatz_6m,0)) AS absatz,
+                SUM(COALESCE(p.umsatz,0)) AS umsatz,
+                SUM(COALESCE(p.ek,0)) AS ek_summe,
+                MAX(n.pzn) AS nmg_pzn,
+                MAX(n.apu) AS nmg_apu,
+                MAX(n.taxe_ek) AS nmg_taxe_ek,
+                MAX(NULLIF(n.wirkstoffe,'')) AS nmg_wirkstoff,
+                MAX(CASE {aa_case}
+                         WHEN COALESCE(p.pzn_nmg,'')<>'' THEN 1
+                         WHEN COALESCE(p.austauschbar_gegen,'')<>'' THEN 1
+                         ELSE 0 END) AS hat_austausch
+            FROM tbl_auswertungspositionen p
+            JOIN tbl_auswertungen a ON a.id=p.auswertung_id
+            LEFT JOIN tbl_nmg_stamm n ON n.pzn=p.pzn
+            {aa_join}
+            WHERE COALESCE(p.absatz_6m,0)>0 AND p.pzn IS NOT NULL AND p.pzn<>''
+              AND ({dq_sql}) AND ({id_sql})
+            GROUP BY p.pzn
+            HAVING nmg_pzn IS NULL AND hat_austausch=0
+        """
+        rows = con.execute(sql, dq_p + id_p).fetchall()
+        wmap = _wirkstoff_map(con)
+        ahmap = _apu_hap_map(con)
+        adb = _austausch_pzn_set(con)
+        benutzer_reimp = benutzer_reimporteure()
+        reimp_je_wirk = _reimporteur_je_wirkstoff(con, wmap, benutzer_reimp)
+        trend = _trend_map(con, dq_sql, dq_p, id_sql, id_p)
+
+    wichtig = wichtige_hersteller()
+    status_map = kandidat_status_map()
+    eu_ek_rate = max(0.0, _parse_num(get_setting("kandidat_eu_ek_proz")) / 100.0)
+    min_marge = _parse_num(get_setting("kandidat_min_marge_proz"))
+    staffel = _p129_staffel()  # einmal laden statt je Kandidat
+    cand: list[dict] = []
+    herst_absatz: dict[str, float] = {}
+    herst_count: dict[str, int] = {}
+    for r in rows:
+        pzn = str(r["pzn"])
+        if pzn in adb:  # zusätzliche Ersatz-Quelle (Austauschdatenbank) -> kein Kandidat
+            continue
+        absatz = float(r["absatz"] or 0)
+        umsatz = float(r["umsatz"] or 0)
+        ek_summe = float(r["ek_summe"] or 0)
+        ah = ahmap.get(pzn)
+        apu = float(ah[0]) if ah and ah[0] else (float(r["nmg_apu"]) if r["nmg_apu"] else None)
+        markt_preis = (umsatz / absatz) if absatz > 0 and umsatz > 0 else None
+        if apu is not None:
+            preis, quelle = apu, "APU"
+        elif markt_preis is not None:
+            preis, quelle = markt_preis, "Ø Markt"
+        else:
+            preis, quelle = None, "—"
+        ek_stk = (ek_summe / absatz) if absatz > 0 and ek_summe > 0 else None
+        taxe_ek = (float(r["nmg_taxe_ek"]) if r["nmg_taxe_ek"]
+                   else (float(ah[1]) if ah and ah[1] else ek_stk))
+        herst = (r["hersteller"] or "").strip() or "(unbekannt)"
+        wirk = wmap.get(pzn) or (r["nmg_wirkstoff"] or "")
+
+        # §129-Machbarkeit & Potenzial (Schätzung): angenommener EU-EK = eu_ek_rate
+        # des deutschen Preisniveaus; max. zulässiger Import-AVP nach §129-Staffel.
+        marge_stueck = marge_proz = max_import_avp = potenzial_jahr = umsatz_jahr = None
+        ampel = "—"
+        if preis and preis > 0:
+            umsatz_jahr = preis * absatz * 2.0  # 6 Monate -> Jahr
+            max_import_avp = max(0.0, preis - erforderlicher_abstand(preis, staffel)[0])
+            import_ek = preis * eu_ek_rate
+            marge_stueck = max_import_avp - import_ek
+            marge_proz = (marge_stueck / max_import_avp * 100.0) if max_import_avp > 0 else 0.0
+            potenzial_jahr = marge_stueck * absatz * 2.0
+            ampel = ("gruen" if marge_proz >= min_marge else
+                     ("gelb" if marge_stueck > 0 else "rot"))
+
+        konkurrenz = len(reimp_je_wirk.get(wirk, ())) if wirk else 0
+        tr_sym, tr_lbl, tr_proz = trend.get(pzn, ("—", "n/a", 0.0))
+        cand.append({
+            "pzn": pzn, "artikel": r["artikel"] or "", "hersteller": herst,
+            "df": r["df"] or "", "pck": r["pck"] or "", "wirkstoff": wirk,
+            "absatz": absatz, "apotheken": int(r["apotheken"] or 0), "umsatz": umsatz,
+            "preis": preis, "preis_quelle": quelle, "apu": apu, "taxe_ek": taxe_ek,
+            "markt_preis": markt_preis, "wichtig": herst in wichtig,
+            "typ": "Reimport" if _ist_reimporteur(herst, benutzer_reimp) else "Original",
+            "marge_stueck": marge_stueck, "marge_proz": marge_proz,
+            "max_import_avp": max_import_avp, "ampel": ampel,
+            "potenzial_jahr": potenzial_jahr, "umsatz_jahr": umsatz_jahr,
+            "konkurrenz": konkurrenz,
+            "konkurrenz_namen": sorted(reimp_je_wirk.get(wirk, ())) if wirk else [],
+            "trend_sym": tr_sym, "trend_label": tr_lbl, "trend_proz": tr_proz,
+            "status": status_map.get(pzn, {}).get("status", "Neu"),
+            "beobachtet": status_map.get(pzn, {}).get("beobachtet", False),
+            "score": 100.0 + absatz + int(r["apotheken"] or 0) * 10,
+        })
+        herst_absatz[herst] = herst_absatz.get(herst, 0.0) + absatz
+        herst_count[herst] = herst_count.get(herst, 0) + 1
+    for d in cand:
+        d["herst_absatz"] = herst_absatz.get(d["hersteller"], 0.0)
+        d["herst_artikel"] = herst_count.get(d["hersteller"], 0)
+    # Standard: gemerkte Artikel ganz oben, dann höchstes geschätztes Jahres-Potenzial
+    # (Artikel ohne Preis ans Ende).
+    cand.sort(key=lambda d: (d["beobachtet"], d["potenzial_jahr"] is not None,
+                             d["potenzial_jahr"] or 0.0, d["absatz"]), reverse=True)
+    return cand
+
+
+def _filter_kandidaten(cands: list[dict], filters: dict) -> list[dict]:
+    """Filtert eine geladene Kandidatenliste nach Preis, Hersteller, Wirkstoff,
+    Apothekenbreite und 'nur wichtige Hersteller'. Reine In-Memory-Operation."""
+    pmin = filters.get("preis_min")
+    pmax = filters.get("preis_max")
+    hf = (filters.get("hersteller") or "").strip()
+    wf = (filters.get("wirkstoff") or "").strip().upper()
+    min_apo = int(filters.get("min_apotheken") or 0)
+    nur_w = bool(filters.get("nur_wichtige_hersteller"))
+    typ = (filters.get("typ") or "Alle")
+    nur_machbar = bool(filters.get("nur_machbar"))
+    nur_ohne_konk = bool(filters.get("nur_ohne_konkurrenz"))
+    nur_beob = bool(filters.get("nur_beobachtet"))
+    status_f = (filters.get("status") or "Alle")
+    out = []
+    for d in cands:
+        if nur_beob and not d["beobachtet"]:
+            continue
+        if typ == "Original" and d["typ"] != "Original":
+            continue
+        if typ == "Reimport" and d["typ"] != "Reimport":
+            continue
+        if nur_machbar and d["ampel"] not in ("gruen", "gelb"):
+            continue
+        if nur_ohne_konk and d["konkurrenz"] > 0:
+            continue
+        if status_f and status_f != "Alle" and d["status"] != status_f:
+            continue
+        if pmin is not None and (d["preis"] is None or d["preis"] < pmin):
+            continue
+        if pmax is not None and (d["preis"] is None or d["preis"] > pmax):
+            continue
+        if hf and hf not in ("", "Alle") and d["hersteller"] != hf:
+            continue
+        if wf and wf not in (d["wirkstoff"] or "").upper():
+            continue
+        if min_apo and d["apotheken"] < min_apo:
+            continue
+        if nur_w and not d["wichtig"]:
+            continue
+        out.append(d)
+    return out
+
+
+def kandidat_hersteller_namen() -> list[str]:
+    """Leichte Hersteller-Liste für das Filter-Dropdown, ohne die teure
+    Vollberechnung der Kandidaten (nur DISTINCT über die Positionen)."""
+    try:
+        with _con() as con:
+            if not _table_exists(con, "tbl_auswertungspositionen"):
+                return []
+            rows = con.execute(
+                "SELECT DISTINCT COALESCE(NULLIF(herstellerkuerzel,''),'(unbekannt)') AS h "
+                "FROM tbl_auswertungspositionen WHERE COALESCE(absatz_6m,0)>0 ORDER BY h").fetchall()
+        return [r[0] for r in rows]
+    except sqlite3.Error:
+        return []
+
+
+def importkandidaten(filters: dict | None = None) -> list[dict]:
+    """Geladene + gefilterte Importkandidaten (Komfort-Wrapper für Export/Tests)."""
+    filters = filters or {}
+    cands = lade_importkandidaten(filters.get("datenquelle", "ALLE"),
+                                  filters.get("auswertung_id"))
+    return _filter_kandidaten(cands, filters)
 
 
 # ── Export & Tabellen-Komfort ────────────────────────────────────────────────
@@ -475,6 +1109,9 @@ class EinkaufPanel(tk.Frame):
         self.sidebar.add_item("lieferanten", "🏭", "Lieferanten", lambda: self.show("lieferanten"))
         self.sidebar.add_item("quellen", "📦", "Beschaffungsquellen", lambda: self.show("quellen"))
         self.sidebar.add_item("vorschlag", "🧭", "Beschaffungsvorschlag", lambda: self.show("vorschlag"))
+        self.sidebar.add_section("Marktchancen")
+        self.sidebar.add_item("importkandidaten", "🧪", "Importkandidaten", lambda: self.show("importkandidaten"))
+        self.sidebar.add_item("statistik", "📊", "Statistik & Erfolg", lambda: self.show("statistik"))
         self.sidebar.add_section("Kalkulation")
         self.sidebar.add_item("marge", "📐", "Margenrechner §129", lambda: self.show("marge"))
         self.sidebar.add_item("kurse", "💱", "Wechselkurse", lambda: self.show("kurse"))
@@ -485,6 +1122,16 @@ class EinkaufPanel(tk.Frame):
         self.content = tk.Frame(self, bg=SHELL_BG)
         self.content.pack(side="left", fill="both", expand=True)
         self._marge_prefill: dict | None = None
+        # Importkandidaten: Filter über Seitenwechsel hinweg merken (bis zur nächsten Änderung).
+        self._ik_state: dict = {"herst": "Alle", "wirk": "", "pmin": "", "pmax": "",
+                                "minapo": "", "nurwichtig": 0, "typ": "Nur Original",
+                                "machbar": 0, "ohnekonk": 0, "status": "Alle", "nurbeob": 0}
+        # Cache der berechneten Kandidatenliste (teuer) – über Seitenwechsel hinweg,
+        # damit Wiederöffnen sofort ist. Erst-Berechnung erst bei „Anzeigen".
+        self._ik_cache: list | None = None
+        # Gemerkte Filter der übrigen Seiten (bleiben bis zur nächsten Änderung erhalten).
+        self._filter_state: dict = {"aufg": "offen", "quellen_lief": "Alle",
+                                    "vor_nur129": 0, "vor_nur_absatz": 0}
         self.show("start")
 
     # ── Infrastruktur ────────────────────────────────────────────────────────
@@ -496,7 +1143,8 @@ class EinkaufPanel(tk.Frame):
             self._marge_prefill = kwargs["prefill"]
         {"start": self._page_start, "aufgaben": self._page_aufgaben,
          "lieferanten": self._page_lieferanten, "quellen": self._page_quellen,
-         "vorschlag": self._page_vorschlag,
+         "vorschlag": self._page_vorschlag, "importkandidaten": self._page_importkandidaten,
+         "statistik": self._page_statistik,
          "marge": self._page_marge, "kurse": self._page_kurse,
          "einstellungen": self._page_einstellungen}[key]()
 
@@ -602,8 +1250,10 @@ class EinkaufPanel(tk.Frame):
         # Schnellzugriff
         bar = tk.Frame(self.content, bg=SHELL_BG)
         bar.pack(fill="x", padx=24, pady=(8, 18))
-        theme.PillButton(bar, "📐  Margenrechner §129", lambda: self.show("marge"),
+        theme.PillButton(bar, "🧪  Importkandidaten", lambda: self.show("importkandidaten"),
                          kind="accent", padx=16, pady=10).pack(side="left", padx=(0, 8))
+        theme.PillButton(bar, "📐  Margenrechner §129", lambda: self.show("marge"),
+                         kind="neutral", padx=16, pady=10).pack(side="left", padx=8)
         theme.PillButton(bar, "📦  Beschaffungsquellen", lambda: self.show("quellen"),
                          kind="neutral", padx=16, pady=10).pack(side="left", padx=8)
         theme.PillButton(bar, "🏭  Lieferanten", lambda: self.show("lieferanten"),
@@ -638,7 +1288,7 @@ class EinkaufPanel(tk.Frame):
         bar.pack(fill="x", padx=24, pady=(0, 8))
         theme.PillButton(bar, "➕  Neue Aufgabe", lambda: self._aufgabe_dialog(),
                          kind="primary", padx=14, pady=8).pack(side="left")
-        self._aufg_filter = tk.StringVar(value="offen")
+        self._aufg_filter = tk.StringVar(value=self._filter_state["aufg"])
         for label, val in (("Offen", "offen"), ("Erledigt", "erledigt"), ("Alle", "alle")):
             ttk.Radiobutton(bar, text=label, value=val, variable=self._aufg_filter,
                             command=self._aufg_reload).pack(side="left", padx=(12, 0))
@@ -664,6 +1314,7 @@ class EinkaufPanel(tk.Frame):
         for i in self._aufg_tree.get_children():
             self._aufg_tree.delete(i)
         f = self._aufg_filter.get()
+        self._filter_state["aufg"] = f
         where = ""
         if f == "offen":
             where = "WHERE a.status='offen'"
@@ -748,14 +1399,16 @@ class EinkaufPanel(tk.Frame):
 
         wrap, self._lief_tree = self._make_tree(
             self.content,
-            ("Name", "Land", "Währung", "Lieferzeit", "Mind.-Wert", "GDP", "Status"),
-            (240, 110, 80, 90, 110, 60, 80), height=15,
+            ("★", "Name", "Land", "Währung", "Lieferzeit", "Mind.-Wert", "GDP", "Status"),
+            (28, 230, 100, 78, 88, 108, 56, 78), height=15,
             numerisch=("Lieferzeit", "Mind.-Wert"))
         wrap.pack(fill="both", expand=True, padx=24, pady=(4, 4))
         self._lief_tree.bind("<Double-1>", lambda e: self._lief_edit_selected())
 
         akt = tk.Frame(self.content, bg=SHELL_BG)
         akt.pack(fill="x", padx=24, pady=(0, 16))
+        theme.PillButton(akt, "★ Bevorzugt", self._lief_toggle_bevorzugt, kind="accent",
+                         font_size=10, padx=12, pady=6).pack(side="left", padx=(0, 6))
         theme.PillButton(akt, "Bearbeiten", self._lief_edit_selected, kind="neutral",
                          font_size=10, padx=12, pady=6).pack(side="left")
         theme.PillButton(akt, "Quellen anzeigen", lambda: self._lief_zeige_quellen(),
@@ -773,16 +1426,38 @@ class EinkaufPanel(tk.Frame):
     def _lief_reload(self):
         for i in self._lief_tree.get_children():
             self._lief_tree.delete(i)
-        for r in lieferanten_liste():
+        def bev(r):
+            return bool(r["bevorzugt"]) if "bevorzugt" in r.keys() else False
+        # Bevorzugte zuerst, dann nach Name.
+        for r in sorted(lieferanten_liste(), key=lambda r: (not bev(r), (r["name"] or "").lower())):
+            tag = "bevorzugt" if bev(r) else ("" if r["aktiv"] else "inaktiv")
             self._lief_tree.insert(
                 "", "end", iid=str(r["id"]),
-                values=(r["name"], r["land"] or "—", r["waehrung"] or "EUR",
+                values=("★" if bev(r) else "", r["name"], r["land"] or "—", r["waehrung"] or "EUR",
                         f"{r['lieferzeit_tage']} Tage" if r["lieferzeit_tage"] else "—",
                         _eur(r["mindestbestellwert"]) if r["mindestbestellwert"] else "—",
                         "✓" if r["gdp_zertifiziert"] else "—",
                         "aktiv" if r["aktiv"] else "inaktiv"),
-                tags=("" if r["aktiv"] else "inaktiv",))
+                tags=(tag,))
         self._lief_tree.tag_configure("inaktiv", foreground=MUTED)
+        self._lief_tree.tag_configure("bevorzugt", foreground=ACCENT)
+
+    def _lief_toggle_bevorzugt(self):
+        i = self._lief_selected_id()
+        if not i:
+            messagebox.showinfo("Lieferanten", "Bitte zuerst einen Lieferanten auswählen.", parent=self)
+            return
+        r = self._lief_row(i)
+        aktuell = bool(r["bevorzugt"]) if r and "bevorzugt" in r.keys() else False
+        with _con() as con:
+            con.execute("UPDATE tbl_einkauf_lieferanten SET bevorzugt=? WHERE id=?",
+                        (0 if aktuell else 1, i))
+            con.commit()
+        _log("Lieferant bevorzugt" if not aktuell else "Lieferant nicht mehr bevorzugt", f"id={i}")
+        self._lief_reload()
+        if str(i) in self._lief_tree.get_children():
+            self._lief_tree.selection_set(str(i))
+            self._lief_tree.see(str(i))
 
     def _lief_selected_id(self):
         sel = self._lief_tree.selection()
@@ -881,8 +1556,9 @@ class EinkaufPanel(tk.Frame):
         theme.PillButton(bar, "➕  Neue Quelle", lambda: self._quelle_dialog(),
                          kind="primary", padx=14, pady=8).pack(side="left")
         tk.Label(bar, text="Lieferant:", bg=SHELL_BG, fg=MUTED, font=theme.SMALL).pack(side="left", padx=(14, 4))
-        self._quellen_filter_lief = tk.StringVar(value="Alle")
         namen = ["Alle"] + list(lieferant_namen().values())
+        gespeichert = self._filter_state["quellen_lief"]
+        self._quellen_filter_lief = tk.StringVar(value=gespeichert if gespeichert in namen else "Alle")
         ttk.Combobox(bar, textvariable=self._quellen_filter_lief, values=namen,
                      state="readonly", width=24, style="NMG.TCombobox").pack(side="left")
         self._quellen_filter_lief.trace_add("write", lambda *_: self._quellen_reload())
@@ -913,6 +1589,7 @@ class EinkaufPanel(tk.Frame):
         for i in self._quellen_tree.get_children():
             self._quellen_tree.delete(i)
         flt = self._quellen_filter_lief.get()
+        self._filter_state["quellen_lief"] = flt
         with _con() as con:
             con.row_factory = sqlite3.Row
             sql = ("SELECT q.*, l.name AS lieferant FROM tbl_einkauf_quellen q "
@@ -1008,11 +1685,11 @@ class EinkaufPanel(tk.Frame):
                           bg=SHELL_BG).pack(fill="x", padx=24, pady=(20, 8))
         bar = tk.Frame(self.content, bg=SHELL_BG)
         bar.pack(fill="x", padx=24, pady=(0, 8))
-        self._vor_nur129 = tk.IntVar(value=0)
+        self._vor_nur129 = tk.IntVar(value=self._filter_state["vor_nur129"])
         tk.Checkbutton(bar, text="Nur §129-konforme anzeigen", variable=self._vor_nur129,
                        bg=SHELL_BG, fg=TEXT, activebackground=SHELL_BG, font=theme.SMALL,
                        command=self._vorschlag_reload).pack(side="left")
-        self._vor_nur_absatz = tk.IntVar(value=0)
+        self._vor_nur_absatz = tk.IntVar(value=self._filter_state["vor_nur_absatz"])
         tk.Checkbutton(bar, text="Nur mit Absatz", variable=self._vor_nur_absatz,
                        bg=SHELL_BG, fg=TEXT, activebackground=SHELL_BG, font=theme.SMALL,
                        command=self._vorschlag_reload).pack(side="left", padx=(12, 0))
@@ -1065,6 +1742,8 @@ class EinkaufPanel(tk.Frame):
         best = self._vorschlag_best()
         nur129 = self._vor_nur129.get()
         nur_absatz = self._vor_nur_absatz.get()
+        self._filter_state["vor_nur129"] = nur129
+        self._filter_state["vor_nur_absatz"] = nur_absatz
         eintraege = sorted(best.values(),
                            key=lambda t: (t[1]["marge"] if t[1]["marge"] is not None else -1e18),
                            reverse=True)
@@ -1134,6 +1813,488 @@ class EinkaufPanel(tk.Frame):
                          round(k["marge_proz"], 1) if k["marge"] is not None else "",
                          r["mindestabnahme"], absatz])
         self._export_und_oeffnen(headers, data, "Beschaffungsvorschlag", "Einkauf_Vorschlag")
+
+    # ── Seite: Importkandidaten ──────────────────────────────────────────────
+    def _page_importkandidaten(self):
+        theme.page_header(self.content, "Importkandidaten",
+                          "Lohnende Parallelimport-Chancen aus den Bedarfsanalysen – "
+                          "nachgefragte Artikel, die NMG noch nicht führt.",
+                          bg=SHELL_BG).pack(fill="x", padx=24, pady=(20, 8))
+
+        # Beim Öffnen des Reiters immer frisch berechnen (Cache verwerfen), damit
+        # neue Bedarfsanalysen/Markierungen sofort einfließen. Das Hersteller-Dropdown
+        # kommt aus einer leichten DISTINCT-Abfrage ohne die teure Vollberechnung.
+        self._ik_cache = None
+        herst_namen = ["Alle"] + kandidat_hersteller_namen()
+        if len(herst_namen) == 1:  # gar keine Bedarfsanalysen vorhanden
+            card = theme.Card(self.content)
+            card.pack(fill="x", padx=24, pady=(8, 0))
+            tk.Label(card.inner, text="Noch keine Importkandidaten", bg=BG, fg=TEXT,
+                     font=theme.SECTION).pack(anchor="w")
+            tk.Label(card.inner,
+                     text=("Grundlage sind gespeicherte Bedarfsanalysen in NMGone. Sobald "
+                           "Apotheken-Auswertungen vorliegen, erscheinen hier die Artikel mit "
+                           "Marktnachfrage, die NMG noch nicht als Parallelimport führt."),
+                     bg=BG, fg=MUTED, font=theme.BODY, wraplength=820, justify="left").pack(
+                anchor="w", pady=(6, 4))
+            return
+
+        st = self._ik_state  # gemerkte Filter (bis zur nächsten Änderung)
+
+        # Filterleiste
+        flt = theme.Card(self.content)
+        flt.pack(fill="x", padx=24, pady=(0, 8))
+        g = flt.inner
+        for c in range(6):
+            g.columnconfigure(c, weight=1 if c in (1, 3) else 0)
+        tk.Label(g, text="Hersteller", bg=BG, fg=MUTED, font=theme.SMALL).grid(
+            row=0, column=0, sticky="w", padx=(0, 6))
+        herst_vorgabe = st.get("herst", "Alle") if st.get("herst", "Alle") in herst_namen else "Alle"
+        self._ik_herst = tk.StringVar(value=herst_vorgabe)
+        ttk.Combobox(g, textvariable=self._ik_herst, values=herst_namen, state="readonly",
+                     width=22, style="NMG.TCombobox").grid(row=0, column=1, sticky="ew", padx=(0, 16))
+        tk.Label(g, text="Wirkstoff enthält", bg=BG, fg=MUTED, font=theme.SMALL).grid(
+            row=0, column=2, sticky="w", padx=(0, 6))
+        self._ik_wirk = tk.StringVar(value=st.get("wirk", ""))
+        ttk.Entry(g, textvariable=self._ik_wirk, width=20).grid(row=0, column=3, sticky="ew", padx=(0, 16))
+        tk.Label(g, text="Preis €  von / bis", bg=BG, fg=MUTED, font=theme.SMALL).grid(
+            row=0, column=4, sticky="w", padx=(0, 6))
+        pbox = tk.Frame(g, bg=BG)
+        pbox.grid(row=0, column=5, sticky="w")
+        self._ik_pmin = tk.StringVar(value=st.get("pmin", ""))
+        self._ik_pmax = tk.StringVar(value=st.get("pmax", ""))
+        ttk.Entry(pbox, textvariable=self._ik_pmin, width=8).pack(side="left")
+        tk.Label(pbox, text="–", bg=BG, fg=MUTED).pack(side="left", padx=2)
+        ttk.Entry(pbox, textvariable=self._ik_pmax, width=8).pack(side="left")
+
+        z2 = tk.Frame(g, bg=BG)
+        z2.grid(row=1, column=0, columnspan=6, sticky="w", pady=(8, 0))
+        tk.Label(z2, text="Artikel-Typ", bg=BG, fg=MUTED, font=theme.SMALL).pack(side="left")
+        self._ik_typ = tk.StringVar(value=st.get("typ", "Nur Original"))
+        ttk.Combobox(z2, textvariable=self._ik_typ, values=["Alle", "Nur Original", "Nur Reimport"],
+                     state="readonly", width=14, style="NMG.TCombobox").pack(side="left", padx=(6, 16))
+        tk.Label(z2, text="Min. Apotheken", bg=BG, fg=MUTED, font=theme.SMALL).pack(side="left")
+        self._ik_minapo = tk.StringVar(value=st.get("minapo", ""))
+        ttk.Entry(z2, textvariable=self._ik_minapo, width=6).pack(side="left", padx=(6, 16))
+        tk.Label(z2, text="Status", bg=BG, fg=MUTED, font=theme.SMALL).pack(side="left")
+        self._ik_status = tk.StringVar(value=st.get("status", "Alle"))
+        ttk.Combobox(z2, textvariable=self._ik_status, values=["Alle"] + KANDIDAT_STATUS,
+                     state="readonly", width=13, style="NMG.TCombobox").pack(side="left", padx=(6, 16))
+
+        z3 = tk.Frame(g, bg=BG)
+        z3.grid(row=2, column=0, columnspan=6, sticky="w", pady=(8, 0))
+        self._ik_nurwichtig = tk.IntVar(value=st.get("nurwichtig", 0))
+        tk.Checkbutton(z3, text="Nur wichtige Hersteller (★)", variable=self._ik_nurwichtig,
+                       bg=BG, fg=TEXT, activebackground=BG, font=theme.SMALL,
+                       command=self._importkand_reload).pack(side="left")
+        self._ik_machbar = tk.IntVar(value=st.get("machbar", 0))
+        tk.Checkbutton(z3, text="Nur §129-machbar", variable=self._ik_machbar,
+                       bg=BG, fg=TEXT, activebackground=BG, font=theme.SMALL,
+                       command=self._importkand_reload).pack(side="left", padx=(12, 0))
+        self._ik_ohnekonk = tk.IntVar(value=st.get("ohnekonk", 0))
+        tk.Checkbutton(z3, text="Nur ohne Reimporteur (unbesetzt)", variable=self._ik_ohnekonk,
+                       bg=BG, fg=TEXT, activebackground=BG, font=theme.SMALL,
+                       command=self._importkand_reload).pack(side="left", padx=(12, 0))
+        self._ik_nurbeob = tk.IntVar(value=st.get("nurbeob", 0))
+        tk.Checkbutton(z3, text="Nur gemerkte (📌)", variable=self._ik_nurbeob,
+                       bg=BG, fg=TEXT, activebackground=BG, font=theme.SMALL,
+                       command=self._importkand_reload).pack(side="left", padx=(12, 0))
+        theme.PillButton(z3, "Anzeigen", self._importkand_reload, kind="primary",
+                         font_size=10, padx=14, pady=6).pack(side="left", padx=(16, 0))
+        theme.PillButton(z3, "Zurücksetzen", self._importkand_reset, kind="ghost",
+                         font_size=10, padx=12, pady=6).pack(side="left", padx=6)
+        theme.PillButton(z3, "↻ Neu berechnen", self._ik_refresh, kind="ghost",
+                         font_size=10, padx=12, pady=6).pack(side="left")
+
+        # KPIs
+        self._ik_kpi = tk.Frame(self.content, bg=SHELL_BG)
+        self._ik_kpi.pack(fill="x", padx=0, pady=(0, 8))
+
+        # Spalten dynamisch nach Sichtbarkeits-Einstellung (PZN/Artikel/Hersteller fix).
+        self._ik_colspec = self._ik_sichtbare_spalten()
+        header = tuple(c["header"] for c in self._ik_colspec)
+        widths = tuple(c["width"] for c in self._ik_colspec)
+        numerisch = tuple(c["header"] for c in self._ik_colspec if c["numeric"])
+        wrap, self._ik_tree = self._make_tree(self.content, header, widths, height=14,
+                                              numerisch=numerisch)
+        wrap.pack(fill="both", expand=True, padx=24, pady=(0, 4))
+        self._ik_tree.bind("<Double-1>", lambda e: self._ik_detail())
+
+        akt = tk.Frame(self.content, bg=SHELL_BG)
+        akt.pack(fill="x", padx=24, pady=(0, 16))
+        theme.PillButton(akt, "📌  Merken / Entfernen", self._ik_toggle_beobachtet,
+                         kind="accent", font_size=10, padx=12, pady=6).pack(side="left")
+        theme.PillButton(akt, "📋  Kontaktieren", self._ik_kontakt,
+                         kind="primary", font_size=10, padx=12, pady=6).pack(side="left", padx=6)
+        theme.PillButton(akt, "★  Hersteller bevorzugt", self._ik_toggle_wichtig, kind="neutral",
+                         font_size=10, padx=12, pady=6).pack(side="left", padx=6)
+        theme.PillButton(akt, "📐  Marge rechnen", self._ik_marge, kind="ghost",
+                         font_size=10, padx=12, pady=6).pack(side="left", padx=6)
+        theme.PillButton(akt, "⤓ Excel", self._ik_export, kind="neutral",
+                         font_size=10, padx=12, pady=6).pack(side="left", padx=6)
+        self._ik_hinweis = tk.Label(akt, text="", bg=SHELL_BG, fg=MUTED, font=theme.SMALL)
+        self._ik_hinweis.pack(side="right")
+        self._importkand_reload()  # beim Öffnen immer frisch laden & anzeigen
+
+    def _ik_sichtbare_spalten(self) -> list[dict]:
+        """Spalten-Spezifikation der Tabelle, gefiltert nach Sichtbarkeits-Einstellung.
+        PZN/Artikel/Hersteller sind immer dabei; der Rest folgt kandidat_spalten()."""
+        ampel_sym = {"gruen": "✓", "gelb": "~", "rot": "✗", "—": "—"}
+
+        def f_pot(d):
+            return (f"{d['potenzial_jahr']:,.0f} €".replace(",", ".")
+                    if d["potenzial_jahr"] is not None else "—")
+
+        alle = [
+            ("pzn", "PZN", 76, True, lambda d: d["pzn"], False),
+            ("artikel", "Artikel", 200, False,
+             lambda d: (("📌 " if d["beobachtet"] else "") + ("★ " if d["wichtig"] else "")
+                        + (d["artikel"] or "—"))[:48], False),
+            ("hersteller", "Hersteller", 110, False, lambda d: d["hersteller"], False),
+            ("typ", "Typ", 70, False, lambda d: d["typ"], True),
+            ("wirkstoff", "Wirkstoff", 130, False, lambda d: (d["wirkstoff"] or "—")[:26], True),
+            ("absatz", "Absatz 6M", 78, True, lambda d: f"{d['absatz']:,.0f}".replace(",", "."), True),
+            ("apo", "Apo.", 44, True, lambda d: d["apotheken"], True),
+            ("konkurrenz", "Konk.", 48, True,
+             lambda d: (d["konkurrenz"] if d["wirkstoff"] else "?"), True),
+            ("trend", "Trend", 60, False, lambda d: d["trend_sym"], True),
+            ("preis", "Preis", 80, True,
+             lambda d: _eur(d["preis"]) if d["preis"] is not None else "—", True),
+            ("ampel", "§129", 52, False, lambda d: ampel_sym.get(d["ampel"], "—"), True),
+            ("potenzial", "Potenzial/J", 96, True, f_pot, True),
+            ("status", "Status", 96, False, lambda d: d["status"], True),
+        ]
+        vis = kandidat_spalten()
+        out = []
+        for key, header, width, numeric, value, optional in alle:
+            if optional and not vis.get(key, True):
+                continue
+            out.append({"key": key, "header": header, "width": width,
+                        "numeric": numeric, "value": value})
+        return out
+
+    def _ik_filters(self) -> dict:
+        typ_map = {"Alle": "Alle", "Nur Original": "Original", "Nur Reimport": "Reimport"}
+        return {
+            "hersteller": self._ik_herst.get(),
+            "wirkstoff": self._ik_wirk.get(),
+            "typ": typ_map.get(self._ik_typ.get(), "Alle"),
+            "preis_min": _parse_num(self._ik_pmin.get()) if self._ik_pmin.get().strip() else None,
+            "preis_max": _parse_num(self._ik_pmax.get()) if self._ik_pmax.get().strip() else None,
+            "min_apotheken": _parse_num(self._ik_minapo.get()) if self._ik_minapo.get().strip() else 0,
+            "nur_wichtige_hersteller": bool(self._ik_nurwichtig.get()),
+            "nur_machbar": bool(self._ik_machbar.get()),
+            "nur_ohne_konkurrenz": bool(self._ik_ohnekonk.get()),
+            "nur_beobachtet": bool(self._ik_nurbeob.get()),
+            "status": self._ik_status.get(),
+        }
+
+    def _importkand_reset(self):
+        self._ik_herst.set("Alle")
+        self._ik_wirk.set("")
+        self._ik_pmin.set("")
+        self._ik_pmax.set("")
+        self._ik_minapo.set("")
+        self._ik_nurwichtig.set(0)
+        self._ik_typ.set("Nur Original")
+        self._ik_machbar.set(0)
+        self._ik_ohnekonk.set(0)
+        self._ik_nurbeob.set(0)
+        self._ik_status.set("Alle")
+        self._importkand_reload()
+
+    def _ik_cache_laden(self) -> bool:
+        """Sorgt dafür, dass die (teure) Kandidatenliste im Cache liegt. Zeigt
+        währenddessen einen kurzen Hinweis + Wartecursor. Liefert True bei Daten."""
+        if self._ik_cache is None:
+            self._ik_hinweis.config(text="Kandidaten werden berechnet … (einmalig)")
+            try:
+                self.config(cursor="watch")
+                self.update_idletasks()
+            except tk.TclError:
+                pass
+            self._ik_cache = lade_importkandidaten()
+            try:
+                self.config(cursor="")
+            except tk.TclError:
+                pass
+        self._ik_all = self._ik_cache
+        return bool(self._ik_cache)
+
+    def _ik_refresh(self):
+        """Verwirft den Cache und berechnet neu (z. B. nach neuen Bedarfsanalysen)."""
+        self._ik_cache = None
+        self._importkand_reload()
+
+    def _importkand_reload(self):
+        if not hasattr(self, "_ik_tree") or not self._ik_tree.winfo_exists():
+            return
+        # Aktuelle Filter merken, damit sie einen Seitenwechsel überleben.
+        self._ik_state = {"herst": self._ik_herst.get(), "wirk": self._ik_wirk.get(),
+                          "pmin": self._ik_pmin.get(), "pmax": self._ik_pmax.get(),
+                          "minapo": self._ik_minapo.get(), "nurwichtig": self._ik_nurwichtig.get(),
+                          "typ": self._ik_typ.get(), "machbar": self._ik_machbar.get(),
+                          "ohnekonk": self._ik_ohnekonk.get(), "status": self._ik_status.get(),
+                          "nurbeob": self._ik_nurbeob.get()}
+        self._ik_cache_laden()
+        daten = _filter_kandidaten(self._ik_all, self._ik_filters())
+        self._ik_rows = daten
+        for i in self._ik_tree.get_children():
+            self._ik_tree.delete(i)
+        # Anzeige deckeln – das Rendern tausender Zeilen ist langsam; Export/Filter
+        # arbeiten weiter mit der vollständigen Treffermenge.
+        zeige = daten[:IK_MAX_ROWS]
+        for idx, d in enumerate(zeige):
+            tag = ("beobachtet" if d["beobachtet"] else
+                   ("wichtig" if d["wichtig"] else
+                    ("reimport" if d["typ"] == "Reimport" else "")))
+            self._ik_tree.insert(
+                "", "end", iid=str(idx),
+                values=tuple(c["value"](d) for c in self._ik_colspec), tags=(tag,))
+        self._ik_tree.tag_configure("wichtig", foreground=ACCENT)
+        self._ik_tree.tag_configure("reimport", foreground=MUTED)
+        self._ik_tree.tag_configure("beobachtet", background=theme.SELECT_BG)
+
+        # KPIs
+        for w in self._ik_kpi.winfo_children():
+            w.destroy()
+        sum_pot = sum(d["potenzial_jahr"] or 0 for d in daten)
+        ohne_konk = sum(1 for d in daten if d["konkurrenz"] == 0 and d["wirkstoff"])
+        self._kpi_cards(self._ik_kpi, [
+            ("Kandidaten", f"{len(daten):,}".replace(",", "."), ACCENT),
+            ("Σ Potenzial/Jahr (geschätzt)", _eur(sum_pot), theme.PURPLE),
+            ("Unbesetzt (kein Reimporteur)", f"{ohne_konk:,}".replace(",", "."), OK_GREEN),
+        ])
+        mehr = (f" · Anzeige auf {IK_MAX_ROWS} begrenzt – Filter verfeinern"
+                if len(daten) > IK_MAX_ROWS else "")
+        self._ik_hinweis.config(
+            text=f"{len(daten)} Treffer · sortiert nach Jahres-Potenzial{mehr} · "
+                 f"Doppelklick = Details.")
+
+    def _ik_selected(self) -> dict | None:
+        sel = self._ik_tree.selection()
+        if not sel:
+            return None
+        try:
+            return self._ik_rows[int(sel[0])]
+        except (ValueError, IndexError):
+            return None
+
+    def _ik_detail(self, d=None):
+        if d is None:
+            d = self._ik_selected()
+        if not d:
+            messagebox.showinfo("Importkandidaten", "Bitte zuerst einen Artikel auswählen.", parent=self)
+            return
+        KandidatDialog(self, d)
+
+    def _ik_kontakt(self, d=None):
+        if d is None:
+            d = self._ik_selected()
+        if not d:
+            messagebox.showinfo("Importkandidaten", "Bitte zuerst einen Artikel auswählen.", parent=self)
+            return
+        preis = _eur(d["preis"]) if d["preis"] is not None else "—"
+        # Falls dem Hersteller ein Lieferant zugeordnet ist, gleich vorbelegen
+        # (bevorzugter zuerst).
+        liefs = lieferanten_fuer_hersteller(d["hersteller"])
+        vorgabe = {"titel": f"Parallelimport prüfen: {d['artikel']}".strip()[:120],
+                   "kategorie": "Anfrage",
+                   "beschreibung": (f"PZN {d['pzn']} · Hersteller {d['hersteller']} · "
+                                    f"Absatz 6M {d['absatz']:.0f} in {d['apotheken']} Apotheken · "
+                                    f"Preis {preis} ({d['preis_quelle']}). "
+                                    f"Bei Firma anfragen, ob als Parallelimport beschaffbar.")}
+        if liefs:
+            vorgabe["lieferant_id"] = liefs[0][0]
+        AufgabeDialog(self, None, on_save=self._after_aufgabe_save, vorgabe=vorgabe)
+
+    def _ik_toggle_wichtig(self, d=None):
+        if d is None:
+            d = self._ik_selected()
+        if not d:
+            messagebox.showinfo("Importkandidaten", "Bitte zuerst einen Artikel auswählen.", parent=self)
+            return
+        neu = not d["wichtig"]
+        merk_pzn = d["pzn"]
+        set_hersteller_wichtig(d["hersteller"], neu)
+        # In-Memory-Liste nachziehen, damit Filter/★ ohne Neuladen stimmen.
+        wichtig = wichtige_hersteller()
+        for c in self._ik_all:
+            c["wichtig"] = c["hersteller"] in wichtig
+        self._importkand_reload()
+        # Auswahl auf derselben Zeile halten (sofern weiterhin sichtbar).
+        for idx, row in enumerate(getattr(self, "_ik_rows", [])):
+            if row["pzn"] == merk_pzn:
+                self._ik_tree.selection_set(str(idx))
+                self._ik_tree.see(str(idx))
+                break
+        return neu
+
+    def _ik_toggle_beobachtet(self, d=None):
+        if d is None:
+            d = self._ik_selected()
+        if not d:
+            messagebox.showinfo("Importkandidaten", "Bitte zuerst einen Artikel auswählen.", parent=self)
+            return
+        neu = not d["beobachtet"]
+        set_kandidat_beobachtet(d["pzn"], neu)
+        d["beobachtet"] = neu
+        merk_pzn = d["pzn"]
+        # Cache neu sortieren (gemerkte nach oben) und Auswahl halten.
+        if self._ik_cache is not None:
+            self._ik_cache.sort(key=lambda c: (c["beobachtet"], c["potenzial_jahr"] is not None,
+                                               c["potenzial_jahr"] or 0.0, c["absatz"]), reverse=True)
+        self._importkand_reload()
+        for idx, row in enumerate(getattr(self, "_ik_rows", [])[:IK_MAX_ROWS]):
+            if row["pzn"] == merk_pzn:
+                self._ik_tree.selection_set(str(idx))
+                self._ik_tree.see(str(idx))
+                break
+        return neu
+
+    def _ik_toggle_reimporteur(self, d=None):
+        if d is None:
+            d = self._ik_selected()
+        if not d:
+            messagebox.showinfo("Importkandidaten", "Bitte zuerst einen Artikel auswählen.", parent=self)
+            return
+        neu = d["typ"] != "Reimport"
+        set_hersteller_reimporteur(d["hersteller"], neu)
+        # Typ aller Zeilen desselben Anbieters neu bewerten.
+        benutzer = benutzer_reimporteure()
+        for c in self._ik_all:
+            c["typ"] = "Reimport" if _ist_reimporteur(c["hersteller"], benutzer) else "Original"
+        self._importkand_reload()
+        return "Reimport" if d["typ"] == "Reimport" else "Original"
+
+    def _ik_marge(self, d=None):
+        if d is None:
+            d = self._ik_selected()
+        if not d:
+            messagebox.showinfo("Importkandidaten", "Bitte zuerst einen Artikel auswählen.", parent=self)
+            return
+        prefill = {"pzn": d["pzn"]}
+        if d["preis"] is not None:
+            prefill["referenz_avp"] = f"{d['preis']:.2f}".replace(".", ",")
+        self.show("marge", prefill=prefill)
+
+    def _ik_export(self):
+        daten = getattr(self, "_ik_rows", None)
+        if not daten:
+            messagebox.showinfo("Export", "Keine Importkandidaten zum Exportieren.", parent=self)
+            return
+        ampel_txt = {"gruen": "machbar", "gelb": "knapp", "rot": "keine Marge", "—": ""}
+        headers = ["PZN", "Artikel", "Hersteller", "Typ", "Wichtig", "Wirkstoff", "Absatz 6M",
+                   "Trend", "Apotheken", "Reimporteure aktiv", "Umsatz 6M (€)", "APU/Preis (€)",
+                   "Preisquelle", "§129-machbar", "Marge/Stück (€)", "Marge (%)",
+                   "Potenzial/Jahr (€)", "Status", "Chancen-Score"]
+        rows = [[d["pzn"], d["artikel"], d["hersteller"], d["typ"], "ja" if d["wichtig"] else "",
+                 d["wirkstoff"], round(d["absatz"], 0), d.get("trend_label", ""),
+                 d["apotheken"], d["konkurrenz"], round(d["umsatz"], 2),
+                 round(d["preis"], 2) if d["preis"] is not None else "", d["preis_quelle"],
+                 ampel_txt.get(d["ampel"], ""),
+                 round(d["marge_stueck"], 2) if d["marge_stueck"] is not None else "",
+                 round(d["marge_proz"], 1) if d["marge_proz"] is not None else "",
+                 round(d["potenzial_jahr"], 0) if d["potenzial_jahr"] is not None else "",
+                 d["status"], round(d["score"], 0)]
+                for d in daten]
+        self._export_und_oeffnen(headers, rows, "Importkandidaten", "Einkauf_Importkandidaten")
+
+    # ── Seite: Statistik & Erfolg ────────────────────────────────────────────
+    def _page_statistik(self):
+        wrap = self._scrollseite()
+        theme.page_header(wrap, "Statistik & Erfolg",
+                          "Welche Lieferanten/Hersteller am besten kooperieren – Quellen, "
+                          "Marge, Kontakte und Pipeline-Erfolg.",
+                          bg=SHELL_BG).pack(fill="x", pady=(20, 12), anchor="w")
+
+        lief = lieferanten_erfolg()
+        herst = hersteller_erfolg()
+        eingelistet = sum(h["eingelistet"] for h in herst)
+        bevorzugt = sum(1 for l in lief if l["bevorzugt"])
+        quellen = sum(l["quellen"] for l in lief)
+        kpi = tk.Frame(wrap, bg=SHELL_BG)
+        kpi.pack(fill="x", pady=(0, 12))
+        self._kpi_cards(kpi, [
+            ("Lieferanten aktiv", str(sum(1 for l in lief if l["aktiv"])), ACCENT),
+            ("davon bevorzugt ★", str(bevorzugt), theme.PURPLE),
+            ("Beschaffungsquellen", str(quellen), OK_GREEN),
+            ("Artikel eingelistet", str(eingelistet), theme.WARNING),
+        ])
+
+        # Lieferanten-Erfolg
+        c1 = tk.Frame(wrap, bg=SHELL_BG)
+        c1.pack(fill="x", pady=(0, 4))
+        tk.Label(c1, text="🏭  Lieferanten-Erfolg", bg=SHELL_BG, fg=TEXT, font=theme.SECTION).pack(side="left")
+        theme.PillButton(c1, "⤓ Excel", self._stat_export_lief, kind="neutral",
+                         font_size=10, padx=12, pady=6).pack(side="right")
+        lwrap, ltree = self._make_tree(
+            wrap, ("★", "Lieferant", "Land", "Quellen", "Ø Marge", "Aufgaben", "erledigt", "Bestellungen"),
+            (28, 200, 100, 70, 80, 80, 72, 90), height=8,
+            numerisch=("Quellen", "Ø Marge", "Aufgaben", "erledigt", "Bestellungen"))
+        lwrap.pack(fill="x", pady=(2, 12))
+        for l in lief:
+            ltree.insert("", "end", values=(
+                "★" if l["bevorzugt"] else "", l["name"], l["land"] or "—", l["quellen"],
+                f"{l['marge_proz']:.0f}%" if l["marge_proz"] is not None else "—",
+                l["aufgaben"], l["erledigt"], l["bestellungen"]),
+                tags=("bev" if l["bevorzugt"] else ("" if l["aktiv"] else "inaktiv"),))
+        ltree.tag_configure("bev", foreground=ACCENT)
+        ltree.tag_configure("inaktiv", foreground=MUTED)
+        if not lief:
+            tk.Label(wrap, text="Noch keine Lieferanten erfasst.", bg=SHELL_BG, fg=MUTED,
+                     font=theme.BODY).pack(anchor="w", pady=(0, 12))
+
+        # Hersteller-Pipeline-Erfolg
+        c2 = tk.Frame(wrap, bg=SHELL_BG)
+        c2.pack(fill="x", pady=(0, 4))
+        tk.Label(c2, text="🧪  Hersteller-Pipeline (Importkandidaten)", bg=SHELL_BG, fg=TEXT,
+                 font=theme.SECTION).pack(side="left")
+        theme.PillButton(c2, "⤓ Excel", self._stat_export_herst, kind="neutral",
+                         font_size=10, padx=12, pady=6).pack(side="right")
+        hwrap, htree = self._make_tree(
+            wrap, ("Hersteller", "Kandidaten", "gemerkt", "angefragt", "Angebot", "eingelistet",
+                   "verworfen", "Erfolgsquote"),
+            (140, 90, 70, 80, 80, 90, 80, 90), height=8,
+            numerisch=("Kandidaten", "gemerkt", "angefragt", "Angebot", "eingelistet",
+                       "verworfen", "Erfolgsquote"))
+        hwrap.pack(fill="x", pady=(2, 12))
+        for h in herst:
+            htree.insert("", "end", values=(
+                h["hersteller"], h["gesamt"], h["beobachtet"], h["angefragt"], h["angebot"],
+                h["eingelistet"], h["verworfen"],
+                f"{h['erfolgsquote']:.0f}%" if h["erfolgsquote"] is not None else "—"))
+        if not herst:
+            tk.Label(wrap,
+                     text="Sobald du in den Importkandidaten Artikel auf „Angefragt“, „Eingelistet“ "
+                          "usw. setzt, erscheint hier die Erfolgsauswertung je Hersteller.",
+                     bg=SHELL_BG, fg=MUTED, font=theme.BODY, wraplength=820, justify="left").pack(
+                anchor="w", pady=(0, 16))
+
+    def _stat_export_lief(self):
+        lief = lieferanten_erfolg()
+        if not lief:
+            messagebox.showinfo("Export", "Keine Lieferanten zum Exportieren.", parent=self)
+            return
+        headers = ["Lieferant", "Land", "Bevorzugt", "Aktiv", "Beschaffungsquellen", "Ø Marge (%)",
+                   "Aufgaben", "erledigt", "Bestellungen"]
+        rows = [[l["name"], l["land"], "ja" if l["bevorzugt"] else "", "ja" if l["aktiv"] else "nein",
+                 l["quellen"], round(l["marge_proz"], 1) if l["marge_proz"] is not None else "",
+                 l["aufgaben"], l["erledigt"], l["bestellungen"]] for l in lief]
+        self._export_und_oeffnen(headers, rows, "Lieferanten-Erfolg", "Einkauf_Statistik_Lieferanten")
+
+    def _stat_export_herst(self):
+        herst = hersteller_erfolg()
+        if not herst:
+            messagebox.showinfo("Export", "Noch keine Pipeline-Daten – setze zuerst Kandidaten-Status.",
+                                parent=self)
+            return
+        headers = ["Hersteller", "Kandidaten", "gemerkt", "angefragt", "Angebot/Muster",
+                   "eingelistet", "verworfen", "Erfolgsquote (%)"]
+        rows = [[h["hersteller"], h["gesamt"], h["beobachtet"], h["angefragt"], h["angebot"],
+                 h["eingelistet"], h["verworfen"],
+                 round(h["erfolgsquote"], 1) if h["erfolgsquote"] is not None else ""] for h in herst]
+        self._export_und_oeffnen(headers, rows, "Hersteller-Pipeline", "Einkauf_Statistik_Hersteller")
 
     # ── Seite: Margenrechner §129 ────────────────────────────────────────────
     def _page_marge(self):
@@ -1393,6 +2554,47 @@ class EinkaufPanel(tk.Frame):
                 row=r * 2 + 1, column=c, sticky="w", padx=(0, 16), pady=(0, 4))
             self._set_vars[key] = v
 
+        cardk = theme.Card(wrap)
+        cardk.pack(fill="x", pady=(0, 12))
+        tk.Label(cardk.inner, text="Importkandidaten – Bewertungs-Annahmen", bg=BG, fg=TEXT,
+                 font=theme.SECTION).pack(anchor="w")
+        tk.Label(cardk.inner,
+                 text=("Grundlage für Potenzial in € und die §129-Machbarkeits-Ampel. Der EU-EK-Anteil "
+                       "ist der angenommene Einkaufspreis im EU-Ausland in Prozent des deutschen "
+                       "Preisniveaus; die Mindestmarge legt fest, ab welcher geschätzten §129-Marge die "
+                       "Ampel grün wird. Werte sind Schätzungen – keine echten EU-Preise."),
+                 bg=BG, fg=MUTED, font=theme.SMALL, wraplength=820, justify="left").pack(anchor="w", pady=(4, 10))
+        gridk = tk.Frame(cardk.inner, bg=BG)
+        gridk.pack(fill="x")
+        for i, (key, label) in enumerate([("kandidat_eu_ek_proz", "Angenommener EU-EK (% vom DE-Preis)"),
+                                          ("kandidat_min_marge_proz", "Mindestmarge für Ampel grün (%)"),
+                                          ("kandidat_fixkosten", "Einführungskosten je Artikel (€)")]):
+            tk.Label(gridk, text=label, bg=BG, fg=MUTED, font=theme.SMALL).grid(
+                row=0, column=i, sticky="w", padx=(0, 16), pady=(0, 0))
+            v = tk.StringVar(value=get_setting(key))
+            ttk.Entry(gridk, textvariable=v, width=14).grid(row=1, column=i, sticky="w", padx=(0, 16), pady=(0, 4))
+            self._set_vars[key] = v
+
+        cardsp = theme.Card(wrap)
+        cardsp.pack(fill="x", pady=(0, 12))
+        tk.Label(cardsp.inner, text="Importkandidaten – Spalten anzeigen", bg=BG, fg=TEXT,
+                 font=theme.SECTION).pack(anchor="w")
+        tk.Label(cardsp.inner,
+                 text="Welche Spalten in der Importkandidaten-Tabelle sichtbar sind. PZN, Artikel "
+                      "und Hersteller bleiben immer eingeblendet.",
+                 bg=BG, fg=MUTED, font=theme.SMALL, wraplength=820, justify="left").pack(anchor="w", pady=(4, 8))
+        spgrid = tk.Frame(cardsp.inner, bg=BG)
+        spgrid.pack(fill="x")
+        self._spalten_vars = {}
+        vis = kandidat_spalten()
+        for i, (key, label) in enumerate(IK_OPT_COLUMNS):
+            r, c = divmod(i, 3)
+            var = tk.IntVar(value=1 if vis.get(key, True) else 0)
+            tk.Checkbutton(spgrid, text=label, variable=var, bg=BG, fg=TEXT,
+                           activebackground=BG, font=theme.SMALL).grid(
+                row=r, column=c, sticky="w", padx=(0, 18), pady=2)
+            self._spalten_vars[key] = var
+
         card2 = theme.Card(wrap)
         card2.pack(fill="x", pady=(0, 12))
         tk.Label(card2.inner, text="Standard-Währung für neue Quellen", bg=BG, fg=TEXT,
@@ -1436,6 +2638,8 @@ class EinkaufPanel(tk.Frame):
     def _einstellungen_speichern(self):
         for key, var in self._set_vars.items():
             set_setting(key, var.get().strip())
+        if hasattr(self, "_spalten_vars"):
+            set_kandidat_spalten({k: bool(v.get()) for k, v in self._spalten_vars.items()})
         _log("Einstellungen gespeichert")
         messagebox.showinfo("Einstellungen", "Gespeichert.", parent=self)
 
@@ -1570,7 +2774,7 @@ class AufgabeDialog(_BaseDialog):
 
 class LieferantDialog(_BaseDialog):
     def __init__(self, master, lieferant_id=None, on_save=None):
-        super().__init__(master, "Lieferant", breite=560, hoehe=640)
+        super().__init__(master, "Lieferant", breite=560, hoehe=780)
         self.lieferant_id = lieferant_id
         self.on_save = on_save
         daten = {}
@@ -1636,12 +2840,53 @@ class LieferantDialog(_BaseDialog):
         tk.Checkbutton(chk, text="Aktiv", variable=self.v_aktiv, bg=SHELL_BG,
                        fg=TEXT, activebackground=SHELL_BG, font=theme.BODY).pack(side="left", padx=16)
 
+        # Hersteller-Zuordnung: welche Marken dieser Lieferant beschaffen kann
+        # (Lieferant ≠ Hersteller, aber verknüpfbar).
+        tk.Label(body, text="Beschaffbare Hersteller (welche Marken dieser Lieferant liefern kann)",
+                 bg=SHELL_BG, fg=MUTED, font=theme.SMALL).pack(anchor="w", pady=(10, 0))
+        hz = tk.Frame(body, bg=SHELL_BG)
+        hz.pack(fill="x")
+        self._link_herst = lieferant_hersteller(lieferant_id) if lieferant_id else []
+        self._link_lb = tk.Listbox(hz, height=4, font=theme.SMALL, highlightthickness=1,
+                                   highlightbackground=BORDER, relief="flat", activestyle="none")
+        self._link_lb.pack(side="left", fill="x", expand=True)
+        for h in self._link_herst:
+            self._link_lb.insert("end", h)
+        hb = tk.Frame(hz, bg=SHELL_BG)
+        hb.pack(side="left", padx=(6, 0), fill="y")
+        self._link_combo = ttk.Combobox(hb, values=kandidat_hersteller_namen(), state="normal",
+                                        width=16, style="NMG.TCombobox")
+        self._link_combo.pack(anchor="w")
+        hbtn = tk.Frame(hb, bg=SHELL_BG)
+        hbtn.pack(anchor="w", pady=(4, 0))
+        theme.PillButton(hbtn, "➕ Hinzufügen", self._link_add, kind="neutral",
+                         font_size=9, padx=8, pady=4).pack(side="left")
+        theme.PillButton(hbtn, "➖ Entfernen", self._link_remove, kind="ghost",
+                         font_size=9, padx=8, pady=4).pack(side="left", padx=(4, 0))
+
         btn = tk.Frame(body, bg=SHELL_BG)
         btn.pack(fill="x", pady=(16, 0))
         theme.PillButton(btn, "Speichern", self._speichern, kind="primary",
                          padx=18, pady=9).pack(side="left")
         theme.PillButton(btn, "Abbrechen", self.destroy, kind="neutral",
                          padx=14, pady=9).pack(side="left", padx=8)
+
+    def _link_add(self):
+        h = (self._link_combo.get() or "").strip()
+        if h and h not in self._link_herst:
+            self._link_herst.append(h)
+            self._link_lb.insert("end", h)
+        self._link_combo.set("")
+
+    def _link_remove(self):
+        sel = self._link_lb.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        h = self._link_lb.get(idx)
+        self._link_lb.delete(idx)
+        if h in self._link_herst:
+            self._link_herst.remove(h)
 
     def _speichern(self):
         name = self.v_name.get().strip()
@@ -1662,12 +2907,15 @@ class LieferantDialog(_BaseDialog):
                     "email=?, telefon=?, lieferzeit_tage=?, mindestbestellwert=?, zahlungsziel_tage=?, "
                     "gdp_zertifiziert=?, aktiv=?, notizen=?, geaendert_am=? WHERE id=?",
                     werte + (_now(), self.lieferant_id))
+                lid = self.lieferant_id
             else:
-                con.execute(
+                cur = con.execute(
                     "INSERT INTO tbl_einkauf_lieferanten(name, land, waehrung, ansprechpartner, email, "
                     "telefon, lieferzeit_tage, mindestbestellwert, zahlungsziel_tage, gdp_zertifiziert, "
                     "aktiv, notizen) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", werte)
+                lid = cur.lastrowid
             con.commit()
+        set_lieferant_hersteller(lid, getattr(self, "_link_herst", []))
         _log("Lieferant gespeichert", name)
         if self.on_save:
             self.on_save()
@@ -1797,6 +3045,272 @@ class QuelleDialog(_BaseDialog):
         if self.on_save:
             self.on_save()
         self.destroy()
+
+
+class KandidatDialog(_BaseDialog):
+    """Detailfenster zu einem Importkandidaten: alle Artikel- und Herstellerdaten
+    plus Direktaktionen (Marge rechnen, Hersteller kontaktieren, wichtig markieren)."""
+
+    def __init__(self, panel, d):
+        super().__init__(panel, f"Artikel {d['pzn']}", breite=660, hoehe=720)
+        self.resizable(False, True)
+        self.panel = panel
+        self.d = d
+        self._status_daten = kandidat_status_map().get(d["pzn"], {})
+
+        # Feste Aktionsleiste unten, scrollbarer Inhalt darüber.
+        btn = tk.Frame(self, bg=SHELL_BG)
+        btn.pack(side="bottom", fill="x", padx=20, pady=10)
+        outer = tk.Frame(self, bg=SHELL_BG)
+        outer.pack(side="top", fill="both", expand=True)
+        canvas = tk.Canvas(outer, bg=SHELL_BG, highlightthickness=0)
+        sb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        body = tk.Frame(canvas, bg=SHELL_BG)
+        body.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=body, anchor="nw", width=612)
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side="left", fill="both", expand=True, padx=(20, 0), pady=(14, 0))
+        sb.pack(side="right", fill="y")
+        canvas.bind("<Enter>", lambda e: canvas.bind_all(
+            "<MouseWheel>", lambda ev: canvas.yview_scroll(int(-ev.delta / 120), "units")))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+
+        tk.Label(body, text=d["artikel"] or "—", bg=SHELL_BG, fg=TEXT, font=theme.H2,
+                 wraplength=580, justify="left").pack(anchor="w")
+        tk.Label(body, text=f"PZN {d['pzn']}", bg=SHELL_BG, fg=MUTED, font=theme.SMALL).pack(anchor="w", pady=(0, 8))
+
+        # Bewertung (Potenzial & §129-Machbarkeit)
+        bew = theme.Card(body)
+        bew.pack(fill="x", pady=(0, 10))
+        tk.Label(bew.inner, text="💶  Bewertung (geschätzt)", bg=BG, fg=TEXT,
+                 font=theme.SECTION).pack(anchor="w", pady=(0, 4))
+        ampel_txt = {"gruen": "✓ machbar", "gelb": "~ knapp", "rot": "✗ keine Marge",
+                     "—": "kein Preis hinterlegt"}.get(d["ampel"], "—")
+        ampel_farbe = {"gruen": OK_GREEN, "gelb": theme.WARNING, "rot": theme.DANGER}.get(d["ampel"], MUTED)
+        ar = tk.Frame(bew.inner, bg=BG)
+        ar.pack(fill="x", pady=2)
+        tk.Label(ar, text="§129-Machbarkeit", bg=BG, fg=MUTED, font=theme.SMALL, width=24, anchor="w").pack(side="left")
+        tk.Label(ar, text=ampel_txt, bg=BG, fg=ampel_farbe, font=theme.BODY_BOLD, anchor="w").pack(side="left")
+        if d["potenzial_jahr"] is not None:
+            self._row(bew.inner, "Potenzial / Jahr (Deckungsbeitrag)", _eur(d["potenzial_jahr"]))
+            self._row(bew.inner, "geschätzte Marge / Stück",
+                      f"{_eur(d['marge_stueck'])}  ({d['marge_proz']:.0f} %)")
+            self._row(bew.inner, "max. zul. Import-AVP (§129)", _eur(d["max_import_avp"]))
+            self._row(bew.inner, "Umsatz-Potenzial / Jahr", _eur(d["umsatz_jahr"]))
+            tk.Label(bew.inner,
+                     text=f"Annahme EU-EK {get_setting('kandidat_eu_ek_proz')} % vom DE-Preis · "
+                          f"in den Einstellungen anpassbar.",
+                     bg=BG, fg=MUTED, font=theme.SMALL, wraplength=560, justify="left").pack(anchor="w", pady=(4, 0))
+        else:
+            tk.Label(bew.inner, text="Ohne hinterlegten Preis ist keine Margen-/Potenzialschätzung möglich.",
+                     bg=BG, fg=MUTED, font=theme.SMALL, wraplength=560, justify="left").pack(anchor="w", pady=(2, 0))
+
+        # Artikel-Daten
+        art = theme.Card(body)
+        art.pack(fill="x", pady=(0, 10))
+        tk.Label(art.inner, text="📦  Artikel", bg=BG, fg=TEXT, font=theme.SECTION).pack(anchor="w", pady=(0, 4))
+        preis_txt = (f"{_eur(d['preis'])}  ({d['preis_quelle']})" if d["preis"] is not None else "—")
+        self._row(art.inner, "Darreichung / Packung",
+                  " · ".join(x for x in (d.get("df"), d.get("pck")) if x) or "—")
+        self._row(art.inner, "Wirkstoff", d["wirkstoff"] or "—")
+        self._row(art.inner, "Absatz (6 Monate)", f"{d['absatz']:,.0f}".replace(",", "."))
+        self._row(art.inner, "Apothekenbreite", f"{d['apotheken']} Apotheke(n)")
+        trend_txt = d.get("trend_label", "n/a")
+        if d.get("trend_label") not in (None, "n/a") and d.get("trend_proz"):
+            trend_txt = f"{d['trend_sym']} {d['trend_label']} ({d['trend_proz']:+.0f} %)"
+        self._row(art.inner, "Nachfrage-Trend", trend_txt)
+        self._row(art.inner, "Umsatz (6 Monate)", _eur(d["umsatz"]) if d["umsatz"] else "—")
+        self._row(art.inner, "APU / Preis", preis_txt)
+        self._row(art.inner, "APU (gepflegt)", _eur(d["apu"]) if d["apu"] is not None else "—")
+        self._row(art.inner, "EK (geschätzt)", _eur(d["taxe_ek"]) if d["taxe_ek"] is not None else "—")
+
+        # Hersteller-Daten + Wettbewerb
+        her = theme.Card(body)
+        her.pack(fill="x", pady=(0, 10))
+        kopf = tk.Frame(her.inner, bg=BG)
+        kopf.pack(fill="x")
+        tk.Label(kopf, text="🏭  Hersteller & Wettbewerb", bg=BG, fg=TEXT, font=theme.SECTION).pack(side="left")
+        self._stern_lbl = tk.Label(kopf, text="", bg=BG, fg=ACCENT, font=theme.BODY_BOLD)
+        self._stern_lbl.pack(side="left", padx=(8, 0))
+        self._row(her.inner, "Hersteller", d["hersteller"])
+        tr = tk.Frame(her.inner, bg=BG)
+        tr.pack(fill="x", pady=2)
+        tk.Label(tr, text="Typ", bg=BG, fg=MUTED, font=theme.SMALL, width=24, anchor="w").pack(side="left")
+        self._typ_lbl = tk.Label(tr, text="", bg=BG, fg=TEXT, font=theme.BODY_BOLD, anchor="w")
+        self._typ_lbl.pack(side="left")
+        konk = d.get("konkurrenz_namen") or []
+        konk_txt = (f"{len(konk)} aktiv: " + ", ".join(konk)) if konk else (
+            "noch kein Reimporteur – unbesetzt ✓" if d["wirkstoff"] else "kein Wirkstoff hinterlegt")
+        self._row(her.inner, "Reimporteure (gleicher Wirkstoff)", konk_txt)
+        liefs = lieferanten_fuer_hersteller(d["hersteller"])
+        lief_txt = ", ".join((("★ " if bev else "") + nm) for _, nm, bev in liefs) if liefs else \
+            "— noch kein Lieferant zugeordnet (im Lieferanten-Dialog hinterlegbar)"
+        self._row(her.inner, "Eure Lieferanten dafür", lief_txt)
+        self._row(her.inner, "Markt-Gesamtabsatz (Kandidaten)",
+                  f"{d['herst_absatz']:,.0f}".replace(",", "."))
+        self._row(her.inner, "Kandidaten-Artikel", f"{d['herst_artikel']}")
+        andere = sorted((c for c in getattr(panel, "_ik_all", [])
+                         if c["hersteller"] == d["hersteller"] and c["pzn"] != d["pzn"]),
+                        key=lambda c: c["absatz"], reverse=True)[:5]
+        if andere:
+            tk.Label(her.inner, text="Weitere Kandidaten dieses Herstellers:", bg=BG, fg=MUTED,
+                     font=theme.SMALL).pack(anchor="w", pady=(6, 0))
+            for c in andere:
+                tk.Label(her.inner, text=f"• {c['artikel'][:46]}  ({c['absatz']:,.0f})".replace(",", "."),
+                         bg=BG, fg=TEXT, font=theme.SMALL, anchor="w").pack(anchor="w")
+        self._stern_aktualisieren()
+
+        # Mengen-/Break-even-Rechner
+        rech = theme.Card(body)
+        rech.pack(fill="x", pady=(0, 10))
+        tk.Label(rech.inner, text="🧮  Mengen- & Break-even-Rechner", bg=BG, fg=TEXT,
+                 font=theme.SECTION).pack(anchor="w", pady=(0, 2))
+        tk.Label(rech.inner, text="Echten EU-Einkaufspreis eingeben → Marge/Stück, Break-even-Menge "
+                                  "und Deckungsbeitrag bei der Mindestabnahme.",
+                 bg=BG, fg=MUTED, font=theme.SMALL, wraplength=560, justify="left").pack(anchor="w", pady=(0, 6))
+        rr = tk.Frame(rech.inner, bg=BG)
+        rr.pack(fill="x")
+        ek_f = tk.Frame(rr, bg=BG); ek_f.pack(side="left", padx=(0, 8))
+        tk.Label(ek_f, text="EU-EK (Fremdwährung)", bg=BG, fg=MUTED, font=theme.SMALL).pack(anchor="w")
+        self._be_ek = tk.StringVar()
+        ttk.Entry(ek_f, textvariable=self._be_ek, width=12).pack()
+        w_f = tk.Frame(rr, bg=BG); w_f.pack(side="left", padx=(0, 8))
+        tk.Label(w_f, text="Währung", bg=BG, fg=MUTED, font=theme.SMALL).pack(anchor="w")
+        self._be_waehrung = tk.StringVar(value=get_setting("standard_waehrung", "EUR"))
+        ttk.Combobox(w_f, textvariable=self._be_waehrung, values=waehrungen(), state="readonly",
+                     width=7, style="NMG.TCombobox").pack()
+        m_f = tk.Frame(rr, bg=BG); m_f.pack(side="left", padx=(0, 8))
+        tk.Label(m_f, text="Mindestabnahme", bg=BG, fg=MUTED, font=theme.SMALL).pack(anchor="w")
+        self._be_moq = tk.StringVar()
+        ttk.Entry(m_f, textvariable=self._be_moq, width=10).pack()
+        fx_f = tk.Frame(rr, bg=BG); fx_f.pack(side="left")
+        tk.Label(fx_f, text="Einführungskosten €", bg=BG, fg=MUTED, font=theme.SMALL).pack(anchor="w")
+        self._be_fix = tk.StringVar(value=get_setting("kandidat_fixkosten"))
+        ttk.Entry(fx_f, textvariable=self._be_fix, width=10).pack()
+        theme.PillButton(rech.inner, "Rechnen", self._be_rechnen, kind="primary",
+                         font_size=10, padx=12, pady=6).pack(anchor="w", pady=(8, 4))
+        self._be_result = tk.Label(rech.inner, text="", bg=BG, fg=TEXT, font=theme.BODY,
+                                   wraplength=560, justify="left")
+        self._be_result.pack(anchor="w")
+
+        # Pipeline / Status
+        pipe = theme.Card(body)
+        pipe.pack(fill="x", pady=(0, 10))
+        tk.Label(pipe.inner, text="📋  Pipeline", bg=BG, fg=TEXT, font=theme.SECTION).pack(anchor="w", pady=(0, 4))
+        prow = tk.Frame(pipe.inner, bg=BG)
+        prow.pack(fill="x", pady=(2, 0))
+        sp = tk.Frame(prow, bg=BG); sp.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        tk.Label(sp, text="Status", bg=BG, fg=MUTED, font=theme.SMALL).pack(anchor="w")
+        self._st_status = tk.StringVar(value=self._status_daten.get("status", "Neu"))
+        ttk.Combobox(sp, textvariable=self._st_status, values=KANDIDAT_STATUS,
+                     state="readonly", style="NMG.TCombobox").pack(fill="x")
+        wv = tk.Frame(prow, bg=BG); wv.pack(side="left", fill="x", expand=True)
+        tk.Label(wv, text="Wiedervorlage (TT.MM.JJJJ)", bg=BG, fg=MUTED, font=theme.SMALL).pack(anchor="w")
+        self._st_wv = tk.StringVar(value=_datum_de(self._status_daten.get("wiedervorlage", ""))
+                                   if self._status_daten.get("wiedervorlage") else "")
+        ttk.Entry(wv, textvariable=self._st_wv).pack(fill="x")
+        tk.Label(pipe.inner, text="Notiz", bg=BG, fg=MUTED, font=theme.SMALL).pack(anchor="w", pady=(8, 0))
+        self._st_notiz = tk.StringVar(value=self._status_daten.get("notiz", ""))
+        ttk.Entry(pipe.inner, textvariable=self._st_notiz).pack(fill="x")
+        theme.PillButton(pipe.inner, "Status speichern", self._status_speichern, kind="primary",
+                         font_size=10, padx=12, pady=6).pack(anchor="w", pady=(8, 0))
+
+        # Aktionen
+        self._merk_btn = theme.PillButton(btn, "📌 Merken", self._toggle_beobachtet, kind="accent",
+                                          padx=14, pady=8)
+        self._merk_btn.pack(side="left")
+        theme.PillButton(btn, "📋 Kontaktieren", self._kontakt, kind="primary",
+                         padx=14, pady=8).pack(side="left", padx=6)
+        theme.PillButton(btn, "📐 Marge", self._marge, kind="neutral",
+                         padx=14, pady=8).pack(side="left")
+        self._stern_btn = theme.PillButton(btn, "★ bevorzugt", self._toggle_wichtig, kind="neutral",
+                                           padx=14, pady=8)
+        self._stern_btn.pack(side="left", padx=6)
+        theme.PillButton(btn, "↔ Typ", self._toggle_reimport, kind="neutral",
+                         padx=14, pady=8).pack(side="left")
+        theme.PillButton(btn, "Schließen", self.destroy, kind="ghost",
+                         padx=14, pady=8).pack(side="right")
+
+    def _be_rechnen(self):
+        d = self.d
+        if not d["preis"] or d["preis"] <= 0:
+            self._be_result.config(text="Für diesen Artikel ist kein Preis hinterlegt – "
+                                        "keine Margenschätzung möglich.", fg=MUTED)
+            return
+        ek_eur = _parse_num(self._be_ek.get()) * kurs_eur(self._be_waehrung.get())
+        if ek_eur <= 0:
+            self._be_result.config(text="Bitte einen EU-Einkaufspreis eingeben.", fg=theme.DANGER)
+            return
+        max_avp = max(0.0, d["preis"] - erforderlicher_abstand(d["preis"])[0])
+        marge = max_avp - ek_eur
+        moq = int(_parse_num(self._be_moq.get()))
+        fix = _parse_num(self._be_fix.get())
+        if marge <= 0:
+            self._be_result.config(
+                text=f"EK {_eur(ek_eur)}/Stk · max. Import-AVP {_eur(max_avp)} → "
+                     f"keine positive Marge bei diesem Einkaufspreis.", fg=theme.DANGER)
+            return
+        be_menge = math.ceil(fix / marge) if fix > 0 else 0
+        db_moq = marge * moq - fix
+        teile = [f"EK {_eur(ek_eur)}/Stk", f"Marge {_eur(marge)}/Stk ({marge / max_avp * 100:.0f} %)"]
+        if fix > 0:
+            teile.append(f"Break-even ab {be_menge:,} Stk".replace(",", "."))
+        if moq > 0:
+            moq_str = f"{moq:,}".replace(",", ".")
+            teile.append(f"DB bei {moq_str} Stk: {_eur(db_moq)}")
+        self._be_result.config(text="   ·   ".join(teile),
+                               fg=(OK_GREEN if (moq <= 0 or db_moq > 0) else theme.WARNING))
+
+    def _status_speichern(self):
+        wv_iso = _parse_datum(self._st_wv.get())
+        set_kandidat_status(self.d["pzn"], self._st_status.get(),
+                            self._st_notiz.get().strip(), wv_iso)
+        self.d["status"] = self._st_status.get()
+        # In-Memory-Liste + Tabelle nachziehen.
+        for c in self.panel._ik_all:
+            if c["pzn"] == self.d["pzn"]:
+                c["status"] = self._st_status.get()
+        self.panel._importkand_reload()
+        messagebox.showinfo("Pipeline", "Status gespeichert.", parent=self)
+
+    def _row(self, parent, label, value):
+        r = tk.Frame(parent, bg=BG)
+        r.pack(fill="x", pady=2)
+        tk.Label(r, text=label, bg=BG, fg=MUTED, font=theme.SMALL, width=24, anchor="w").pack(side="left")
+        tk.Label(r, text=value, bg=BG, fg=TEXT, font=theme.BODY, anchor="w",
+                 wraplength=360, justify="left").pack(side="left", fill="x", expand=True)
+
+    def _stern_aktualisieren(self):
+        self._stern_lbl.config(text="★ als wichtig markiert" if self.d["wichtig"] else "")
+        if hasattr(self, "_stern_btn"):
+            self._stern_btn.config(text="☆ als normal" if self.d["wichtig"] else "★ wichtig")
+        reimport = self.d["typ"] == "Reimport"
+        self._typ_lbl.config(text=("Reimport (bereits Parallelimport)" if reimport else "Original-Hersteller"),
+                             fg=(MUTED if reimport else OK_GREEN))
+        if hasattr(self, "_merk_btn"):
+            self._merk_btn.config(text="📌 Gemerkt ✓" if self.d["beobachtet"] else "📌 Merken")
+
+    def _toggle_wichtig(self):
+        self.panel._ik_toggle_wichtig(self.d)  # aktualisiert _ik_all (inkl. self.d) + Tabelle
+        self._stern_aktualisieren()
+
+    def _toggle_beobachtet(self):
+        self.panel._ik_toggle_beobachtet(self.d)  # setzt Flag + sortiert + lädt Tabelle neu
+        self._stern_aktualisieren()
+
+    def _toggle_reimport(self):
+        self.panel._ik_toggle_reimporteur(self.d)  # aktualisiert _ik_all (inkl. self.d) + Tabelle
+        self._stern_aktualisieren()
+
+    def _marge(self):
+        d = self.d
+        self.destroy()
+        self.panel._ik_marge(d)
+
+    def _kontakt(self):
+        d = self.d
+        self.destroy()
+        self.panel._ik_kontakt(d)
 
 
 # ── Standalone ───────────────────────────────────────────────────────────────

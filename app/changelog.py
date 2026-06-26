@@ -5,6 +5,15 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V2.1 SP3", "2026-06-26", [
+        "Einkauf-App: neue Seite 'Importkandidaten' - rechnet aus den gespeicherten Bedarfsanalysen heraus, welche Artikel sich lohnen, als Parallelimport beschafft und ueber NMG in den Markt gebracht zu werden (nachgefragte Artikel, die NMG noch nicht fuehrt und fuer die kein Austausch bekannt ist).",
+        "Bewertung je Kandidat: geschaetztes Jahres-Potenzial in Euro (Absatz x Marge/Stueck), eine §129-Machbarkeits-Ampel und ein Mengen-/Break-even-Rechner (echter EU-Einkaufspreis, Mindestabnahme, Einfuehrungskosten -> Marge/Stueck, Break-even-Menge, Deckungsbeitrag).",
+        "Wettbewerb: erkennt Reimporteure automatisch (kohlpharma, EurimPharm, EMRA-MED, Orifarm, CC-Pharma, Abacus, axicorp, ACA Mueller u.a.) und zeigt je Wirkstoff, wie viele Parallelimporteure bereits aktiv sind - mit Filtern 'nur unbesetzte Luecken' und 'nur Original-Hersteller' (selbst korrigierbar).",
+        "Nachfrage-Trend ueber mehrere Bedarfsanalysen (steigend / stabil / fallend) und Pipeline je Kandidat (Neu -> Angefragt -> Angebot/Muster -> Eingelistet -> Verworfen) mit Wiedervorlage und Notiz.",
+        "Artikel merken (stehen immer oben), bevorzugte Hersteller und Lieferanten markieren; Lieferant und Hersteller bleiben getrennte Stammdaten, lassen sich aber verknuepfen (welcher Lieferant beschafft welche Marken) - erscheint beim Kandidaten als 'Eure Lieferanten dafuer' und wird beim Kontaktieren vorgeschlagen.",
+        "Filter bleiben gesetzt, Tabellenspalten in den Einstellungen ein-/ausblendbar, Excel-Export; deutlich schnelleres Laden und Auto-Aktualisierung beim Oeffnen des Reiters.",
+        "Neue Seite 'Statistik & Erfolg': Lieferanten-Erfolg (Beschaffungsquellen, Durchschnitts-Marge, Aufgaben, Bestellungen) und Hersteller-Pipeline (angefragt / eingelistet / Erfolgsquote), beides als Excel.",
+    ]),
     ("V2.1 SP2", "2026-06-25", [
         "App 'Wareneingang & Retouren' (GDP) stark ausgebaut zu einem kompletten, nachvollziehbaren Warenkreislauf: Einkauf -> Produktionsbestand -> Produzieren (Warenausgang/Avis) -> Verkaufs-Wareneingang -> Bestaetigung -> Verkaufsbestand.",
         "Betriebsmodus pro Arbeitsplatz: Verkauf oder Produktion - das Programm blendet die passenden Bereiche ein und aktiviert den richtigen Wareneingang (Plakette in der Seitenleiste).",
