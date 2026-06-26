@@ -52,9 +52,34 @@ def authenticate(firma_slug: str, login: str, passwort: str) -> dict | None:
             """SELECT b.id AS user_id, b.firma_id, b.login, b.anzeigename,
                       b.passwort_hash, f.slug AS firma_slug, f.name AS firma_name
                  FROM benutzer b JOIN firma f ON f.id = b.firma_id
-                WHERE f.slug=? AND b.login=?""",
+                WHERE f.slug=? AND LOWER(b.login)=LOWER(?)""",
             (firma_slug, login)).fetchone()
     if not row or not verify_password(passwort, row["passwort_hash"]):
+        return None
+    return {
+        "user_id": row["user_id"],
+        "firma_id": row["firma_id"],
+        "firma_slug": row["firma_slug"],
+        "firma_name": row["firma_name"],
+        "login": row["login"],
+        "anzeigename": row["anzeigename"],
+    }
+
+
+def user_by_slug_login(firma_slug: str, login: str) -> dict | None:
+    """Benutzer per Firma-Slug + Login holen – OHNE Passwortpruefung.
+
+    Fuer den SSO-Login (das Cockpit hat den Benutzer bereits geprueft). Liefert
+    dasselbe Session-User-Dict wie ``authenticate``.
+    """
+    with platform_con() as con:
+        row = con.execute(
+            """SELECT b.id AS user_id, b.firma_id, b.login, b.anzeigename,
+                      f.slug AS firma_slug, f.name AS firma_name
+                 FROM benutzer b JOIN firma f ON f.id = b.firma_id
+                WHERE f.slug=? AND LOWER(b.login)=LOWER(?)""",
+            (firma_slug, login)).fetchone()
+    if not row:
         return None
     return {
         "user_id": row["user_id"],

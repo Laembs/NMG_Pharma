@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import auth
+from . import auth, sso
 from .licensing import module_fuer_dashboard
 from .routers import kasse, personal
 from .templating import page, templates
@@ -29,7 +29,7 @@ app.include_router(kasse.router)
 
 # Pfade, die ohne Login erreichbar sind (inkl. PWA-Dateien im Root-Scope).
 _OEFFENTLICH = ("/login", "/logout", "/static", "/healthz",
-                "/sw.js", "/manifest.webmanifest")
+                "/sw.js", "/manifest.webmanifest", "/sso/cockpit")
 
 
 # ── PWA: Service Worker + Manifest im Root-Scope ─────────────────────────────
@@ -100,6 +100,31 @@ def login_submit(request: Request,
 def logout(request: Request):
     auth.logout_session(request)
     return RedirectResponse("/login", status_code=303)
+
+
+# ── SSO aus dem NMGone-Cockpit (Einmal-Token) ────────────────────────────────
+@app.get("/sso/cockpit")
+def sso_cockpit(request: Request, token: str = "", next: str = "/kasse"):
+    """Anmeldung per signiertem Einmal-Token vom Cockpit – ohne Passwort.
+
+    Das Cockpit hat den Benutzer bereits geprueft und signiert Firma+Login mit dem
+    gemeinsamen Geheimnis (PENNONE_SSO_SECRET). Wir pruefen Signatur/Ablauf,
+    verbrauchen das Token einmalig und legen die Session an.
+    """
+    if not sso.secret():
+        return RedirectResponse("/login?fehler=SSO+nicht+konfiguriert", status_code=303)
+    payload = sso.verify_token(token)
+    if not payload or not sso.consume_jti(payload):
+        return RedirectResponse("/login?fehler=SSO-Link+ungueltig+oder+abgelaufen",
+                                status_code=303)
+    user = auth.user_by_slug_login(payload.get("f", ""), payload.get("l", ""))
+    if not user:
+        return RedirectResponse("/login?fehler=Benutzer+in+der+Kasse+unbekannt",
+                                status_code=303)
+    auth.login_session(request, user)
+    # Open-Redirect-Schutz: nur lokale Pfade zulassen.
+    ziel = next if next.startswith("/") and not next.startswith("//") else "/kasse"
+    return RedirectResponse(ziel, status_code=303)
 
 
 # ── Dashboard ────────────────────────────────────────────────────────────────

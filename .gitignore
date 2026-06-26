@@ -62,3 +62,7 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+*.env
+
+# === Server-Deploy-Staging (enthaelt nmgkasse.env mit echten Secrets + Code-Kopien) ===
+deploy/_serverpaket/

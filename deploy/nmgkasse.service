@@ -1,0 +1,21 @@
+[Unit]
+Description=NMGone Kasse (Web) – FastAPI hinter Caddy
+After=network.target
+
+[Service]
+Type=simple
+# Verzeichnis, in das das web/-Paket gescp't wird (web.app:app wird von hier importiert).
+WorkingDirectory=/opt/nmgkasse
+# Geheimnisse in separater Datei (wie /opt/pennone/pennone.env), nicht in der Unit.
+# Enthaelt mind. WEB_SESSION_SECRET=... (spaeter zusaetzlich PENNONE_SSO_SECRET fuer Stufe 2).
+EnvironmentFile=/opt/nmgkasse/nmgkasse.env
+# Lokaler Port; Caddy proxyt darauf. 8765=ONE, 8770=Kasse (frei waehlbar, nur konsistent zum Caddy-Block).
+ExecStart=/opt/nmgkasse/.venv/bin/uvicorn web.app:app --host 127.0.0.1 --port 8770
+Restart=always
+RestartSec=2
+# Laeuft als derselbe App-User wie ONE; braucht Schreibrechte auf web/data + web/tenants (SQLite).
+User=pennone
+Group=pennone
+
+[Install]
+WantedBy=multi-user.target

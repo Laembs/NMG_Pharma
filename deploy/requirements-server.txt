@@ -1,0 +1,9 @@
+# Server-Abhaengigkeiten der Web-Kasse (headless, OHNE pywebview – das wird nur
+# fuer das lokale Desktop-Fenster gebraucht und liesse sich auf dem Server gar
+# nicht ohne GUI-Backend installieren).
+fastapi>=0.110
+uvicorn[standard]>=0.29
+jinja2>=3.1
+python-multipart>=0.0.9
+itsdangerous>=2.1
+bcrypt>=4.0
