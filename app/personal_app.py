@@ -247,6 +247,14 @@ class App:
         self.root = root
         root.title(f"NMGone{DEMO_SUFFIX} · Mitarbeiter & Personal")
         root.geometry("1200x780")
+        # Im Vollbild (maximiert) starten. 'zoomed' = Windows; sonst -zoomed/Bildschirmgroesse.
+        try:
+            root.state("zoomed")
+        except tk.TclError:
+            try:
+                root.attributes("-zoomed", True)
+            except tk.TclError:
+                root.geometry(f"{root.winfo_screenwidth()}x{root.winfo_screenheight()}+0+0")
         root.configure(bg=BG)
         self.style = ttk.Style(root)
         try:

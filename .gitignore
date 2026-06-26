@@ -4,6 +4,13 @@ ausgaben/
 backups/
 gespeicherte_analysen/
 whatsapp_config.txt
+
+# Interne Kosten-/Plan-/Aufwandsunterlagen — NICHT ins oeffentliche Repo
+# (enthalten Aufwands-, Kosten- und Verhandlungsangaben)
+docs/Projektbericht_NMGone.pdf
+docs/Plan_Buchhaltung_App.pdf
+docs/Plan_Kasse_Web.pdf
+docs/Plan_Personal_Web.pdf
 *.xlsx
 *.xlsm
 *.csv

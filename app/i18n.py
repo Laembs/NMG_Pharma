@@ -254,15 +254,235 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 }
 
 
+# ── Laufzeit-Woerterbuch (grosse Volluebersetzung) ──────────────────────────
+# Waehrend TRANSLATIONS oben die handgepflegten Spezialfaelle (z.B. Navigation,
+# bei denen der DE-Anzeigetext vom Key abweicht) haelt, sammelt _RUNTIME die
+# automatisch extrahierten UI-Strings je Sprache. Quelle: app/translations_*.py.
+# Schluessel ist immer der DEUTSCHE Anzeigetext (= das, was im Code-Literal
+# steht und zur Laufzeit im Widget landet), damit die Auto-Uebersetzung greift.
+_RUNTIME: dict[str, dict[str, str]] = {}
+
+
+def register_translations(mapping: dict, lang: str) -> None:
+    """Registriert {deutscher_text: uebersetzung} fuer eine Sprache."""
+    lang = str(lang).strip().upper()
+    for de, tr in mapping.items():
+        if de and tr:
+            _RUNTIME.setdefault(de, {})[lang] = tr
+
+
+def translate(text):
+    """Zentrale Uebersetzungsfunktion fuer die Auto-Patch-Schicht.
+
+    Bei DE (Standard) wird der Text unveraendert zurueckgegeben -> kein
+    Verhalten/Performance-Einfluss fuer bestehende Nutzer. Sonst: Lookup in
+    _RUNTIME, dann im handgepflegten TRANSLATIONS, sonst Fallback DE-Text.
+    """
+    if _current_language == "DE":
+        return text
+    if not isinstance(text, str) or not text:
+        return text
+    entry = _RUNTIME.get(text)
+    if entry:
+        return entry.get(_current_language) or text
+    entry = TRANSLATIONS.get(text)
+    if entry:
+        return entry.get(_current_language) or entry.get("DE") or text
+    return text
+
+
 def T(key: str, **kwargs) -> str:
     """Translate. Fallback: aktive Sprache -> DE -> Key selbst.
     Optional kwargs werden in .format(...) gefuettert.
     """
-    translations = TRANSLATIONS.get(key, {})
-    text = translations.get(_current_language) or translations.get("DE") or key
+    translations = TRANSLATIONS.get(key)
+    if translations:
+        text = translations.get(_current_language) or translations.get("DE") or key
+    else:
+        text = translate(key)
     if kwargs:
         try:
             return text.format(**kwargs)
         except Exception:
             return text
     return text
+
+
+# ── Auto-Uebersetzung: Tkinter zentral patchen ──────────────────────────────
+# Statt ~1.500 Aufrufstellen einzeln in T(...) zu wrappen, haengen wir uns an
+# die wenigen Tkinter-Einstiegspunkte (text=/title/Menue/Tab/Heading/messagebox)
+# und schicken jeden String durch translate(). Fuer DE ist das ein No-Op, daher
+# fuer den Bestand risikolos; fehlende Eintraege fallen auf Deutsch zurueck.
+_auto_installed = False
+
+
+def install_auto_translation() -> None:
+    global _auto_installed
+    if _auto_installed:
+        return
+    try:
+        import tkinter as tk
+        from tkinter import ttk
+    except Exception:
+        return
+    _auto_installed = True
+
+    def _patch_text_widget(cls):
+        orig_init = cls.__init__
+
+        def __init__(self, *a, **kw):
+            if "text" in kw:
+                kw["text"] = translate(kw["text"])
+            return orig_init(self, *a, **kw)
+
+        cls.__init__ = __init__
+        orig_cfg = cls.configure
+
+        def configure(self, cnf=None, **kw):
+            if isinstance(cnf, dict) and "text" in cnf:
+                cnf = dict(cnf)
+                cnf["text"] = translate(cnf["text"])
+            if "text" in kw:
+                kw["text"] = translate(kw["text"])
+            return orig_cfg(self, cnf, **kw)
+
+        cls.configure = configure
+        cls.config = configure
+
+    for cls in (tk.Label, tk.Button, tk.Checkbutton, tk.Radiobutton,
+                tk.Menubutton, tk.LabelFrame,
+                ttk.Label, ttk.Button, ttk.Checkbutton, ttk.Radiobutton,
+                ttk.Menubutton, ttk.Labelframe):
+        try:
+            _patch_text_widget(cls)
+        except Exception:
+            pass
+
+    # Fenstertitel
+    try:
+        orig_title = tk.Wm.wm_title
+
+        def wm_title(self, string=None):
+            if isinstance(string, str):
+                string = translate(string)
+            return orig_title(self, string)
+
+        tk.Wm.wm_title = wm_title
+        tk.Wm.title = wm_title
+    except Exception:
+        pass
+
+    # Menue-Eintraege
+    try:
+        orig_add = tk.Menu.add
+
+        def menu_add(self, itemType, cnf={}, **kw):
+            if "label" in kw:
+                kw["label"] = translate(kw["label"])
+            if isinstance(cnf, dict) and "label" in cnf:
+                cnf = dict(cnf)
+                cnf["label"] = translate(cnf["label"])
+            return orig_add(self, itemType, cnf, **kw)
+
+        tk.Menu.add = menu_add
+    except Exception:
+        pass
+
+    # Notebook-Tabs
+    try:
+        orig_nb_add = ttk.Notebook.add
+
+        def nb_add(self, child, **kw):
+            if "text" in kw:
+                kw["text"] = translate(kw["text"])
+            return orig_nb_add(self, child, **kw)
+
+        ttk.Notebook.add = nb_add
+        orig_nb_ins = ttk.Notebook.insert
+
+        def nb_ins(self, pos, child, **kw):
+            if "text" in kw:
+                kw["text"] = translate(kw["text"])
+            return orig_nb_ins(self, pos, child, **kw)
+
+        ttk.Notebook.insert = nb_ins
+        orig_nb_tab = ttk.Notebook.tab
+
+        def nb_tab(self, tab_id, option=None, **kw):
+            if "text" in kw:
+                kw["text"] = translate(kw["text"])
+            return orig_nb_tab(self, tab_id, option, **kw)
+
+        ttk.Notebook.tab = nb_tab
+    except Exception:
+        pass
+
+    # Treeview-Spaltenkoepfe
+    try:
+        orig_head = ttk.Treeview.heading
+
+        def tv_head(self, column, option=None, **kw):
+            if "text" in kw:
+                kw["text"] = translate(kw["text"])
+            return orig_head(self, column, option, **kw)
+
+        ttk.Treeview.heading = tv_head
+    except Exception:
+        pass
+
+    # messagebox / simpledialog
+    try:
+        from tkinter import messagebox as _mb
+
+        def _wrap_mb(orig):
+            def f(title=None, message=None, **kw):
+                if isinstance(title, str):
+                    title = translate(title)
+                if isinstance(message, str):
+                    message = translate(message)
+                return orig(title, message, **kw)
+            return f
+
+        for _fn in ("showinfo", "showwarning", "showerror", "askquestion",
+                    "askokcancel", "askyesno", "askyesnocancel", "askretrycancel"):
+            _o = getattr(_mb, _fn, None)
+            if _o:
+                setattr(_mb, _fn, _wrap_mb(_o))
+    except Exception:
+        pass
+
+    try:
+        from tkinter import simpledialog as _sd
+
+        def _wrap_sd(orig):
+            def f(title, prompt, **kw):
+                if isinstance(title, str):
+                    title = translate(title)
+                if isinstance(prompt, str):
+                    prompt = translate(prompt)
+                return orig(title, prompt, **kw)
+            return f
+
+        for _fn in ("askstring", "askinteger", "askfloat"):
+            _o = getattr(_sd, _fn, None)
+            if _o:
+                setattr(_sd, _fn, _wrap_sd(_o))
+    except Exception:
+        pass
+
+
+def _load_external_translations() -> None:
+    """Laedt die grossen, automatisch gepflegten Woerterbuecher (falls vorhanden)."""
+    for mod_name, lang in (("translations_sk", "SK"),
+                           ("translations_en", "EN"),
+                           ("translations_cz", "CZ")):
+        try:
+            mod = __import__(f"{__package__}.{mod_name}", fromlist=["DATA"])
+            data = getattr(mod, "DATA", None) or getattr(mod, mod_name.split("_")[1].upper(), None)
+            if isinstance(data, dict):
+                register_translations(data, lang)
+        except Exception:
+            pass
+
+
+_load_external_translations()

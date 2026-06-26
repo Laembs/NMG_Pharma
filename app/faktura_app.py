@@ -27,6 +27,7 @@ from tkinter import ttk, messagebox, filedialog, simpledialog
 from .config import DB_PATH, ASSETS_DIR, OUTPUT_DIR, DEMO_SUFFIX
 from . import theme
 from . import tour
+from . import erechnung as erech
 
 # Palette aus dem zentralen Theme (gemeinsamer Look mit NMGone/Kasse).
 BG = theme.CARD
@@ -1035,6 +1036,8 @@ class FakturaPanel(tk.Frame):
                          kind="neutral", font_size=10, padx=12, pady=6).pack(side="left", padx=(6, 0))
         theme.PillButton(bar2, "📁 Ordner der Auswahl", self._ordner_der_auswahl,
                          kind="ghost", font_size=10, padx=12, pady=6).pack(side="left", padx=(12, 0))
+        theme.PillButton(bar2, "🧾 eRechnung (XML)", self._erechnung_der_auswahl,
+                         kind="neutral", font_size=10, padx=12, pady=6).pack(side="left", padx=(12, 0))
 
         outer, body = _card(self.content, "Belegübersicht")
         outer.pack(fill="both", expand=True, padx=24, pady=(0, 20))
@@ -1085,6 +1088,49 @@ class FakturaPanel(tk.Frame):
         else:
             messagebox.showinfo("Kein PDF", "Für diesen Beleg wurde noch kein PDF erzeugt "
                                             "(nur festgeschriebene Belege haben ein PDF).")
+
+    def _erechnung_der_auswahl(self):
+        """Erzeugt zum ausgewählten Beleg eine eRechnung (EN-16931 / ZUGFeRD).
+
+        Schreibt das XML neben das PDF. Ist die Bibliothek 'facturx' vorhanden,
+        wird zusätzlich ein ZUGFeRD-PDF (PDF/A-3 mit eingebettetem XML) erzeugt.
+        """
+        bid = self._auswahl_id()
+        if not bid:
+            messagebox.showinfo("eRechnung", "Bitte zuerst einen Beleg auswählen.")
+            return
+        beleg = self._beleg_dict(bid)
+        if not beleg.get("beleg_nr"):
+            messagebox.showwarning("eRechnung", "Nur festgeschriebene Belege (mit Beleg-Nr.) "
+                                   "können als eRechnung erzeugt werden.")
+            return
+        positionen = self._positionen_dict(bid)
+        firma = erech.faktura_firma_aus_settings()
+        if not firma.get("ustid") and not firma.get("steuernr"):
+            messagebox.showwarning("eRechnung", "Es fehlt die USt-IdNr. bzw. Steuernummer der "
+                                   "Firma. Bitte unter Einstellungen → Firma ergänzen.")
+            return
+        daten = erech.faktura_beleg_zu_daten(beleg, positionen, firma)
+        fehler = erech.pruefe_en16931(daten)
+
+        verzeichnis, name = beleg_ablage(beleg)
+        xml_pfad = verzeichnis / f"{name}.xml"
+        try:
+            erech.schreibe_xml(daten, xml_pfad)
+            pdf_pfad = beleg.get("pdf_pfad") or ""
+            zusatz = ""
+            if pdf_pfad and os.path.exists(pdf_pfad) and pdf_pfad.lower().endswith(".pdf"):
+                ergebnis = erech.betten_in_pdf(pdf_pfad, daten)
+                if ergebnis.lower().endswith(".pdf"):
+                    zusatz = f"\nZUGFeRD-PDF: {ergebnis}"
+        except Exception as exc:
+            messagebox.showerror("eRechnung", f"Erzeugung fehlgeschlagen:\n{exc}")
+            return
+        _log("erechnung_erzeugt", bid, f"XML: {xml_pfad}")
+        hinweis = ("\n\n⚠ Pflichtfeld-Hinweise (vor Versand prüfen):\n"
+                   + "\n".join("• " + x for x in fehler)) if fehler else "\n\n✓ Pflichtfelder vollständig."
+        messagebox.showinfo("eRechnung erzeugt",
+                            f"eRechnung (EN 16931) erstellt:\n{xml_pfad}{zusatz}{hinweis}")
 
     def _ordner_oeffnen(self, unter=""):
         """Öffnet den Ablageordner (Rechnungen/Gutschriften/Quartalsverguetung) im Explorer."""
@@ -2384,6 +2430,14 @@ def run_standalone():
     root.title(f"NMG Faktura{DEMO_SUFFIX}")
     root.geometry("1100x720")
     root.minsize(960, 620)
+    # Im Vollbild (maximiert) starten. 'zoomed' = Windows; sonst -zoomed/Bildschirmgroesse.
+    try:
+        root.state("zoomed")
+    except tk.TclError:
+        try:
+            root.attributes("-zoomed", True)
+        except tk.TclError:
+            root.geometry(f"{root.winfo_screenwidth()}x{root.winfo_screenheight()}+0+0")
     root.configure(bg=SHELL_BG)
     theme.apply_theme(root)
     theme.apply_widget_defaults(root)

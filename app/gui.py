@@ -1052,8 +1052,7 @@ class NMGApp(tk.Tk):
                 con.commit()
             win.destroy()
 
-        tk.Button(win, text="✔  Speichern", command=save, bg="#0b4a86", fg="white",
-                  relief="flat", font=(theme.FONT, 12, "bold"), padx=20, pady=8).pack(pady=(4, 18))
+        theme.PillButton(win, "✔  Speichern", save, color="#0b4a86", font_size=12, padx=20, pady=8).pack(pady=(4, 18))
 
     def show_mitarbeiterprofil_dialog(self, login=None, readonly=False):
         """Profil anzeigen/bearbeiten. readonly=True → nur ansehen."""
@@ -1095,7 +1094,7 @@ class NMGApp(tk.Tk):
 
         bar = tk.Frame(win, bg="#f5f7fb")
         bar.pack(fill="x", padx=22, pady=(0, 14))
-        tk.Button(bar, text="Schließen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8, 0))
+        theme.PillButton(bar, "Schließen", win.destroy, kind="neutral", padx=14, pady=7).pack(side="right", padx=(8, 0))
         if can_edit:
             def save_profil():
                 vn = vars_["vorname"].get().strip()
@@ -1114,8 +1113,7 @@ class NMGApp(tk.Tk):
                     con.commit()
                 messagebox.showinfo(title, "Profil gespeichert.")
                 win.destroy()
-            tk.Button(bar, text="✔  Speichern", command=save_profil, bg="#0b4a86", fg="white",
-                      relief="flat", font=(theme.FONT, 11, "bold"), padx=16, pady=7).pack(side="right")
+            theme.PillButton(bar, "✔  Speichern", save_profil, color="#0b4a86", font_size=11, padx=16, pady=7).pack(side="right")
 
     # ── BENACHRICHTIGUNGEN / DATEN-AMPEL ────────────────────────────────────────
     def _check_daten_benachrichtigungen(self):
@@ -1166,15 +1164,14 @@ class NMGApp(tk.Tk):
             win.destroy()
             self.show_daten_aktualisieren_page()
 
-        tk.Button(btn_row, text="In 7 Tagen", command=lambda: snooze(7), padx=12, pady=6).pack(side="left", padx=(0, 6))
-        tk.Button(btn_row, text="In 15 Tagen", command=lambda: snooze(15), padx=12, pady=6).pack(side="left", padx=(0, 6))
-        tk.Button(btn_row, text="In 30 Tagen", command=lambda: snooze(30), padx=12, pady=6).pack(side="left")
+        theme.PillButton(btn_row, "In 7 Tagen", lambda: snooze(7), kind="neutral", padx=12, pady=6).pack(side="left", padx=(0, 6))
+        theme.PillButton(btn_row, "In 15 Tagen", lambda: snooze(15), kind="neutral", padx=12, pady=6).pack(side="left", padx=(0, 6))
+        theme.PillButton(btn_row, "In 30 Tagen", lambda: snooze(30), kind="neutral", padx=12, pady=6).pack(side="left")
 
         bar = tk.Frame(win, bg="#fff8e1")
         bar.pack(fill="x", padx=20, pady=(16, 14))
-        tk.Button(bar, text="Jetzt Daten aktualisieren →", command=oeffne_daten,
-                  bg="#0b4a86", fg="white", relief="flat", font=(theme.FONT, 11, "bold"), padx=16, pady=7).pack(side="left")
-        tk.Button(bar, text="Schließen", command=win.destroy, padx=14, pady=7).pack(side="right")
+        theme.PillButton(bar, "Jetzt Daten aktualisieren →", oeffne_daten, color="#0b4a86", font_size=11, padx=16, pady=7).pack(side="left")
+        theme.PillButton(bar, "Schließen", win.destroy, kind="neutral", padx=14, pady=7).pack(side="right")
 
     # ── OUTLOOK-KALENDER-WIDGET ──────────────────────────────────────────────────
     def _get_outlook_termine(self, tage=14):
@@ -1367,12 +1364,12 @@ class NMGApp(tk.Tk):
         """
         groups = [
             (None, [
-                ("startseite", "🏠", _T("Startseite")),
+                ("startseite", "📊", _T("Analysen")),
                 ("neue_auswertung", "📊", _T("Neue Auswertung")),
             ]),
             ("Arbeiten", [
                 ("apps", "🚀", _T("Apps")),
-                ("analysen", "📁", _T("Analysen")),
+                ("analysen", "📁", _T("Gespeicherte Analysen")),
                 ("schulbank", "🎓", _T("Schulbank")),
             ]),
             ("Daten", [
@@ -1467,6 +1464,7 @@ class NMGApp(tk.Tk):
             "einkauf": self.open_einkauf_app,
             "parameter": self.open_parameter_app,
             "faktura": self.open_faktura_app,
+            "buchhaltung": self.open_buchhaltung_app,
             "auswertungen": self.open_auswertungen_app,
             "report": self.show_report_page,
             "roadmap": self.show_roadmap_page,
@@ -1481,7 +1479,8 @@ class NMGApp(tk.Tk):
         tk.Label(f, text=icon, font=(theme.FONT, 32), bg=theme.CARD, fg=color).pack(pady=(22, 6))
         tk.Label(f, text=title, font=(theme.FONT, 14, "bold"), bg=theme.CARD, fg=theme.INK).pack()
         tk.Label(f, text=desc, wraplength=180, justify="center", bg=theme.CARD, fg=theme.MUTED, font=(theme.FONT, 10)).pack(padx=14, pady=12)
-        tk.Button(f, text=button + "  →", command=command, bg=color, fg="white", activebackground=color, relief="flat", font=(theme.FONT, 11, "bold"), padx=18, pady=8, cursor="hand2").pack(fill="x", padx=18, pady=(8, 18))
+        theme.PillButton(f, button + "  →", command, kind="primary",
+                         font_size=11, padx=18, pady=8).pack(fill="x", padx=18, pady=(8, 18))
 
     def _parse_status_datetime(self, value):
         """Wandelt verschiedene DB-Datumsformate inkl. Excel-Serienzahl in datetime um."""
@@ -1815,8 +1814,8 @@ class NMGApp(tk.Tk):
         txt = "Backup heute erstellt" if auto.get("created") else "Backup heute vorhanden"
         tk.Label(box_backup, text="✅ Backup-Status", font=(theme.FONT, 13, "bold"), fg="#0b4a86", bg="#ffffff").pack(anchor="w", padx=14, pady=(14, 6))
         tk.Label(box_backup, text=f"{txt}\nAufbewahrung: 7 Tage\nÄltestes Auto-Backup wird zuerst gelöscht.", justify="left", bg="#ffffff", fg="#222").pack(anchor="w", padx=14, pady=(0, 12))
-        tk.Button(box_backup, text="Backup-Verwaltung", command=self.show_backup_dialog).pack(fill="x", padx=14, pady=(0, 6))
-        tk.Button(box_backup, text="📋 Protokolle", command=self.show_protocol_center).pack(fill="x", padx=14, pady=(0, 14))
+        theme.PillButton(box_backup, "Backup-Verwaltung", self.show_backup_dialog, kind="neutral", padx=12, pady=7).pack(fill="x", padx=14, pady=(0, 6))
+        theme.PillButton(box_backup, "📋 Protokolle", self.show_protocol_center, kind="neutral", padx=12, pady=7).pack(fill="x", padx=14, pady=(0, 14))
 
     def _get_saved_analysis_rows(self, limit=300):
         try:
@@ -2006,9 +2005,7 @@ class NMGApp(tk.Tk):
             ("Neue Ausw.", "NEU"),
             ("mit Datei", "DATEI"),
         ):
-            tk.Button(filter_bar, text=label,
-                      command=lambda v=value: set_filter_mode(v),
-                      padx=10, pady=4).pack(side="left", padx=(0, 5))
+            theme.PillButton(filter_bar, label, lambda v=value: set_filter_mode(v), kind="neutral", padx=10, pady=4).pack(side="left", padx=(0, 5))
 
         # Treeview mit Kundenspalten
         _sa_cols = ("id", "datum", "typ", "apotheke", "kundennummer", "kundenname", "positionen", "treffer")
@@ -2300,27 +2297,25 @@ LIMIT 500
                 messagebox.showerror("Abweichungsanalyse", str(exc))
 
         def add_btn(text, cmd, color="#0b4a86"):
-            tk.Button(side, text=text, command=cmd, bg=color, fg="white", activebackground=color, relief="flat", font=(theme.FONT, 11, "bold"), padx=10, pady=8).pack(fill="x", padx=16, pady=5)
+            theme.PillButton(side, text, cmd, color=color, font_size=11,
+                             padx=10, pady=8).pack(fill="x", padx=16, pady=5)
 
         add_btn("📄 Auswertung öffnen", open_selected_output, "#0b4a86")
         add_btn("📈 Produktanalyse", product_selected, "#11823b")
         add_btn("🔍 Abweichungsanalyse", deviation_selected, "#8b5a00")
-        tk.Button(side, text="Ordner gespeicherte Analysen", command=lambda: _open_folder(SAVED_ANALYSES_DIR), padx=10, pady=7).pack(fill="x", padx=16, pady=(14, 5))
+        theme.PillButton(side, "Ordner gespeicherte Analysen",
+                         lambda: _open_folder(SAVED_ANALYSES_DIR), kind="neutral",
+                         font_size=10, padx=10, pady=7).pack(fill="x", padx=16, pady=(14, 5))
         # V1.1 SP8: Zeitraum-Archivierung + Archiv-Verwaltung
-        tk.Button(side, text="📦 Zeitraum archivieren",
-                  command=self._archivieren_zeitraum_dialog,
-                  bg="#0b6e6e", fg="white", relief="flat",
-                  font=(theme.FONT, 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(14, 5))
+        theme.PillButton(side, "📦 Zeitraum archivieren", self._archivieren_zeitraum_dialog,
+                         color="#0b6e6e", font_size=10, padx=10, pady=7).pack(fill="x", padx=16, pady=(14, 5))
         # V1.1 SP10: Zeitraum-Loeschen
-        tk.Button(side, text="🗑  Zeitraum LOESCHEN",
-                  command=self._loeschen_zeitraum_dialog,
-                  bg="#9b1c1c", fg="white", relief="flat",
-                  font=(theme.FONT, 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(0, 5))
-        tk.Button(side, text="🗂  Archive verwalten",
-                  command=self._archive_verwalten_dialog,
-                  bg="#3867b7", fg="white", relief="flat",
-                  font=(theme.FONT, 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(0, 5))
-        tk.Button(side, text="🔐 Admin: Auswertungen löschen", command=self.open_admin_auswertungen_loeschen, bg="#9b1c1c", fg="white", relief="flat", font=(theme.FONT, 10, "bold"), padx=10, pady=7).pack(fill="x", padx=16, pady=(8, 5))
+        theme.PillButton(side, "🗑  Zeitraum LOESCHEN", self._loeschen_zeitraum_dialog,
+                         color="#9b1c1c", font_size=10, padx=10, pady=7).pack(fill="x", padx=16, pady=(0, 5))
+        theme.PillButton(side, "🗂  Archive verwalten", self._archive_verwalten_dialog,
+                         color="#3867b7", font_size=10, padx=10, pady=7).pack(fill="x", padx=16, pady=(0, 5))
+        theme.PillButton(side, "🔐 Admin: Auswertungen löschen", self.open_admin_auswertungen_loeschen,
+                         color="#9b1c1c", font_size=10, padx=10, pady=7).pack(fill="x", padx=16, pady=(8, 5))
 
         if not rows:
             listbox.insert("end", "Keine gespeicherten Analysen in der Datenbank gefunden.")
@@ -2384,8 +2379,8 @@ LIMIT 500
 
         buttonbar = tk.Frame(win, bg="#f5f7fb")
         buttonbar.grid(row=3, column=0, columnspan=3, sticky="e", padx=24, pady=18)
-        tk.Button(buttonbar, text="Abbrechen", command=cancel, padx=18, pady=8).pack(side="right", padx=(8, 0))
-        tk.Button(buttonbar, text="Analyse starten  →", command=ok, bg="#0b4a86", fg="white", activebackground="#0b4a86", relief="flat", font=(theme.FONT, 11, "bold"), padx=22, pady=9).pack(side="right")
+        theme.PillButton(buttonbar, "Abbrechen", cancel, kind="neutral", padx=18, pady=8).pack(side="right", padx=(8, 0))
+        theme.PillButton(buttonbar, "Analyse starten  →", ok, color="#0b4a86", font_size=11, padx=22, pady=9).pack(side="right")
         select("ALLE")
         self.wait_window(win)
         return result["value"]
@@ -2460,11 +2455,9 @@ LIMIT 500
             ("📊 ZW", "ZW", "#3867b7"),
             ("📊 PK + ZW", "PK+ZW", "#11823b"),
         ]:
-            tk.Button(btn_frame, text=label, command=lambda v=val: pick(v),
-                      bg=color, fg="white", relief="flat",
-                      font=(theme.FONT, 12, "bold"), padx=20, pady=10, width=10).pack(side="left", padx=6)
+            theme.PillButton(btn_frame, label, lambda v=val: pick(v), color=color, font_size=12, padx=20, pady=10).pack(side="left", padx=6)
 
-        tk.Button(win, text="Abbrechen", command=win.destroy, padx=12, pady=6).pack(pady=(20, 12))
+        theme.PillButton(win, "Abbrechen", win.destroy, kind="neutral", padx=12, pady=6).pack(pady=(20, 12))
         win.bind("<Escape>", lambda e: win.destroy())
         self.wait_window(win)
         return choice["value"]
@@ -2937,9 +2930,9 @@ LIMIT 500
         ).grid(row=1, column=0, sticky="w", padx=14, pady=(0, 12))
         win_buttons = tk.Frame(header, bg="#ffffff")
         win_buttons.grid(row=0, column=1, rowspan=2, sticky="e", padx=14, pady=12)
-        tk.Button(win_buttons, text="Minimieren", command=win.iconify, padx=10, pady=6).pack(side="left", padx=(0, 6))
-        tk.Button(win_buttons, text="Maximieren", command=lambda: win.state("zoomed"), padx=10, pady=6).pack(side="left", padx=(0, 6))
-        tk.Button(win_buttons, text="Fenster schließen", command=win.destroy, padx=12, pady=6).pack(side="left")
+        theme.PillButton(win_buttons, "Minimieren", win.iconify, kind="neutral", padx=10, pady=6).pack(side="left", padx=(0, 6))
+        theme.PillButton(win_buttons, "Maximieren", lambda: win.state("zoomed"), kind="neutral", padx=10, pady=6).pack(side="left", padx=(0, 6))
+        theme.PillButton(win_buttons, "Fenster schließen", win.destroy, kind="neutral", padx=12, pady=6).pack(side="left")
 
         body = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
         body.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 14))
@@ -3135,8 +3128,7 @@ LIMIT 500
                 reload_rows()
 
         def add_btn(text, cmd, color="#0b4a86"):
-            tk.Button(side, text=text, command=cmd, bg=color, fg="white", activebackground=color,
-                      relief="flat", font=(theme.FONT, 10, "bold"), padx=10, pady=8).pack(fill="x", padx=16, pady=4)
+            theme.PillButton(side, text, cmd, color=color, font_size=10, padx=10, pady=8).pack(fill="x", padx=16, pady=4)
 
         for label, val in (("Offen", "offen"), ("Richtig", "richtig"), ("Falsch", "falsch"), ("Lernvorschlag", "lernvorschlag"), ("Abgelehnt", "abgelehnt"), ("Ignoriert", "ignoriert"), ("Alle", "alle")):
             tk.Radiobutton(top, text=label, variable=status_var, value=val, command=reload_rows, bg="#ffffff").pack(side="left", padx=(0, 8))
@@ -3147,8 +3139,8 @@ LIMIT 500
         add_btn("🔎 In manuelle Prüfung", lambda: set_status("manuelle_pruefung"), "#6b4fb3")
         add_btn("✗ Ablehnen", lambda: set_status("abgelehnt"), "#9b1c1c")
         add_btn("↷ Ignorieren", lambda: set_status("ignoriert"), "#8b5a00")
-        tk.Button(side, text="Excel öffnen", command=lambda: _open_file(Path(output_file)) if output_file else None, padx=10, pady=7).pack(fill="x", padx=16, pady=(14, 4))
-        tk.Button(side, text="Aktualisieren", command=reload_rows, padx=10, pady=7).pack(fill="x", padx=16, pady=4)
+        theme.PillButton(side, "Excel öffnen", lambda: _open_file(Path(output_file)) if output_file else None, kind="neutral", padx=10, pady=7).pack(fill="x", padx=16, pady=(14, 4))
+        theme.PillButton(side, "Aktualisieren", reload_rows, kind="neutral", padx=10, pady=7).pack(fill="x", padx=16, pady=4)
 
         reload_rows()
 
@@ -3198,7 +3190,7 @@ LIMIT 500
         header.columnconfigure(0, weight=1)
         tk.Label(header, text="Protokolle", font=(theme.FONT, 20, "bold"), fg="#0b4a86", bg="#ffffff").grid(row=0, column=0, sticky="w", padx=14, pady=(12, 2))
         tk.Label(header, text=f"Protokollverzeichnis: {PROTOCOL_ROOT}", font=(theme.FONT, 10), fg="#333", bg="#ffffff").grid(row=1, column=0, sticky="w", padx=14, pady=(0, 12))
-        tk.Button(header, text="Ordner öffnen", command=lambda: _open_folder(PROTOCOL_ROOT), padx=12, pady=6).grid(row=0, column=1, rowspan=2, sticky="e", padx=14, pady=12)
+        theme.PillButton(header, "Ordner öffnen", lambda: _open_folder(PROTOCOL_ROOT), kind="neutral", padx=12, pady=6).grid(row=0, column=1, rowspan=2, sticky="e", padx=14, pady=12)
 
         body = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
         body.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 14))
@@ -3323,10 +3315,10 @@ LIMIT 500
                 self._log_error("admin", "Protokoll löschen", exc)
                 messagebox.showerror("Admin", str(exc))
 
-        tk.Button(buttonbar, text="Aktualisieren", command=reload_list, padx=12, pady=7).pack(side="left", padx=(0, 8))
-        tk.Button(buttonbar, text="Per Mail senden", command=send_selected, bg="#0b4a86", fg="white", relief="flat", font=(theme.FONT, 10, "bold"), padx=14, pady=8).pack(side="left", padx=(0, 8))
-        tk.Button(buttonbar, text="Supportpaket erstellen", command=support_package, bg="#11823b", fg="white", relief="flat", font=(theme.FONT, 10, "bold"), padx=14, pady=8).pack(side="left", padx=(0, 8))
-        tk.Button(buttonbar, text="Admin: Löschen", command=delete_selected_admin, bg="#9b1c1c", fg="white", relief="flat", font=(theme.FONT, 10, "bold"), padx=14, pady=8).pack(side="right")
+        theme.PillButton(buttonbar, "Aktualisieren", reload_list, kind="neutral", padx=12, pady=7).pack(side="left", padx=(0, 8))
+        theme.PillButton(buttonbar, "Per Mail senden", send_selected, color="#0b4a86", font_size=10, padx=14, pady=8).pack(side="left", padx=(0, 8))
+        theme.PillButton(buttonbar, "Supportpaket erstellen", support_package, color="#11823b", font_size=10, padx=14, pady=8).pack(side="left", padx=(0, 8))
+        theme.PillButton(buttonbar, "Admin: Löschen", delete_selected_admin, color="#9b1c1c", font_size=10, padx=14, pady=8).pack(side="right")
 
         category_box.bind("<<ComboboxSelected>>", reload_list)
         tree.bind("<<TreeviewSelect>>", show_selected)
@@ -3339,9 +3331,9 @@ LIMIT 500
         win.geometry("480x220")
         tk.Label(win, text="Backup & Wiederherstellung", font=(theme.FONT, 16, "bold")).pack(pady=16)
         tk.Label(win, text="Beim Programmstart wird automatisch ein Tagesbackup erstellt.\nEs werden die letzten 7 Auto-Backups behalten.").pack(pady=4)
-        tk.Button(win, text="Backup jetzt manuell erstellen", command=self.create_backup, bg="#0b4a86", fg="white", padx=18, pady=8).pack(pady=6)
-        tk.Button(win, text="Backup wiederherstellen", command=self.restore_backup, padx=18, pady=8).pack(pady=6)
-        tk.Button(win, text="Backup-Ordner öffnen", command=lambda: _open_folder(BACKUP_DIR)).pack(pady=6)
+        theme.PillButton(win, "Backup jetzt manuell erstellen", self.create_backup, color="#0b4a86", padx=18, pady=8).pack(pady=6)
+        theme.PillButton(win, "Backup wiederherstellen", self.restore_backup, kind="neutral", padx=18, pady=8).pack(pady=6)
+        theme.PillButton(win, "Backup-Ordner öffnen", lambda: _open_folder(BACKUP_DIR), kind="neutral", padx=12, pady=7).pack(pady=6)
 
     def create_backup(self):
         self._log_action("update_backup", "Backup manuell gestartet")
@@ -3504,8 +3496,8 @@ LIMIT 500
                 messagebox.showerror("Rollback-Fehler", str(exc))
         bar = tk.Frame(win, bg="#f5f7fb")
         bar.pack(fill="x", padx=22, pady=(0, 18))
-        tk.Button(bar, text="Abbrechen", command=win.destroy, padx=16, pady=8).pack(side="right", padx=(8,0))
-        tk.Button(bar, text="Wiederherstellen", command=do_restore, bg="#0b4a86", fg="white", padx=18, pady=8).pack(side="right")
+        theme.PillButton(bar, "Abbrechen", win.destroy, kind="neutral", padx=16, pady=8).pack(side="right", padx=(8,0))
+        theme.PillButton(bar, "Wiederherstellen", do_restore, color="#0b4a86", padx=18, pady=8).pack(side="right")
 
     def show_version(self):
         """V1.1 SP11: Versionsinfo als Seite mit Versionsliste links und
@@ -3605,7 +3597,7 @@ LIMIT 500
             self._page_header_icon = icon  # Referenz halten (sonst GC)
         textcol = tk.Frame(header, bg=theme.CARD)
         textcol.pack(side="left", anchor="w")
-        tk.Label(textcol, text=title, font=(theme.FONT, 20, "bold"), fg=theme.INK, bg=theme.CARD).pack(anchor="w")
+        tk.Label(textcol, text=title, font=(theme.FONT, 18, "bold"), fg=theme.INK, bg=theme.CARD).pack(anchor="w")
         if subtitle:
             tk.Label(textcol, text=subtitle, font=(theme.FONT, 11), fg=theme.MUTED, bg=theme.CARD).pack(anchor="w", pady=(2, 0))
 
@@ -3614,19 +3606,8 @@ LIMIT 500
         self._page_header(title, subtitle)
         body = tk.Frame(self.page, bg=theme.CARD)
         body.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 18))
-        tk.Button(
-            body,
-            text=button_text,
-            command=command,
-            bg=color,
-            fg="white",
-            activebackground=color,
-            relief="flat",
-            font=(theme.FONT, 12, "bold"),
-            cursor="hand2",
-            padx=20,
-            pady=10
-        ).pack(anchor="w", pady=8)
+        theme.PillButton(body, button_text, command, color=color,
+                         font_size=12, padx=20, pady=10).pack(anchor="w", pady=8)
 
 
     def _sort_key_for_tree(self, value):
@@ -4251,28 +4232,24 @@ LIMIT 500
 
         buttons = tk.Frame(win, bg="#f5f7fb")
         buttons.pack(fill="x", padx=22, pady=(0, 18))
-        tk.Button(buttons, text="Abbrechen", command=win.destroy, padx=16, pady=8).pack(side="right", padx=(8, 0))
-        tk.Button(buttons, text="Mapping speichern und Auswertung starten", command=save_mapping, bg="#0b4a86", fg="white", relief="flat", font=(theme.FONT, 11, "bold"), padx=20, pady=9).pack(side="right")
+        theme.PillButton(buttons, "Abbrechen", win.destroy, kind="neutral", padx=16, pady=8).pack(side="right", padx=(8, 0))
+        theme.PillButton(buttons, "Mapping speichern und Auswertung starten", save_mapping, color="#0b4a86", font_size=11, padx=20, pady=9).pack(side="right")
         self.wait_window(win)
         return result["mapping"]
 
     def _dashboard_all_tiles(self):
         """Alle verfügbaren Kacheln für das Dashboard (Schnellzugriff + Info-Widgets)."""
+        # Hinweis: Die App-Starter (Kasse, Kunden, Einkauf, Wareneingang,
+        # Faktura, Buchhaltung, Meldungen, Mitarbeiter, Parameter, Hilfe) sind
+        # bewusst NICHT mehr hier – sie werden zentral ueber das Cockpit
+        # gestartet. Hier bleiben nur NMGone-eigene Funktionen.
         return [
             # --- Schnellzugriff ---
             ("neue_auswertung",  "📊", "Bedarfsanalyse",      "PK-/ZW-Auswertung starten.",               self.show_neue_auswertung_page,              "#0b4a86"),
             ("gespeicherte",     "📁", "Ges. Analysen",        "Vorhandene Analysen öffnen.",               self.open_saved_analyses,                    "#3867b7"),
             ("schulbank",        "🎓", "Schulbank",            "Lernvorschläge bearbeiten.",                lambda: self.show_schulbank_page("Schulbank"),"#11823b"),
-            ("kunden",           "👥", "Kunden",           "Kundenstamm und -history.",                 self.show_kunden_center,                     "#0b4a86"),
-            ("kasse",            "🛒", "Kasse",                "Verkauf an Apotheken + Wareneingang.",      self.open_kasse_app,                         "#8b5a00"),
-            ("gdp",              "📦", "Wareneingang & Retouren", "Chargen-Rückverfolgung, Retouren (GDP).", self.open_gdp_app,                    "#0b6e6e"),
-            ("meldungen",        "🔔", "Meldungen",            "Abweichungen, Kühlsachenkontrolle, Selbstinspektion.", self.open_meldungen_app,            "#b5391f"),
-            ("einkauf",          "🛒", "Einkauf",              "Beschaffung EU-Ausland, §129-Margen, Aufgaben.", self.open_einkauf_app,                    "#0b4a86"),
-            ("faktura",          "🧾", "Faktura",              "Rechnungen und Gutschriften erstellen.",    self.open_faktura_app,                       "#0b4a86"),
             ("auswertungen",     "📑", "Auswertungen",         "Verkäufe, Kunden, Artikel frei auswerten.", self.open_auswertungen_app,                  "#0b6e6e"),
             ("todo",             "✅", "ToDo",                 "Aufgaben und offene Punkte.",               self.show_todo_center,                        "#11823b"),
-            ("mitarbeiter",      "👥", "Mitarbeiter",          "Organigramm, Abwesenheiten, Arbeitsbereiche.", self.open_personal_app,                   "#6b4fb3"),
-            ("parameter",        "🔐", "Parameter",            "Berechtigungen: wer darf was (Admin-Modus).",  self.open_parameter_app,                  "#0b2c4a"),
             ("produktanalyse",   "📈", "Produktanalyse",       "Produktchancen erstellen.",                 self.market_opportunities,                   "#11823b"),
             # SP7: Marktanalyse-Tile entfernt.
             ("abweichung",       "🔍", "Abweichungsanalyse",   "Manuelle vs. Programm-Auswertung.",         self.deviation_analysis,                     "#8b5a00"),
@@ -4281,7 +4258,6 @@ LIMIT 500
             ("vergleichssuche",  "🔍", "Vergleichs-Suche",     "PZN/Artikelname schnell finden.",           self.open_vergleichssuche_window,            "#0b6e6e"),
             ("globale_suche",    "🔍", "Globale Suche",        "Kunde, Analyse oder Artikel finden.",       self.open_globale_suche_window,              "#0b4a86"),
             ("nmg_rabatte",      "💰", "NMG-Rabatte",          "Aktuelle Rabatte, Statistik, Diff, Verlauf.", self.show_nmg_rabatte_uebersicht,         "#6b4fb3"),
-            ("hilfe",            "❓", "Hilfe",                "Bebildertes Handbuch: was wie funktioniert.", self.open_hilfe_app,                      "#208acd"),
         ]
 
     def _dashboard_all_info_widgets(self):
@@ -4376,8 +4352,7 @@ LIMIT 500
                     tk.Label(todo_box, text="Keine offenen ToDos ✔", font=(theme.FONT, 8), fg="#11823b", bg="#f0faf4").pack(anchor="w", padx=8)
             except Exception:
                 tk.Label(todo_box, text="–", font=(theme.FONT, 8), fg="#888", bg="#f0faf4").pack(anchor="w", padx=8)
-            tk.Button(todo_box, text="ToDo →", command=self.show_todo_center, bg="#11823b", fg="white",
-                      relief="flat", font=(theme.FONT, 8), padx=6, pady=2).pack(anchor="w", padx=8, pady=(2,4))
+            theme.PillButton(todo_box, "ToDo →", self.show_todo_center, color="#11823b", font_size=8, padx=6, pady=2).pack(anchor="w", padx=8, pady=(2,4))
             col_idx += 1
 
         if "info_analysen" in active_info:
@@ -4396,8 +4371,7 @@ LIMIT 500
                     tk.Label(ana_box, text="Noch keine Auswertungen.", font=(theme.FONT, 8), fg="#888", bg="#fafafa").pack(anchor="w", padx=8)
             except Exception:
                 tk.Label(ana_box, text="–", font=(theme.FONT, 8), fg="#888", bg="#fafafa").pack(anchor="w", padx=8)
-            tk.Button(ana_box, text="Alle →", command=self.open_saved_analyses, bg="#3867b7", fg="white",
-                      relief="flat", font=(theme.FONT, 8), padx=6, pady=2).pack(anchor="w", padx=8, pady=(2,4))
+            theme.PillButton(ana_box, "Alle →", self.open_saved_analyses, color="#3867b7", font_size=8, padx=6, pady=2).pack(anchor="w", padx=8, pady=(2,4))
 
 
 
@@ -4491,10 +4465,10 @@ LIMIT 500
 
         btn_row = tk.Frame(win, bg="#f5f7fb")
         btn_row.pack(fill="x", padx=22, pady=(0, 14))
-        tk.Button(btn_row, text="Alle auswählen", command=select_all, padx=10, pady=6).pack(side="left", padx=(0, 6))
-        tk.Button(btn_row, text="Alle abwählen", command=deselect_all, padx=10, pady=6).pack(side="left")
-        tk.Button(btn_row, text="Abbrechen", command=win.destroy, padx=14, pady=6).pack(side="right", padx=(8, 0))
-        tk.Button(btn_row, text="✔  Speichern", command=save, bg="#0b4a86", fg="white", relief="flat", font=(theme.FONT, 11, "bold"), padx=16, pady=6).pack(side="right")
+        theme.PillButton(btn_row, "Alle auswählen", select_all, kind="neutral", padx=10, pady=6).pack(side="left", padx=(0, 6))
+        theme.PillButton(btn_row, "Alle abwählen", deselect_all, kind="neutral", padx=10, pady=6).pack(side="left")
+        theme.PillButton(btn_row, "Abbrechen", win.destroy, kind="neutral", padx=14, pady=6).pack(side="right", padx=(8, 0))
+        theme.PillButton(btn_row, "✔  Speichern", save, color="#0b4a86", font_size=11, padx=16, pady=6).pack(side="right")
 
     def show_globale_suche(self, start_query=""):
         """Globale Suche über Kunden, Auswertungen, ToDos und Mitarbeiter."""
@@ -4642,7 +4616,7 @@ LIMIT 500
 
         bar = tk.Frame(win, bg="#f5f7fb")
         bar.pack(fill="x", padx=20, pady=(0, 14))
-        tk.Button(bar, text="Schließen", command=win.destroy, padx=14, pady=7).pack(side="right")
+        theme.PillButton(bar, "Schließen", win.destroy, kind="neutral", padx=14, pady=7).pack(side="right")
 
     def _schnellnotiz_widget(self, parent):
         """Schnell-Notiz-Eingabe für die Startseite."""
@@ -4696,20 +4670,14 @@ LIMIT 500
                 self.show_globale_suche(start_query="")
                 # Hinweis: Benutzer wählt dann den Kunden via globale Suche
 
-            tk.Button(btn_row, text="✅  Als ToDo speichern", command=als_todo,
-                      bg="#11823b", fg="white", relief="flat", font=(theme.FONT, 10, "bold"),
-                      padx=14, pady=6).pack(side="left", padx=(0,8))
-            tk.Button(btn_row, text="👥  Zu Kunde (Suche öffnen)", command=als_kundennotiz,
-                      bg="#0b4a86", fg="white", relief="flat", font=(theme.FONT, 10),
-                      padx=14, pady=6).pack(side="left")
-            tk.Button(btn_row, text="Abbrechen", command=win.destroy, padx=10, pady=6).pack(side="right")
+            theme.PillButton(btn_row, "✅  Als ToDo speichern", als_todo, color="#11823b", font_size=10, padx=14, pady=6).pack(side="left", padx=(0,8))
+            theme.PillButton(btn_row, "👥  Zu Kunde (Suche öffnen)", als_kundennotiz, color="#0b4a86", font_size=10, padx=14, pady=6).pack(side="left")
+            theme.PillButton(btn_row, "Abbrechen", win.destroy, kind="neutral", padx=10, pady=6).pack(side="right")
 
-        tk.Button(box, text="💾", command=speichern_notiz, bg="#e8d99a", fg="#7a6000",
-                  relief="flat", font=(theme.FONT, 11, "bold"), padx=6, pady=2).grid(row=0, column=2, padx=(0,4), pady=(5,2))
+        theme.PillButton(box, "💾", speichern_notiz, kind="neutral", font_size=11, padx=6, pady=2).grid(row=0, column=2, padx=(0,4), pady=(5,2))
 
         # Suche-Button
-        tk.Button(box, text="🔍 Suche", command=self.show_globale_suche, bg="#d8e2ee", fg="#0b4a86",
-                  relief="flat", font=(theme.FONT, 9), padx=8, pady=2).grid(row=0, column=3, padx=(0,8), pady=(5,2))
+        theme.PillButton(box, "🔍 Suche", self.show_globale_suche, kind="neutral", font_size=9, padx=8, pady=2).grid(row=0, column=3, padx=(0,8), pady=(5,2))
 
         tk.Label(box, text="Enter = Todo, 🔍 = Globale Suche", font=(theme.FONT, 7), fg="#aaa", bg="#fffef0").grid(
             row=1, column=0, columnspan=4, sticky="w", padx=8, pady=(0,3))
@@ -4904,9 +4872,8 @@ LIMIT 500
 
         # V1.1 SP9: 'Mehr anzeigen'-Button-Zeile, default versteckt.
         more_row = tk.Frame(box, bg="#e8f1fb")
-        more_btn = tk.Button(more_row, text="Mehr anzeigen",
-                             bg="#0b4a86", fg="white", relief="flat",
-                             font=(theme.FONT, 10, "bold"), padx=12, pady=4)
+        more_btn = theme.PillButton(more_row, "Mehr anzeigen", None,
+                                    color="#0b4a86", font_size=10, padx=12, pady=4)
         more_btn.pack()
 
         row_map: dict[str, dict] = {}
@@ -4957,7 +4924,7 @@ LIMIT 500
             state["shown"] = len(all_results)
             _render_subset(all_results)
             _update_status_and_button()
-        more_btn.configure(command=show_more)
+        more_btn.configure_command(show_more)
 
         def do_search():
             pending["id"] = None
@@ -5012,15 +4979,13 @@ LIMIT 500
         tree.bind("<Double-1>", open_selected)
         tree.bind("<Return>", open_selected)
 
-        tk.Button(entry_row, text="🔍  Anzeigen", command=open_selected,
-                  bg="#0b4a86", fg="white", relief="flat",
-                  font=(theme.FONT, 10, "bold"), padx=14, pady=4).pack(side="left", padx=(0, 6))
+        theme.PillButton(entry_row, "🔍  Anzeigen", open_selected, color="#0b4a86", font_size=10, padx=14, pady=4).pack(side="left", padx=(0, 6))
 
         def _clear():
             query_var.set("")
             render([])
             entry.focus_set()
-        tk.Button(entry_row, text="Leeren", command=_clear, padx=10, pady=4).pack(side="left")
+        theme.PillButton(entry_row, "Leeren", _clear, kind="neutral", padx=10, pady=4).pack(side="left")
 
         return {"entry": entry, "query_var": query_var, "do_search": do_search}
 
@@ -5079,6 +5044,34 @@ LIMIT 500
             ctx["entry"].focus_set()
         except Exception:
             pass
+
+    def _mini_tile(self, parent, icon, title, cmd, color):
+        """Kompakte, anklickbare Mini-Kachel (Icon + Titel, ohne Beschreibung).
+        Die ganze Kachel ist klickbar; Hover hebt sie leicht hervor."""
+        base, hover = "#f8fbff", "#eef4fb"
+        f = tk.Frame(parent, bg=base, highlightbackground="#d8e2ee",
+                     highlightthickness=1, cursor="hand2")
+        f.columnconfigure(0, weight=1)
+        ic = tk.Label(f, text=icon, font=(theme.FONT, 20), bg=base, fg=color)
+        ic.grid(row=0, column=0, pady=(10, 1))
+        tl = tk.Label(f, text=title, font=(theme.FONT, 10, "bold"), bg=base,
+                      fg="#123", wraplength=120, justify="center")
+        tl.grid(row=1, column=0, padx=4, pady=(0, 10))
+        kids = (f, ic, tl)
+
+        def _enter(_e):
+            for w in kids:
+                w.config(bg=hover)
+
+        def _leave(_e):
+            for w in kids:
+                w.config(bg=base)
+
+        for w in kids:
+            w.bind("<Button-1>", lambda _e, c=cmd: c())
+            w.bind("<Enter>", _enter)
+            w.bind("<Leave>", _leave)
+        return f
 
     def show_startseite(self):
         self.clear_page()
@@ -5149,18 +5142,7 @@ LIMIT 500
         header_bar.pack(fill="x", padx=18, pady=(14, 0))
         begruessung = f"🏠  Guten Tag, {self.bearbeiter or 'Bearbeiter'}!"
         tk.Label(header_bar, text=begruessung, font=(theme.FONT, 15, "bold"), fg="#0b4a86", bg="#f0f4fa").pack(side="left", padx=16, pady=10)
-        tk.Button(
-            header_bar,
-            text="⚙️  Dashboard anpassen",
-            command=self._dashboard_open_kachel_editor,
-            bg="#0b4a86",
-            fg="white",
-            activebackground="#0b4a86",
-            relief="flat",
-            font=(theme.FONT, 10, "bold"),
-            padx=14,
-            pady=6,
-        ).pack(side="right", padx=14, pady=8)
+        theme.PillButton(header_bar, "⚙️  Dashboard anpassen", self._dashboard_open_kachel_editor, color="#0b4a86", font_size=10, padx=14, pady=6).pack(side="right", padx=14, pady=8)
 
         # --- V1.1 SP7: Globale Suche (Kunde / Analyse / Artikel) ---
         # ersetzt das alte Austausch-Suche-Widget (SP16); die Vergleichs-Suche
@@ -5184,37 +5166,22 @@ LIMIT 500
             tk.Label(inner, text="Schnellzugriff", font=(theme.FONT, 11, "bold"), fg="#555", bg="#ffffff").pack(anchor="w", padx=22, pady=(10, 2))
             tile_frame = tk.Frame(inner, bg="#ffffff")
             tile_frame.pack(fill="x", padx=14, pady=(0, 18))
-            cols_count = 4
+            # Kompakte Mini-Kacheln: mehr pro Reihe, klein, ohne Beschreibung.
+            cols_count = 6
             for i in range(cols_count):
                 tile_frame.columnconfigure(i, weight=1)
-
-            # V1.1 SP11: alle Kacheln gleich hoch ueber rowconfigure + grid.
             rows_needed = (len(active_tiles) + cols_count - 1) // cols_count
             for ri in range(rows_needed):
-                tile_frame.rowconfigure(ri, weight=1, minsize=210)
+                tile_frame.rowconfigure(ri, weight=1, minsize=96)
             for idx, (key, icon, title, desc, cmd, color) in enumerate(active_tiles):
                 row = idx // cols_count
                 col = idx % cols_count
-                f = tk.Frame(tile_frame, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1)
-                f.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
-                f.rowconfigure(2, weight=1)
-                f.columnconfigure(0, weight=1)
-                tk.Label(f, text=icon, font=(theme.FONT, 26), bg="#f8fbff", fg=color
-                         ).grid(row=0, column=0, pady=(12, 4))
-                tk.Label(f, text=title, font=(theme.FONT, 11, "bold"), bg="#f8fbff",
-                         fg="#123").grid(row=1, column=0)
-                tk.Label(f, text=desc, wraplength=180, justify="center",
-                         bg="#f8fbff", fg="#555", font=(theme.FONT, 9)
-                         ).grid(row=2, column=0, padx=10, pady=6, sticky="n")
-                tk.Button(f, text="Öffnen  →", command=cmd,
-                          bg=color, fg="white", activebackground=color,
-                          relief="flat", font=(theme.FONT, 10, "bold"),
-                          padx=14, pady=7
-                          ).grid(row=3, column=0, sticky="ew", padx=14, pady=(4, 12))
+                self._mini_tile(tile_frame, icon, title, cmd, color).grid(
+                    row=row, column=col, sticky="nsew", padx=6, pady=6)
         else:
             tk.Label(inner, text="Keine Kacheln aktiv. Bitte '⚙️ Dashboard anpassen' nutzen.", fg="#888", bg="#ffffff", font=(theme.FONT, 10)).pack(pady=20)
 
-        self.status.set(f"Startseite bereit.  {len(active_tiles)} Schnellzugriff-Kacheln  |  {len(active_info)} Info-Bereiche aktiv.")
+        self.status.set(f"Analysen bereit.  {len(active_tiles)} Schnellzugriff-Kacheln  |  {len(active_info)} Info-Bereiche aktiv.")
 
     # ── SHAREPOINT / ONEDRIVE VORBEREITUNG ──────────────────────────────────────
     def show_datenbankpfad_page(self):
@@ -5302,8 +5269,7 @@ LIMIT 500
         for val, label, color in [("alle","Alle","#555"),("gruen","🟢 Grün (<6M)","#11823b"),("gelb","🟡 Gelb (6-9M)","#8b6914"),("rot","🔴 Rot (>9M / nie)","#c00")]:
             tk.Radiobutton(af_top, text=label, variable=filter_var, value=val,
                            bg="#ffffff", fg=color, command=lambda: reload_ampel(filter_var.get())).pack(side="left", padx=6)
-        tk.Button(af_top, text="📄 Export als PDF vorbereiten", bg="#3867b7", fg="white", relief="flat",
-                  padx=10, pady=4, command=lambda: messagebox.showinfo("Report", "PDF-Export wird in einer zukünftigen Version implementiert.")).pack(side="right", padx=8)
+        theme.PillButton(af_top, "📄 Export als PDF vorbereiten", lambda: messagebox.showinfo("Report", "PDF-Export wird in einer zukünftigen Version implementiert."), color="#3867b7", padx=10, pady=4).pack(side="right", padx=8)
 
         a_cols = ("ampel", "kundennummer", "kundenname", "plz", "status", "letzte_analyse", "tage")
         a_heads = {"ampel":"🚦","kundennummer":"Kundennr.","kundenname":"Apotheke","plz":"PLZ",
@@ -5377,7 +5343,7 @@ LIMIT 500
         df_top = tk.Frame(dup_frame, bg="#ffffff")
         df_top.grid(row=0, column=0, sticky="ew", pady=(8,4))
         tk.Label(df_top, text="Duplikate nach Namen, PLZ oder Kundennummer.", bg="#ffffff", fg="#555", font=(theme.FONT, 9)).pack(side="left", padx=8)
-        tk.Button(df_top, text="🔄 Aktualisieren", command=lambda: reload_duplikate(), padx=10, pady=4).pack(side="right", padx=8)
+        theme.PillButton(df_top, "🔄 Aktualisieren", lambda: reload_duplikate(), kind="neutral", padx=10, pady=4).pack(side="right", padx=8)
 
         d_cols = ("id1","name1","plz1","id2","name2","plz2","grund")
         d_heads = {"id1":"ID 1","name1":"Apotheke 1","plz1":"PLZ 1","id2":"ID 2","name2":"Apotheke 2","plz2":"PLZ 2","grund":"Grund"}
@@ -5440,9 +5406,7 @@ LIMIT 500
                 return
             self._kunden_zusammenfuehren_dialog(k1, k2, callback=reload_duplikate)
 
-        tk.Button(dup_frame, text="🔀 Zusammenführen", command=zusammenfuehren,
-                  bg="#8b5a00", fg="white", relief="flat", font=(theme.FONT, 10, "bold"),
-                  padx=12, pady=5).grid(row=2, column=0, sticky="w", padx=8, pady=(0,8))
+        theme.PillButton(dup_frame, "🔀 Zusammenführen", zusammenfuehren, color="#8b5a00", font_size=10, padx=12, pady=5).grid(row=2, column=0, sticky="w", padx=8, pady=(0,8))
 
         # Nav-Eintrag: Report in Nav-Tree (falls noch nicht vorhanden)
         self.status.set("Report bereit.")
@@ -5523,9 +5487,8 @@ LIMIT 500
             except Exception as exc:
                 messagebox.showerror("Fehler", str(exc))
 
-        tk.Button(bar, text="Abbrechen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8,0))
-        tk.Button(bar, text="🔀  Zusammenführen", command=do_merge, bg="#8b5a00", fg="white",
-                  relief="flat", font=(theme.FONT,11,"bold"), padx=16, pady=7).pack(side="right")
+        theme.PillButton(bar, "Abbrechen", win.destroy, kind="neutral", padx=14, pady=7).pack(side="right", padx=(8,0))
+        theme.PillButton(bar, "🔀  Zusammenführen", do_merge, color="#8b5a00", font_size=11, padx=16, pady=7).pack(side="right")
 
     def show_placeholder_page(self, title):
         self.clear_page()
@@ -5691,8 +5654,8 @@ LIMIT 500
             win.destroy()
         bar = tk.Frame(win, bg="#f5f7fb")
         bar.pack(fill="x", padx=22, pady=(0, 18))
-        tk.Button(bar, text="Abbrechen", command=win.destroy, padx=16, pady=8).pack(side="right", padx=(8,0))
-        tk.Button(bar, text="Speichern", command=save, bg="#0b4a86", fg="white", relief="flat", padx=20, pady=9).pack(side="right")
+        theme.PillButton(bar, "Abbrechen", win.destroy, kind="neutral", padx=16, pady=8).pack(side="right", padx=(8,0))
+        theme.PillButton(bar, "Speichern", save, color="#0b4a86", padx=20, pady=9).pack(side="right")
         self.wait_window(win)
         return result["data"]
 
@@ -5778,10 +5741,10 @@ LIMIT 500
                 con.execute(f"DELETE FROM {table} WHERE id=?", (row["id"],))
                 con.commit()
             reload()
-        tk.Button(toolbar, text="Neu", command=add_record, bg="#0b4a86", fg="white", relief="flat", padx=14, pady=7).pack(side="left", padx=(0,8))
-        tk.Button(toolbar, text="Bearbeiten", command=edit_record, padx=14, pady=7).pack(side="left", padx=8)
-        tk.Button(toolbar, text="Löschen", command=delete_record, padx=14, pady=7).pack(side="left", padx=8)
-        tk.Button(toolbar, text="Aktualisieren", command=reload, padx=14, pady=7).pack(side="left", padx=8)
+        theme.PillButton(toolbar, "Neu", add_record, color="#0b4a86", padx=14, pady=7).pack(side="left", padx=(0,8))
+        theme.PillButton(toolbar, "Bearbeiten", edit_record, kind="neutral", padx=14, pady=7).pack(side="left", padx=8)
+        theme.PillButton(toolbar, "Löschen", delete_record, kind="neutral", padx=14, pady=7).pack(side="left", padx=8)
+        theme.PillButton(toolbar, "Aktualisieren", reload, kind="neutral", padx=14, pady=7).pack(side="left", padx=8)
         reload()
 
 
@@ -5964,11 +5927,11 @@ LIMIT 500
                     messagebox.showinfo("Mitarbeiter-Center", "Bei diesem Mitarbeiter ist kein OneDrive-/Datenpfad hinterlegt.")
                     return
                 _open_folder(Path(path))
-            tk.Button(toolbar, text="Neu", command=add_record, bg="#0b4a86", fg="white", relief="flat", padx=14, pady=7).pack(side="left", padx=(0,8))
-            tk.Button(toolbar, text="Bearbeiten", command=edit_record, padx=14, pady=7).pack(side="left", padx=8)
-            tk.Button(toolbar, text="Löschen", command=delete_record, padx=14, pady=7).pack(side="left", padx=8)
-            tk.Button(toolbar, text="Datenpfad öffnen", command=open_path, padx=14, pady=7).pack(side="left", padx=8)
-            tk.Button(toolbar, text="Aktualisieren", command=reload, padx=14, pady=7).pack(side="left", padx=8)
+            theme.PillButton(toolbar, "Neu", add_record, color="#0b4a86", padx=14, pady=7).pack(side="left", padx=(0,8))
+            theme.PillButton(toolbar, "Bearbeiten", edit_record, kind="neutral", padx=14, pady=7).pack(side="left", padx=8)
+            theme.PillButton(toolbar, "Löschen", delete_record, kind="neutral", padx=14, pady=7).pack(side="left", padx=8)
+            theme.PillButton(toolbar, "Datenpfad öffnen", open_path, kind="neutral", padx=14, pady=7).pack(side="left", padx=8)
+            theme.PillButton(toolbar, "Aktualisieren", reload, kind="neutral", padx=14, pady=7).pack(side="left", padx=8)
             reload()
 
         def show_board():
@@ -6079,8 +6042,8 @@ LIMIT 500
                 make_card(row, idx)
             self.status.set(f"Mitarbeiter-Board: {len(rows)} Karten angezeigt.")
 
-        tk.Button(modebar, text="Tabelle", command=show_table, bg="#0b4a86", fg="white", relief="flat", padx=16, pady=8).pack(side="left", padx=(0,8))
-        tk.Button(modebar, text="Board / Post-it", command=show_board, bg="#6b4fb3", fg="white", relief="flat", padx=16, pady=8).pack(side="left", padx=8)
+        theme.PillButton(modebar, "Tabelle", show_table, color="#0b4a86", padx=16, pady=8).pack(side="left", padx=(0,8))
+        theme.PillButton(modebar, "Board / Post-it", show_board, color="#6b4fb3", padx=16, pady=8).pack(side="left", padx=8)
         show_table()
 
     def show_mitarbeiter_center(self):
@@ -6211,23 +6174,14 @@ LIMIT 500
                     # Manuell gepflegter Mitarbeiter (id-basiert): Detail-Dialog mit
                     # Zusatzfeldern + Vorgesetzten (Phase 1, Organigramm-Grundlage).
                     emp_id = int(m["id"])
-                    tk.Button(card, text="✏️  Bearbeiten",
-                              command=lambda eid=emp_id: self._mitarbeiter_detail_dialog(eid, on_saved=reload),
-                              bg="#0b4a86", fg="white", relief="flat", font=(theme.FONT, 9, "bold"),
-                              padx=10, pady=4).pack(fill="x", padx=8, pady=(8, 4))
+                    theme.PillButton(card, "✏️  Bearbeiten", lambda eid=emp_id: self._mitarbeiter_detail_dialog(eid, on_saved=reload), color="#0b4a86", font_size=9, padx=10, pady=4).pack(fill="x", padx=8, pady=(8, 4))
                 elif is_own or self._is_admin_login():
                     btn_text = "✏️  Bearbeiten" if is_own else "✏️  Admin"
                     login_val = m.get("login") or ""
-                    tk.Button(card, text=btn_text,
-                              command=lambda l=login_val: self.show_mitarbeiterprofil_dialog(l, readonly=False),
-                              bg="#0b4a86", fg="white", relief="flat", font=(theme.FONT, 9, "bold"),
-                              padx=10, pady=4).pack(fill="x", padx=8, pady=(8, 4))
+                    theme.PillButton(card, btn_text, lambda l=login_val: self.show_mitarbeiterprofil_dialog(l, readonly=False), color="#0b4a86", font_size=9, padx=10, pady=4).pack(fill="x", padx=8, pady=(8, 4))
                 else:
                     login_val = m.get("login") or ""
-                    tk.Button(card, text="👁  Ansehen",
-                              command=lambda l=login_val: self.show_mitarbeiterprofil_dialog(l, readonly=True),
-                              bg="#888", fg="white", relief="flat", font=(theme.FONT, 9),
-                              padx=10, pady=4).pack(fill="x", padx=8, pady=(8, 4))
+                    theme.PillButton(card, "👁  Ansehen", lambda l=login_val: self.show_mitarbeiterprofil_dialog(l, readonly=True), color="#888", font_size=9, padx=10, pady=4).pack(fill="x", padx=8, pady=(8, 4))
 
         _render_cards()
 
@@ -6251,12 +6205,9 @@ LIMIT 500
             self._mitarbeiter_detail_dialog(int(new_id), on_saved=reload)
             reload()
 
-        tk.Button(toolbar, text="➕ Mitarbeiter anlegen", command=neuer_eintrag,
-                  bg="#0b4a86", fg="white", relief="flat", padx=14, pady=6).pack(side="left", padx=(0, 8))
-        tk.Button(toolbar, text="🗂 Felder verwalten",
-                  command=lambda: self._mitarbeiter_felder_dialog(on_saved=reload),
-                  padx=12, pady=6).pack(side="left", padx=(0, 8))
-        tk.Button(toolbar, text="🔄 Aktualisieren", command=reload, padx=12, pady=6).pack(side="left")
+        theme.PillButton(toolbar, "➕ Mitarbeiter anlegen", neuer_eintrag, color="#0b4a86", padx=14, pady=6).pack(side="left", padx=(0, 8))
+        theme.PillButton(toolbar, "🗂 Felder verwalten", lambda: self._mitarbeiter_felder_dialog(on_saved=reload), kind="neutral", padx=12, pady=6).pack(side="left", padx=(0, 8))
+        theme.PillButton(toolbar, "🔄 Aktualisieren", reload, kind="neutral", padx=12, pady=6).pack(side="left")
         self.status.set("Mitarbeiter-Center bereit.")
 
     # ── Phase 1: Zusatzfelder-Verwaltung + Mitarbeiter-Detail (Vorgesetzte) ──
@@ -6341,8 +6292,8 @@ LIMIT 500
 
             bar = tk.Frame(d, bg="#f5f7fb")
             bar.grid(row=4, column=0, columnspan=2, sticky="ew", padx=14, pady=14)
-            tk.Button(bar, text="Abbrechen", command=d.destroy, padx=14, pady=7).pack(side="right", padx=(8, 0))
-            tk.Button(bar, text="Speichern", command=save, bg="#0b4a86", fg="white", relief="flat", padx=18, pady=8).pack(side="right")
+            theme.PillButton(bar, "Abbrechen", d.destroy, kind="neutral", padx=14, pady=7).pack(side="right", padx=(8, 0))
+            theme.PillButton(bar, "Speichern", save, color="#0b4a86", padx=18, pady=8).pack(side="right")
             win.wait_window(d)
 
         def add_field():
@@ -6370,10 +6321,10 @@ LIMIT 500
 
         bar = tk.Frame(win, bg="#f5f7fb")
         bar.grid(row=2, column=0, sticky="ew", padx=18, pady=12)
-        tk.Button(bar, text="➕ Neu", command=add_field, bg="#0b4a86", fg="white", relief="flat", padx=14, pady=7).pack(side="left", padx=(0, 8))
-        tk.Button(bar, text="Bearbeiten", command=edit_field, padx=14, pady=7).pack(side="left", padx=8)
-        tk.Button(bar, text="Löschen", command=delete_field, padx=14, pady=7).pack(side="left", padx=8)
-        tk.Button(bar, text="Schließen", command=win.destroy, padx=14, pady=7).pack(side="right")
+        theme.PillButton(bar, "➕ Neu", add_field, color="#0b4a86", padx=14, pady=7).pack(side="left", padx=(0, 8))
+        theme.PillButton(bar, "Bearbeiten", edit_field, kind="neutral", padx=14, pady=7).pack(side="left", padx=8)
+        theme.PillButton(bar, "Löschen", delete_field, kind="neutral", padx=14, pady=7).pack(side="left", padx=8)
+        theme.PillButton(bar, "Schließen", win.destroy, kind="neutral", padx=14, pady=7).pack(side="right")
         reload_fields()
         self.wait_window(win)
         if callable(on_saved):
@@ -6522,8 +6473,8 @@ LIMIT 500
 
             bar = tk.Frame(d, bg="#f5f7fb")
             bar.grid(row=3, column=0, columnspan=2, sticky="ew", padx=14, pady=14)
-            tk.Button(bar, text="Abbrechen", command=d.destroy, padx=14, pady=7).pack(side="right", padx=(8, 0))
-            tk.Button(bar, text="Speichern", command=save, bg="#0b4a86", fg="white", relief="flat", padx=18, pady=8).pack(side="right")
+            theme.PillButton(bar, "Abbrechen", d.destroy, kind="neutral", padx=14, pady=7).pack(side="right", padx=(8, 0))
+            theme.PillButton(bar, "Speichern", save, color="#0b4a86", padx=18, pady=8).pack(side="right")
             win.wait_window(d)
 
         def vg_set_primaer():
@@ -6551,9 +6502,9 @@ LIMIT 500
 
         vg_bar = tk.Frame(tab_vg, bg="#ffffff")
         vg_bar.grid(row=2, column=0, sticky="ew", padx=14, pady=10)
-        tk.Button(vg_bar, text="➕ Zuordnen", command=vg_add, bg="#0b4a86", fg="white", relief="flat", padx=12, pady=6).pack(side="left", padx=(0, 8))
-        tk.Button(vg_bar, text="★ Als primär", command=vg_set_primaer, padx=12, pady=6).pack(side="left", padx=8)
-        tk.Button(vg_bar, text="Entfernen", command=vg_delete, padx=12, pady=6).pack(side="left", padx=8)
+        theme.PillButton(vg_bar, "➕ Zuordnen", vg_add, color="#0b4a86", padx=12, pady=6).pack(side="left", padx=(0, 8))
+        theme.PillButton(vg_bar, "★ Als primär", vg_set_primaer, kind="neutral", padx=12, pady=6).pack(side="left", padx=8)
+        theme.PillButton(vg_bar, "Entfernen", vg_delete, kind="neutral", padx=12, pady=6).pack(side="left", padx=8)
         reload_vg()
 
         def save_all():
@@ -6577,8 +6528,8 @@ LIMIT 500
 
         footer = tk.Frame(win, bg="#f5f7fb")
         footer.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 16))
-        tk.Button(footer, text="Abbrechen", command=win.destroy, padx=16, pady=8).pack(side="right", padx=(8, 0))
-        tk.Button(footer, text="Speichern", command=save_all, bg="#0b4a86", fg="white", relief="flat", padx=22, pady=9).pack(side="right")
+        theme.PillButton(footer, "Abbrechen", win.destroy, kind="neutral", padx=16, pady=8).pack(side="right", padx=(8, 0))
+        theme.PillButton(footer, "Speichern", save_all, color="#0b4a86", padx=22, pady=9).pack(side="right")
         self.wait_window(win)
 
     def _ensure_kunden_center_extended(self):
@@ -6904,8 +6855,7 @@ LIMIT 500
                         return
                 rab_tree.insert("", "end", values=(pzn, art, f"{rab:g}"))
                 dlg.destroy()
-            tk.Button(dlg, text="Übernehmen", command=_ok, bg="#0b4a86", fg="white",
-                      relief="flat", padx=14, pady=6).grid(row=2, column=1, sticky="e", padx=12, pady=12)
+            theme.PillButton(dlg, "Übernehmen", _ok, color="#0b4a86", padx=14, pady=6).grid(row=2, column=1, sticky="e", padx=12, pady=12)
 
         def _rab_del():
             for it in rab_tree.selection():
@@ -6913,9 +6863,8 @@ LIMIT 500
 
         rab_btns = tk.Frame(tab_rab, bg="#ffffff")
         rab_btns.grid(row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8))
-        tk.Button(rab_btns, text="➕ Rabatt", command=_rab_add, bg="#3867b7", fg="white",
-                  relief="flat", padx=12, pady=6).pack(side="left")
-        tk.Button(rab_btns, text="➖ Entfernen", command=_rab_del, padx=10, pady=6).pack(side="left", padx=(8, 0))
+        theme.PillButton(rab_btns, "➕ Rabatt", _rab_add, color="#3867b7", padx=12, pady=6).pack(side="left")
+        theme.PillButton(rab_btns, "➖ Entfernen", _rab_del, kind="neutral", padx=10, pady=6).pack(side="left", padx=(8, 0))
 
         # ---- Reiter: Analysen ----
         tab_ana = tk.Frame(nb, bg="#ffffff")
@@ -7011,9 +6960,8 @@ LIMIT 500
 
         ana_btns = tk.Frame(tab_ana, bg="#ffffff")
         ana_btns.grid(row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8))
-        tk.Button(ana_btns, text="📧 Analyse per E-Mail senden", command=send_email_analyse,
-                  bg="#3867b7", fg="white", relief="flat", padx=12, pady=6).pack(side="left")
-        tk.Button(ana_btns, text="🔄 Aktualisieren", command=load_analysen, padx=10, pady=6).pack(side="left", padx=(8, 0))
+        theme.PillButton(ana_btns, "📧 Analyse per E-Mail senden", send_email_analyse, color="#3867b7", padx=12, pady=6).pack(side="left")
+        theme.PillButton(ana_btns, "🔄 Aktualisieren", load_analysen, kind="neutral", padx=10, pady=6).pack(side="left", padx=(8, 0))
 
         # ---- Reiter: Verkaufte Artikel ----
         tab_vk = tk.Frame(nb, bg="#ffffff")
@@ -7172,9 +7120,8 @@ LIMIT 500
                 pass
             win.destroy()
 
-        tk.Button(bar, text="Abbrechen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8, 12), pady=6)
-        tk.Button(bar, text="✔  Speichern", command=save_kunde, bg="#0b4a86", fg="white",
-                  relief="flat", font=(theme.FONT, 11, "bold"), padx=18, pady=7).pack(side="right", pady=6)
+        theme.PillButton(bar, "Abbrechen", win.destroy, kind="neutral", padx=14, pady=7).pack(side="right", padx=(8, 12), pady=6)
+        theme.PillButton(bar, "✔  Speichern", save_kunde, color="#0b4a86", font_size=11, padx=18, pady=7).pack(side="right", pady=6)
 
 
     def show_nmg_rabatte_uebersicht(self):
@@ -7299,7 +7246,7 @@ LIMIT 500
         diff_top.pack(fill="x", padx=10, pady=(10, 4))
         diff_info = tk.StringVar(value="")
         tk.Label(diff_top, textvariable=diff_info, bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 11, "bold")).pack(anchor="w")
-        tk.Button(diff_top, text="Neu laden", command=lambda: render_diff()).pack(anchor="w", pady=(4, 0))
+        theme.PillButton(diff_top, "Neu laden", lambda: render_diff(), kind="neutral", padx=12, pady=7).pack(anchor="w", pady=(4, 0))
 
         diff_lists = tk.Frame(tab_diff, bg="#ffffff")
         diff_lists.pack(fill="both", expand=True, padx=10, pady=4)
@@ -7388,17 +7335,18 @@ LIMIT 500
                 hist_tv.insert("", "end", values=(snap_label, h["erstellt_am"], h.get("artikel") or "", pct, h.get("snapshot_quelle") or ""))
             hist_info.set(f"{len(verlauf)} Eintraege fuer PZN {pzn_norm}.")
         hist_entry.bind("<Return>", render_history)
-        tk.Button(hist_top, text="Anzeigen", command=render_history).pack(side="left", padx=(8, 0))
+        theme.PillButton(hist_top, "Anzeigen", render_history, kind="neutral", padx=12, pady=7).pack(side="left", padx=(8, 0))
 
         self.status.set("NMG-Rabatte-Uebersicht geladen.")
 
     def show_apps_page(self):
         """Apps-Übersicht: alle Center als Schnellstart-Kacheln."""
         self.clear_page()
-        self._page_header("Apps", "Schnellzugriff auf alle Bereiche.")
+        self._page_header("Apps", "NMGone-Funktionen. Die Programme (Kasse, Einkauf, Faktura …) startest du im Cockpit.")
         body = tk.Frame(self.page, bg="#ffffff")
         body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
-        body.columnconfigure((0, 1, 2, 3), weight=1)
+        for i in range(6):
+            body.columnconfigure(i, weight=1)
 
         app_tiles = [
             ("\U0001f465", "Kunden", "Kundenstamm, Analysen, E-Mail-Versand.", self.show_kunden_center, "#0b4a86"),
@@ -7409,6 +7357,7 @@ LIMIT 500
             ("\U0001f514", "Meldungen", "Abweichungen, Kühlsachenkontrolle, Selbstinspektion (GDP).", self.open_meldungen_app, "#b5391f"),
             ("\U0001f6d2", "Einkauf", "Beschaffung EU-Ausland, §129-Margen, Aufgaben & Meldungen.", self.open_einkauf_app, "#0b4a86"),
             ("\U0001f9fe", "Faktura", "Rechnungen und Gutschriften erstellen.", self.open_faktura_app, "#0b4a86"),
+            ("\U0001f4d2", "Buchhaltung", "Ein-/Ausgangsrechnungen, eRechnung-Belege, Kontenrahmen (SKR03/04), Export ans Steuerbüro.", self.open_buchhaltung_app, "#0b6e6e"),
             ("\U0001f510", "Parameter", "Berechtigungen verwalten: welcher Mitarbeiter was darf (Admin-Modus).", self.open_parameter_app, "#0b2c4a"),
             ("\U0001f4d1", "Auswertungen", "Verkäufe, Kunden, Artikel frei auswerten und exportieren.", self.open_auswertungen_app, "#0b6e6e"),
             ("\U0001f50d", _T("Vergleichs-Suche"), _T("PZN oder Artikelname schnell in allen Wissens-Tabellen finden."), self.open_vergleichssuche_window, "#0b6e6e"),
@@ -7418,33 +7367,21 @@ LIMIT 500
             ("\U0001f4b0", "NMG-Rabatte", "Aktuelle Rabatte sehen, Diff zum letzten Import, Verlauf pro PZN.", self.show_nmg_rabatte_uebersicht, "#6b4fb3"),
             ("❓", "Hilfe", "Bebildertes Handbuch: was wie funktioniert.", self.open_hilfe_app, "#208acd"),
         ]
-        # V1.1 SP11: gleichgrosse Kacheln. rowconfigure(weight=1) + minsize,
-        # grid statt pack innerhalb der Kachel, Beschreibung mit wraplength.
-        cols_per_row = 4
-        rows_needed = (len(app_tiles) + cols_per_row - 1) // cols_per_row
-        for ri in range(rows_needed):
-            body.rowconfigure(ri, weight=1, minsize=260)
+        # Nur NMGone-eigene Funktionen behalten – die App-Starter (Kasse,
+        # Einkauf, Faktura, Wareneingang, Buchhaltung, Meldungen, Kunden,
+        # Mitarbeiter, Parameter, Hilfe) laufen jetzt zentral ueber das Cockpit.
+        keep = {self.show_todo_center, self.open_auswertungen_app,
+                self.open_vergleichssuche_window, self.open_globale_suche_window,
+                self.show_nmg_rabatte_uebersicht}
+        app_tiles = [t for t in app_tiles if t[3] in keep]
 
+        # Kompakte Mini-Kacheln (Icon + Titel, anklickbar), 6 pro Reihe.
+        cols_per_row = 6
         for idx, (icon, title, desc, cmd, color) in enumerate(app_tiles):
             r, c = divmod(idx, cols_per_row)
-            f = tk.Frame(body, bg="#f8fbff", highlightbackground="#d8e2ee",
-                         highlightthickness=1)
-            f.grid(row=r, column=c, sticky="nsew", padx=10, pady=10)
-            f.rowconfigure(2, weight=1)   # Beschreibung zieht sich, Rest fix
-            f.columnconfigure(0, weight=1)
-            tk.Label(f, text=icon, font=(theme.FONT, 32), bg="#f8fbff", fg=color
-                     ).grid(row=0, column=0, pady=(18, 4))
-            tk.Label(f, text=title, font=(theme.FONT, 13, "bold"), bg="#f8fbff",
-                     fg="#123").grid(row=1, column=0)
-            tk.Label(f, text=desc, justify="center", bg="#f8fbff", fg="#555",
-                     font=(theme.FONT, 9), wraplength=190
-                     ).grid(row=2, column=0, padx=14, pady=8, sticky="n")
-            # Einheitlicher Oeffnen-Button (gleiche Hoehe + Schrift in allen Kacheln).
-            tk.Button(f, text="Öffnen  →", command=cmd,
-                      bg=color, fg="white", activebackground=color,
-                      relief="flat", font=(theme.FONT, 10, "bold"),
-                      padx=14, pady=7
-                      ).grid(row=3, column=0, sticky="ew", padx=18, pady=(4, 16))
+            body.rowconfigure(r, minsize=96)
+            self._mini_tile(body, icon, title, cmd, color).grid(
+                row=r, column=c, sticky="nsew", padx=8, pady=8)
         self.status.set("Apps bereit.")
 
     def open_vergleichssuche_window(self):
@@ -7928,10 +7865,10 @@ LIMIT 500
 
         tree.bind("<Double-1>", open_detail)
 
-        tk.Button(toolbar, text="Neu", command=new_kunde, bg="#0b4a86", fg="white", relief="flat", padx=14, pady=7).pack(side="left", padx=(0, 6))
-        tk.Button(toolbar, text="Öffnen / Bearbeiten", command=open_detail, padx=14, pady=7).pack(side="left", padx=(0, 6))
-        tk.Button(toolbar, text="Löschen", command=delete_kunde, padx=14, pady=7).pack(side="left", padx=(0, 6))
-        tk.Button(toolbar, text="Aktualisieren", command=lambda: reload(search_var.get().strip()), padx=14, pady=7).pack(side="left")
+        theme.PillButton(toolbar, "Neu", new_kunde, color="#0b4a86", padx=14, pady=7).pack(side="left", padx=(0, 6))
+        theme.PillButton(toolbar, "Öffnen / Bearbeiten", open_detail, kind="neutral", padx=14, pady=7).pack(side="left", padx=(0, 6))
+        theme.PillButton(toolbar, "Löschen", delete_kunde, kind="neutral", padx=14, pady=7).pack(side="left", padx=(0, 6))
+        theme.PillButton(toolbar, "Aktualisieren", lambda: reload(search_var.get().strip()), kind="neutral", padx=14, pady=7).pack(side="left")
 
         self.status.set("Kunden bereit.")
 
@@ -8095,6 +8032,33 @@ LIMIT 500
         except Exception as exc:
             messagebox.showerror("NMG Einkauf",
                                  f"Die Einkauf-App konnte nicht gestartet werden:\n{exc}", parent=self)
+
+    def open_buchhaltung_app(self):
+        """Buchhaltungs-App (Vorerfassung & Export ans Steuerbüro, eRechnung-Belege,
+        Kontenrahmen) als EIGENEN Prozess starten. Teilt sich die DB mit NMGone,
+        eigenes Fenster/Taskleisten-Icon (AUMID NMG.Buchhaltung). Zweiter Aufruf
+        bringt keinen weiteren Start, solange der Prozess läuft."""
+        import subprocess
+        proc = getattr(self, "_buchhaltung_proc", None)
+        if proc is not None and proc.poll() is None:
+            messagebox.showinfo(
+                "Buchhaltung",
+                "Die Buchhaltungs-App läuft bereits in einem eigenen Fenster.\n"
+                "Bitte über die Taskleiste nach vorn holen.", parent=self)
+            return
+        try:
+            flags = 0
+            if sys.platform == "win32":
+                flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable, "--buchhaltung"]
+            else:
+                start_py = Path(__file__).resolve().parent.parent / "start_buchhaltung.py"
+                cmd = [sys.executable, str(start_py)]
+            self._buchhaltung_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
+        except Exception as exc:
+            messagebox.showerror("Buchhaltung",
+                                 f"Die Buchhaltungs-App konnte nicht gestartet werden:\n{exc}", parent=self)
 
     def open_parameter_app(self):
         """Parameter- & Berechtigungs-App (wer darf was) als EIGENEN Prozess
@@ -8398,9 +8362,8 @@ LIMIT 500
                 messagebox.showerror("Fehler", str(exc)); return
             win.destroy()
             if callback: callback()
-        tk.Button(bar, text="Abbrechen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8,0))
-        tk.Button(bar, text="Übernehmen", command=uebernehmen, bg="#0b4a86", fg="white",
-                  relief="flat", font=(theme.FONT, 11, "bold"), padx=16, pady=7).pack(side="right")
+        theme.PillButton(bar, "Abbrechen", win.destroy, kind="neutral", padx=14, pady=7).pack(side="right", padx=(8,0))
+        theme.PillButton(bar, "Übernehmen", uebernehmen, color="#0b4a86", font_size=11, padx=16, pady=7).pack(side="right")
 
     def show_neue_auswertung_page(self):
         self._ensure_kunden_tables()
@@ -8480,14 +8443,14 @@ LIMIT 500
         file_frame.grid(row=4, column=1, columnspan=2, sticky="ew", padx=14, pady=7)
         file_frame.columnconfigure(0, weight=1)
         tk.Entry(file_frame, textvariable=rohdatei_var, state="readonly").grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        tk.Button(file_frame, text="Datei auswählen", command=choose_raw_file, padx=12, pady=5).grid(row=0, column=1)
+        theme.PillButton(file_frame, "Datei auswählen", choose_raw_file, kind="neutral", padx=12, pady=5).grid(row=0, column=1)
 
         tk.Label(form, text="6. Auswertungsvorlage", bg="#f8fbff", fg="#0b4a86", font=(theme.FONT, 12, "bold")).grid(row=5, column=0, sticky="w", padx=14, pady=7)
         template_frame = tk.Frame(form, bg="#f8fbff")
         template_frame.grid(row=5, column=1, columnspan=2, sticky="ew", padx=14, pady=7)
         template_frame.columnconfigure(0, weight=1)
         ttk.Combobox(template_frame, textvariable=vorlage_var, values=self._template_combo_values(), state="readonly").grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        tk.Button(template_frame, text="Vorlagen verwalten", command=self.show_auswertungsvorlage_page, padx=12, pady=5).grid(row=0, column=1)
+        theme.PillButton(template_frame, "Vorlagen verwalten", self.show_auswertungsvorlage_page, kind="neutral", padx=12, pady=5).grid(row=0, column=1)
 
         info = (
             "Hinweis: Der Kundentyp und die gewählte Auswertungsvorlage werden gespeichert und beim nächsten Öffnen wieder vorgeschlagen.\n"
@@ -8540,25 +8503,8 @@ LIMIT 500
 
         buttonbar = tk.Frame(body, bg="#ffffff")
         buttonbar.grid(row=2, column=0, columnspan=3, sticky="w", pady=(0, 18))
-        tk.Button(
-            buttonbar,
-            text="Auswertung starten  →",
-            command=start_analysis,
-            bg="#0b4a86",
-            fg="white",
-            activebackground="#0b4a86",
-            relief="flat",
-            font=(theme.FONT, 12, "bold"),
-            padx=20,
-            pady=10
-        ).pack(side="left")
-        tk.Button(
-            buttonbar,
-            text="Zurücksetzen",
-            command=lambda: [kundennummer_var.set(""), kundenname_var.set(""), apotheke_var.set(""), rohdatei_var.set("")],
-            padx=16,
-            pady=9
-        ).pack(side="left", padx=10)
+        theme.PillButton(buttonbar, "Auswertung starten  →", start_analysis, color="#0b4a86", font_size=12, padx=20, pady=10).pack(side="left")
+        theme.PillButton(buttonbar, "Zurücksetzen", lambda: [kundennummer_var.set(""), kundenname_var.set(""), apotheke_var.set(""), rohdatei_var.set("")], kind="neutral", padx=16, pady=9).pack(side="left", padx=10)
 
         # Eigener Block: Abweichungsanalyse. Bewusst getrennt von Neue Auswertung.
         abw = tk.Frame(body, bg="#f8fbff", highlightbackground="#d8e2ee", highlightthickness=1)
@@ -8645,8 +8591,8 @@ LIMIT 500
 
             btns = tk.Frame(win, bg="#f5f7fb")
             btns.pack(fill="x", padx=22, pady=(0, 18))
-            tk.Button(btns, text="Abbrechen", command=win.destroy, padx=14, pady=8).pack(side="right", padx=(8, 0))
-            tk.Button(btns, text="Auswertung übernehmen", command=use_selected, bg="#0b4a86", fg="white", relief="flat", padx=18, pady=9).pack(side="right")
+            theme.PillButton(btns, "Abbrechen", win.destroy, kind="neutral", padx=14, pady=8).pack(side="right", padx=(8, 0))
+            theme.PillButton(btns, "Auswertung übernehmen", use_selected, color="#0b4a86", padx=18, pady=9).pack(side="right")
             lb.bind("<Double-Button-1>", lambda e: use_selected())
 
         def choose_manual_file():
@@ -8679,8 +8625,8 @@ LIMIT 500
         prog_frame.grid(row=2, column=1, columnspan=2, sticky="ew", padx=14, pady=7)
         prog_frame.columnconfigure(0, weight=1)
         tk.Entry(prog_frame, textvariable=programm_auswertung_var, state="readonly").grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        tk.Button(prog_frame, text="Gespeicherte auswählen", command=choose_saved_programm, padx=10, pady=5).grid(row=0, column=1, padx=(0, 6))
-        tk.Button(prog_frame, text="Datei auswählen", command=choose_programm_file, padx=10, pady=5).grid(row=0, column=2)
+        theme.PillButton(prog_frame, "Gespeicherte auswählen", choose_saved_programm, kind="neutral", padx=10, pady=5).grid(row=0, column=1, padx=(0, 6))
+        theme.PillButton(prog_frame, "Datei auswählen", choose_programm_file, kind="neutral", padx=10, pady=5).grid(row=0, column=2)
         tk.Label(abw, textvariable=selected_programm_info, bg="#f8fbff", fg="#666", font=(theme.FONT, 9)).grid(row=3, column=1, columnspan=2, sticky="w", padx=14, pady=(0, 6))
 
         tk.Label(abw, text="2. Manuelle Anpassung", bg="#f8fbff", fg="#0b4a86", font=(theme.FONT, 12, "bold")).grid(row=4, column=0, sticky="w", padx=14, pady=7)
@@ -8688,29 +8634,12 @@ LIMIT 500
         man_frame.grid(row=4, column=1, columnspan=2, sticky="ew", padx=14, pady=7)
         man_frame.columnconfigure(0, weight=1)
         tk.Entry(man_frame, textvariable=manuelle_anpassung_var, state="readonly").grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        tk.Button(man_frame, text="Datei auswählen", command=choose_manual_file, padx=10, pady=5).grid(row=0, column=1)
+        theme.PillButton(man_frame, "Datei auswählen", choose_manual_file, kind="neutral", padx=10, pady=5).grid(row=0, column=1)
 
         abw_buttons = tk.Frame(abw, bg="#f8fbff")
         abw_buttons.grid(row=5, column=0, columnspan=3, sticky="w", padx=14, pady=(10, 14))
-        tk.Button(
-            abw_buttons,
-            text="Abweichungsanalyse starten  →",
-            command=start_deviation_from_page,
-            bg="#8b5a00",
-            fg="white",
-            activebackground="#8b5a00",
-            relief="flat",
-            font=(theme.FONT, 12, "bold"),
-            padx=18,
-            pady=9
-        ).pack(side="left")
-        tk.Button(
-            abw_buttons,
-            text="Abweichung zurücksetzen",
-            command=lambda: [programm_auswertung_var.set(""), manuelle_anpassung_var.set(""), selected_programm_info.set("Keine Programm-Auswertung ausgewählt.")],
-            padx=14,
-            pady=8
-        ).pack(side="left", padx=10)
+        theme.PillButton(abw_buttons, "Abweichungsanalyse starten  →", start_deviation_from_page, color="#8b5a00", font_size=12, padx=18, pady=9).pack(side="left")
+        theme.PillButton(abw_buttons, "Abweichung zurücksetzen", lambda: [programm_auswertung_var.set(""), manuelle_anpassung_var.set(""), selected_programm_info.set("Keine Programm-Auswertung ausgewählt.")], kind="neutral", padx=14, pady=8).pack(side="left", padx=10)
 
     def show_analysen_page(self):
         # SP7: Marktanalyse-Kachel raus. Produktanalyse-Kachel ruft jetzt
@@ -8774,18 +8703,7 @@ LIMIT 500
                 tk.Label(f, text=icon, font=(theme.FONT, 34), bg="#f8fbff", fg=color).pack(pady=(20, 6))
                 tk.Label(f, text=title, font=(theme.FONT, 15, "bold"), bg="#f8fbff", fg="#123").pack()
                 tk.Label(f, text=desc, wraplength=260, justify="center", bg="#f8fbff", fg="#333").pack(padx=18, pady=12)
-                tk.Button(
-                    f,
-                    text="Öffnen  →",
-                    command=cmd,
-                    bg=color,
-                    fg="white",
-                    activebackground=color,
-                    relief="flat",
-                    font=(theme.FONT, 12, "bold"),
-                    padx=18,
-                    pady=8
-                ).pack(fill="x", padx=24, pady=(8, 18))
+                theme.PillButton(f, "Öffnen  →", cmd, color=color, font_size=12, padx=18, pady=8).pack(fill="x", padx=24, pady=(8, 18))
 
             self.status.set("Schulbank: Bereich auswählen.")
             return
@@ -8823,37 +8741,10 @@ LIMIT 500
                 self._schulbank_historie_filter = value
                 self.show_schulbank_page("Historie")
             active_filter = getattr(self, "_schulbank_historie_filter", "historie_uebernommen")
-            tk.Button(
-                top,
-                text="Übernommene",
-                command=lambda: set_history_filter("historie_uebernommen"),
-                bg="#11823b" if active_filter == "historie_uebernommen" else "#e9eef5",
-                fg="white" if active_filter == "historie_uebernommen" else "#123",
-                relief="flat",
-                padx=14,
-                pady=8
-            ).pack(side="left", padx=(0, 8))
-            tk.Button(
-                top,
-                text="Abgelehnte",
-                command=lambda: set_history_filter("historie_abgelehnt"),
-                bg="#9b1c1c" if active_filter == "historie_abgelehnt" else "#e9eef5",
-                fg="white" if active_filter == "historie_abgelehnt" else "#123",
-                relief="flat",
-                padx=14,
-                pady=8
-            ).pack(side="left", padx=(0, 8))
+            theme.PillButton(top, "Übernommene", lambda: set_history_filter("historie_uebernommen"), kind="neutral", padx=14, pady=8).pack(side="left", padx=(0, 8))
+            theme.PillButton(top, "Abgelehnte", lambda: set_history_filter("historie_abgelehnt"), kind="neutral", padx=14, pady=8).pack(side="left", padx=(0, 8))
         else:
-            tk.Button(
-                top,
-                text="+ Lernvorschlag hinzufügen",
-                command=lambda: self.add_lernvorschlag(section),
-                bg="#0b4a86",
-                fg="white",
-                relief="flat",
-                padx=14,
-                pady=8
-            ).pack(side="left")
+            theme.PillButton(top, "+ Lernvorschlag hinzufügen", lambda: self.add_lernvorschlag(section), color="#0b4a86", padx=14, pady=8).pack(side="left")
 
         tk.Label(
             top,
@@ -9103,14 +8994,14 @@ LIMIT 500
                 messagebox.showinfo("Schulbank", msg)
             self.show_schulbank_page(section)
 
-        tk.Button(actionbar, text="✓ Markierte lernen", command=lambda: set_status("uebernommen"), bg="#11823b", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=(0, 8))
-        tk.Button(actionbar, text="✗ Markierte ablehnen", command=lambda: set_status("abgelehnt"), bg="#9b1c1c", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=8)
+        theme.PillButton(actionbar, "✓ Markierte lernen", lambda: set_status("uebernommen"), color="#11823b", padx=14, pady=8).pack(side="left", padx=(0, 8))
+        theme.PillButton(actionbar, "✗ Markierte ablehnen", lambda: set_status("abgelehnt"), color="#9b1c1c", padx=14, pady=8).pack(side="left", padx=8)
         # "Alle sichtbaren" bewusst abgesetzt und heller, damit sie nicht mit den
         # "Markierte"-Buttons verwechselt werden (Ursache: versehentlich alles abgelehnt).
-        tk.Button(actionbar, text="✓ Alle sichtbaren lernen", command=lambda: update_many(list(row_source_map.values()), "uebernommen", "gelernt", True), bg="#cdebd6", fg="#11823b", relief="flat", padx=14, pady=8).pack(side="left", padx=(24, 8))
-        tk.Button(actionbar, text="✗ Alle sichtbaren ablehnen", command=lambda: update_many(list(row_source_map.values()), "abgelehnt", "abgelehnt", True), bg="#f3cccc", fg="#9b1c1c", relief="flat", padx=14, pady=8).pack(side="left", padx=8)
-        tk.Button(actionbar, text="↩ Rückgängig", command=lambda: set_status("neu"), bg="#8b5a00", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=8)
-        tk.Button(actionbar, text="Löschen", command=delete_selected, padx=14, pady=8).pack(side="left", padx=8)
+        theme.PillButton(actionbar, "✓ Alle sichtbaren lernen", lambda: update_many(list(row_source_map.values()), "uebernommen", "gelernt", True), kind="neutral", padx=14, pady=8).pack(side="left", padx=(24, 8))
+        theme.PillButton(actionbar, "✗ Alle sichtbaren ablehnen", lambda: update_many(list(row_source_map.values()), "abgelehnt", "abgelehnt", True), kind="neutral", padx=14, pady=8).pack(side="left", padx=8)
+        theme.PillButton(actionbar, "↩ Rückgängig", lambda: set_status("neu"), color="#8b5a00", padx=14, pady=8).pack(side="left", padx=8)
+        theme.PillButton(actionbar, "Löschen", delete_selected, kind="neutral", padx=14, pady=8).pack(side="left", padx=8)
 
         self.status.set(f"Schulbank aktiv: {len(rows)} Einträge angezeigt. Mehrfachauswahl ist möglich.")
 
@@ -9293,8 +9184,8 @@ LIMIT 500
 
             btns = tk.Frame(frm)
             btns.grid(row=len(fields), column=0, columnspan=2, pady=(12, 0), sticky="e")
-            tk.Button(btns, text="Speichern", command=save, bg="#11823b", fg="white", relief="flat", padx=14, pady=6).pack(side="right", padx=(8, 0))
-            tk.Button(btns, text="Abbrechen", command=dlg.destroy, padx=14, pady=6).pack(side="right")
+            theme.PillButton(btns, "Speichern", save, color="#11823b", padx=14, pady=6).pack(side="right", padx=(8, 0))
+            theme.PillButton(btns, "Abbrechen", dlg.destroy, kind="neutral", padx=14, pady=6).pack(side="right")
 
         def on_double_click(event):
             iid = tree.identify_row(event.y)
@@ -9323,8 +9214,8 @@ LIMIT 500
 
         actionbar = tk.Frame(body, bg="#ffffff")
         actionbar.grid(row=3, column=0, sticky="ew", pady=(12, 0))
-        tk.Button(actionbar, text="Aendern (oder Doppelklick)", command=lambda: edit_row(tree.selection()[0]) if tree.selection() else messagebox.showinfo("Biosimilar", "Bitte einen Eintrag waehlen."), padx=14, pady=8).pack(side="left", padx=(0, 8))
-        tk.Button(actionbar, text="Loeschen", command=delete_selected, padx=14, pady=8).pack(side="left", padx=8)
+        theme.PillButton(actionbar, "Aendern (oder Doppelklick)", lambda: edit_row(tree.selection()[0]) if tree.selection() else messagebox.showinfo("Biosimilar", "Bitte einen Eintrag waehlen."), kind="neutral", padx=14, pady=8).pack(side="left", padx=(0, 8))
+        theme.PillButton(actionbar, "Loeschen", delete_selected, kind="neutral", padx=14, pady=8).pack(side="left", padx=8)
 
         load_rows()
 
@@ -9570,11 +9461,11 @@ LIMIT 500
 
         actionbar = tk.Frame(body, bg="#ffffff")
         actionbar.grid(row=2, column=0, sticky="ew", pady=(12, 0))
-        tk.Button(actionbar, text="✓ Gewählten behalten", command=keep_selected_variant, bg="#11823b", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=(0, 8))
-        tk.Button(actionbar, text="✗ Markierte ablehnen", command=reject_selected_variants, bg="#9b1c1c", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=8)
-        tk.Button(actionbar, text="✗ Alle sichtbaren ablehnen", command=reject_all_visible_variants, bg="#9b1c1c", fg="white", relief="flat", padx=14, pady=8).pack(side="left", padx=8)
-        tk.Button(actionbar, text="Aktualisieren", command=reload, padx=14, pady=8).pack(side="left", padx=8)
-        tk.Button(actionbar, text="Zu Übernommen", command=open_schulbank_uebernommen, padx=14, pady=8).pack(side="left", padx=8)
+        theme.PillButton(actionbar, "✓ Gewählten behalten", keep_selected_variant, color="#11823b", padx=14, pady=8).pack(side="left", padx=(0, 8))
+        theme.PillButton(actionbar, "✗ Markierte ablehnen", reject_selected_variants, color="#9b1c1c", padx=14, pady=8).pack(side="left", padx=8)
+        theme.PillButton(actionbar, "✗ Alle sichtbaren ablehnen", reject_all_visible_variants, color="#9b1c1c", padx=14, pady=8).pack(side="left", padx=8)
+        theme.PillButton(actionbar, "Aktualisieren", reload, kind="neutral", padx=14, pady=8).pack(side="left", padx=8)
+        theme.PillButton(actionbar, "Zu Übernommen", open_schulbank_uebernommen, kind="neutral", padx=14, pady=8).pack(side="left", padx=8)
         reload()
 
     def _ensure_lernvorschlaege_table(self):
@@ -10009,8 +9900,8 @@ LIMIT 500
 
         buttons = tk.Frame(win, bg="#f5f7fb")
         buttons.pack(fill="x", padx=24, pady=(0, 20))
-        tk.Button(buttons, text="Abbrechen", command=win.destroy, padx=16, pady=8).pack(side="right", padx=(8, 0))
-        tk.Button(buttons, text="Speichern", command=save, bg="#0b4a86", fg="white", activebackground="#0b4a86", relief="flat", font=(theme.FONT, 11, "bold"), padx=22, pady=9).pack(side="right")
+        theme.PillButton(buttons, "Abbrechen", win.destroy, kind="neutral", padx=16, pady=8).pack(side="right", padx=(8, 0))
+        theme.PillButton(buttons, "Speichern", save, color="#0b4a86", font_size=11, padx=22, pady=9).pack(side="right")
 
         e_pzn_alt.focus_set()
         win.bind("<Return>", lambda _event: save())
@@ -10152,8 +10043,8 @@ LIMIT 500
 
         buttons = tk.Frame(win, bg="#f5f7fb")
         buttons.pack(fill="x", padx=22, pady=(0, 18))
-        tk.Button(buttons, text="Abbrechen", command=cancel, padx=14, pady=8).pack(side="right", padx=(8, 0))
-        tk.Button(buttons, text="Weiter", command=ok, bg="#0b4a86", fg="white", relief="flat", padx=18, pady=9).pack(side="right")
+        theme.PillButton(buttons, "Abbrechen", cancel, kind="neutral", padx=14, pady=8).pack(side="right", padx=(8, 0))
+        theme.PillButton(buttons, "Weiter", ok, color="#0b4a86", padx=18, pady=9).pack(side="right")
         self.wait_window(win)
         return result["value"]
 
@@ -10448,10 +10339,10 @@ LIMIT 500
             except Exception as exc:
                 messagebox.showerror("Admin", f"Auswertungen konnten nicht gelöscht werden:\n{exc}")
 
-        tk.Button(buttons, text="Alle markieren", command=select_all, padx=12, pady=7).pack(side="left")
-        tk.Button(buttons, text="Auswahl aufheben", command=clear_selection, padx=12, pady=7).pack(side="left", padx=(8, 0))
-        tk.Button(buttons, text="Ausgewählte löschen", command=delete_selected, bg="#9b1c1c", fg="white", relief="flat", font=(theme.FONT, 10, "bold"), padx=16, pady=8).pack(side="right")
-        tk.Button(buttons, text="Schließen", command=win.destroy, padx=12, pady=7).pack(side="right", padx=(0, 8))
+        theme.PillButton(buttons, "Alle markieren", select_all, kind="neutral", padx=12, pady=7).pack(side="left")
+        theme.PillButton(buttons, "Auswahl aufheben", clear_selection, kind="neutral", padx=12, pady=7).pack(side="left", padx=(8, 0))
+        theme.PillButton(buttons, "Ausgewählte löschen", delete_selected, color="#9b1c1c", font_size=10, padx=16, pady=8).pack(side="right")
+        theme.PillButton(buttons, "Schließen", win.destroy, kind="neutral", padx=12, pady=7).pack(side="right", padx=(0, 8))
 
     def show_import_page(self, title, command):
         self._action_page(
@@ -10585,61 +10476,21 @@ LIMIT 500
         toolbar = tk.Frame(body, bg="#ffffff")
         toolbar.grid(row=1, column=0, sticky="w", pady=(0, 8))
 
-        tk.Button(
-            toolbar,
-            text="Aktualisieren",
-            command=self.show_datenbankuebersicht_page,
-            bg="#0b4a86",
-            fg="white",
-            relief="flat",
-            font=(theme.FONT, 10, "bold"),
-            padx=14,
-            pady=7
-        ).pack(side="left")
+        theme.PillButton(toolbar, "Aktualisieren", self.show_datenbankuebersicht_page, color="#0b4a86", font_size=10, padx=14, pady=7).pack(side="left")
 
-        tk.Button(
-            toolbar,
-            text="Wirkstoff/Stärke importieren",
-            command=self._import_wirkstoff_staerke_dialog,
-            bg="#0b6e6e",
-            fg="white",
-            relief="flat",
-            font=(theme.FONT, 10, "bold"),
-            padx=14,
-            pady=7
-        ).pack(side="left", padx=(8, 0))
+        theme.PillButton(toolbar, "Wirkstoff/Stärke importieren", self._import_wirkstoff_staerke_dialog, color="#0b6e6e", font_size=10, padx=14, pady=7).pack(side="left", padx=(8, 0))
 
         # V1.1 SP3: Cleanup direkt erreichbar - ohne Ctrl+Alt+A-Toggle.
         # Schutz liegt auf dem Admin-Passwort + LEEREN-Confirm im Dialog
         # selbst, ein Backup wird vorher automatisch erstellt.
-        tk.Button(
-            toolbar,
-            text="🗑 Datenbankinhalte leeren",
-            command=self.open_admin_database_clear,
-            bg="#8b5a00",
-            fg="white",
-            relief="flat",
-            font=(theme.FONT, 10, "bold"),
-            padx=14,
-            pady=7
-        ).pack(side="left", padx=(8, 0))
+        theme.PillButton(toolbar, "🗑 Datenbankinhalte leeren", self.open_admin_database_clear, color="#8b5a00", font_size=10, padx=14, pady=7).pack(side="left", padx=(8, 0))
 
         # 'Auswertungen loeschen' bleibt versteckt - das ist die wirklich
         # destruktive Aktion (loescht Auswertungs-Historie inkl. Positionen)
         # und sollte nicht versehentlich gefunden werden. Sichtbar nur im
         # Admin-Modus (Ctrl+Alt+A) bei Admin-Windows-Login.
         if getattr(self, "_admin_visible", False) and self._is_admin_login():
-            tk.Button(
-                toolbar,
-                text="🔐 Auswertungen löschen",
-                command=self.open_admin_auswertungen_loeschen,
-                bg="#9b1c1c",
-                fg="white",
-                relief="flat",
-                font=(theme.FONT, 10, "bold"),
-                padx=14,
-                pady=7
-            ).pack(side="left", padx=(8, 0))
+            theme.PillButton(toolbar, "🔐 Auswertungen löschen", self.open_admin_auswertungen_loeschen, color="#9b1c1c", font_size=10, padx=14, pady=7).pack(side="left", padx=(8, 0))
 
     def _import_wirkstoff_staerke_dialog(self):
         """V1.1 SP2: Import der Wirkstoff/Staerke-Excel ueber Datenbankuebersicht.
@@ -10848,14 +10699,9 @@ LIMIT 500
 
         btn_bar = tk.Frame(win, bg="#f5f7fb")
         btn_bar.pack(side="bottom", fill="x", padx=20, pady=16)
-        tk.Button(btn_bar, text="Abbrechen", command=win.destroy,
-                  padx=14, pady=6).pack(side="right")
-        tk.Button(btn_bar, text="🔐 LOESCHEN  →", command=do_delete,
-                  bg="#9b1c1c", fg="white", relief="flat",
-                  font=(theme.FONT, 10, "bold"), padx=16, pady=7).pack(side="right", padx=(0, 8))
-        tk.Button(btn_bar, text="Vorschau zaehlen", command=vorschau,
-                  bg="#0b4a86", fg="white", relief="flat",
-                  font=(theme.FONT, 10, "bold"), padx=14, pady=6).pack(side="right", padx=(0, 8))
+        theme.PillButton(btn_bar, "Abbrechen", win.destroy, kind="neutral", padx=14, pady=6).pack(side="right")
+        theme.PillButton(btn_bar, "🔐 LOESCHEN  →", do_delete, color="#9b1c1c", font_size=10, padx=16, pady=7).pack(side="right", padx=(0, 8))
+        theme.PillButton(btn_bar, "Vorschau zaehlen", vorschau, color="#0b4a86", font_size=10, padx=14, pady=6).pack(side="right", padx=(0, 8))
 
     def _archivieren_zeitraum_dialog(self):
         """Dialog: von/bis-Datum -> Vorschau -> Confirm -> ZIP erstellen,
@@ -10941,14 +10787,9 @@ LIMIT 500
 
         btn_bar = tk.Frame(win, bg="#f5f7fb")
         btn_bar.pack(side="bottom", fill="x", padx=20, pady=16)
-        tk.Button(btn_bar, text="Abbrechen", command=win.destroy,
-                  padx=14, pady=6).pack(side="right")
-        tk.Button(btn_bar, text="Archivieren  →", command=do_archive,
-                  bg="#9b1c1c", fg="white", relief="flat",
-                  font=(theme.FONT, 10, "bold"), padx=16, pady=7).pack(side="right", padx=(0, 8))
-        tk.Button(btn_bar, text="Vorschau zaehlen", command=vorschau,
-                  bg="#0b4a86", fg="white", relief="flat",
-                  font=(theme.FONT, 10, "bold"), padx=14, pady=6).pack(side="right", padx=(0, 8))
+        theme.PillButton(btn_bar, "Abbrechen", win.destroy, kind="neutral", padx=14, pady=6).pack(side="right")
+        theme.PillButton(btn_bar, "Archivieren  →", do_archive, color="#9b1c1c", font_size=10, padx=16, pady=7).pack(side="right", padx=(0, 8))
+        theme.PillButton(btn_bar, "Vorschau zaehlen", vorschau, color="#0b4a86", font_size=10, padx=14, pady=6).pack(side="right", padx=(0, 8))
 
     def _archive_verwalten_dialog(self):
         """Dialog: Liste aller ZIP-Archive. Pro ZIP eine zweite Liste mit
@@ -11108,18 +10949,10 @@ LIMIT 500
 
         btn_bar = tk.Frame(win, bg="#ffffff")
         btn_bar.grid(row=2, column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 14))
-        tk.Button(btn_bar, text="Aktualisieren", command=reload_zips,
-                  bg="#0b4a86", fg="white", relief="flat",
-                  font=(theme.FONT, 10, "bold"), padx=12, pady=6).pack(side="left")
-        tk.Button(btn_bar, text="Archiv-Ordner oeffnen",
-                  command=lambda: _open_folder(ensure_archiv_dir()),
-                  padx=12, pady=6).pack(side="left", padx=(8, 0))
-        tk.Button(btn_bar, text="🔐 Archiv endgueltig loeschen",
-                  command=loeschen_zip,
-                  bg="#9b1c1c", fg="white", relief="flat",
-                  font=(theme.FONT, 10, "bold"), padx=12, pady=6).pack(side="right")
-        tk.Button(btn_bar, text="Schliessen", command=win.destroy,
-                  padx=12, pady=6).pack(side="right", padx=(0, 8))
+        theme.PillButton(btn_bar, "Aktualisieren", reload_zips, color="#0b4a86", font_size=10, padx=12, pady=6).pack(side="left")
+        theme.PillButton(btn_bar, "Archiv-Ordner oeffnen", lambda: _open_folder(ensure_archiv_dir()), kind="neutral", padx=12, pady=6).pack(side="left", padx=(8, 0))
+        theme.PillButton(btn_bar, "🔐 Archiv endgueltig loeschen", loeschen_zip, color="#9b1c1c", font_size=10, padx=12, pady=6).pack(side="right")
+        theme.PillButton(btn_bar, "Schliessen", win.destroy, kind="neutral", padx=12, pady=6).pack(side="right", padx=(0, 8))
 
         reload_zips()
 
@@ -11337,20 +11170,10 @@ LIMIT 500
         def _select_none():
             for v in selections.values():
                 v.set(False)
-        tk.Button(buttons, text="Alle markieren", command=_select_all, padx=12, pady=7).pack(side="left", padx=(0, 8))
-        tk.Button(buttons, text="Keine markieren", command=_select_none, padx=12, pady=7).pack(side="left", padx=(0, 8))
-        tk.Button(buttons, text="Abbrechen", command=win.destroy, padx=16, pady=8).pack(side="right", padx=(8, 0))
-        tk.Button(
-            buttons,
-            text="Backup erstellen und Inhalte leeren",
-            command=do_clear,
-            bg="#9b1c1c",
-            fg="white",
-            relief="flat",
-            font=(theme.FONT, 10, "bold"),
-            padx=18,
-            pady=9
-        ).pack(side="right")
+        theme.PillButton(buttons, "Alle markieren", _select_all, kind="neutral", padx=12, pady=7).pack(side="left", padx=(0, 8))
+        theme.PillButton(buttons, "Keine markieren", _select_none, kind="neutral", padx=12, pady=7).pack(side="left", padx=(0, 8))
+        theme.PillButton(buttons, "Abbrechen", win.destroy, kind="neutral", padx=16, pady=8).pack(side="right", padx=(8, 0))
+        theme.PillButton(buttons, "Backup erstellen und Inhalte leeren", do_clear, color="#9b1c1c", font_size=10, padx=18, pady=9).pack(side="right")
 
     def _auswertungsvorlage_paths(self):
         vorlagen_dir = DATA_DIR / "vorlagen"
@@ -11545,10 +11368,10 @@ LIMIT 500
             self.status.set(f"Auswertungsvorlage Slot {slot} entfernt.")
             self.show_auswertungsvorlage_page()
 
-        tk.Button(actions, text="Vorlage hochladen/ersetzen", command=upload_template, bg="#0b4a86", fg="white", relief="flat", font=(theme.FONT, 11, "bold"), padx=16, pady=8).pack(side="left", padx=(0, 8))
-        tk.Button(actions, text="Als Standard verwenden", command=set_default, padx=14, pady=8).pack(side="left", padx=8)
-        tk.Button(actions, text="Vorlage entfernen", command=delete_template, padx=14, pady=8).pack(side="left", padx=8)
-        tk.Button(actions, text="Vorlagenordner öffnen", command=lambda: _open_folder(self._auswertungsvorlagen_dir()), padx=14, pady=8).pack(side="left", padx=8)
+        theme.PillButton(actions, "Vorlage hochladen/ersetzen", upload_template, color="#0b4a86", font_size=11, padx=16, pady=8).pack(side="left", padx=(0, 8))
+        theme.PillButton(actions, "Als Standard verwenden", set_default, kind="neutral", padx=14, pady=8).pack(side="left", padx=8)
+        theme.PillButton(actions, "Vorlage entfernen", delete_template, kind="neutral", padx=14, pady=8).pack(side="left", padx=8)
+        theme.PillButton(actions, "Vorlagenordner öffnen", lambda: _open_folder(self._auswertungsvorlagen_dir()), kind="neutral", padx=14, pady=8).pack(side="left", padx=8)
 
     def update_auswertungsvorlage(self):
         """Kompatibilitätsfunktion: alter Button ruft neue Vorlagenverwaltung auf."""
@@ -11589,17 +11412,7 @@ LIMIT 500
             font=(theme.FONT, 11)
         ).pack(anchor="w", pady=(0, 16))
 
-        tk.Button(
-            body,
-            text="Artikelstamm importieren  →",
-            command=self.import_artikelstamm,
-            bg="#0b4a86",
-            fg="white",
-            relief="flat",
-            font=(theme.FONT, 12, "bold"),
-            padx=18,
-            pady=9
-        ).pack(anchor="w")
+        theme.PillButton(body, "Artikelstamm importieren  →", self.import_artikelstamm, color="#0b4a86", font_size=12, padx=18, pady=9).pack(anchor="w")
 
     def import_artikelstamm(self):
         file = filedialog.askopenfilename(
@@ -11686,17 +11499,7 @@ LIMIT 500
             font=(theme.FONT, 11)
         ).pack(anchor="w", pady=(0, 16))
 
-        tk.Button(
-            body,
-            text="Austauschdatenbank importieren  →",
-            command=self.import_austauschdatenbank,
-            bg="#0b4a86",
-            fg="white",
-            relief="flat",
-            font=(theme.FONT, 12, "bold"),
-            padx=18,
-            pady=9
-        ).pack(anchor="w")
+        theme.PillButton(body, "Austauschdatenbank importieren  →", self.import_austauschdatenbank, color="#0b4a86", font_size=12, padx=18, pady=9).pack(anchor="w")
 
     def import_austauschdatenbank(self):
         file = filedialog.askopenfilename(
@@ -12152,9 +11955,8 @@ LIMIT 500
 
         bar = tk.Frame(win, bg="#f5f7fb")
         bar.pack(fill="x", padx=20, pady=(0, 14))
-        tk.Button(bar, text="Abbrechen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8, 0))
-        tk.Button(bar, text="✔  Importieren", command=save, bg="#0b4a86", fg="white",
-                  relief="flat", font=(theme.FONT, 11, "bold"), padx=16, pady=7).pack(side="right")
+        theme.PillButton(bar, "Abbrechen", win.destroy, kind="neutral", padx=14, pady=7).pack(side="right", padx=(8, 0))
+        theme.PillButton(bar, "✔  Importieren", save, color="#0b4a86", font_size=11, padx=16, pady=7).pack(side="right")
         self.wait_window(win)
         return result["mapping"]
 
@@ -12404,24 +12206,9 @@ LIMIT 500
         top = tk.Frame(body, bg="#ffffff")
         top.grid(row=0, column=0, sticky="ew", pady=(0, 10))
 
-        tk.Button(
-            top,
-            text="➕ Neuer Wunsch",
-            command=self.add_roadmap_wunsch,
-            bg="#0b4a86",
-            fg="white",
-            relief="flat",
-            padx=14,
-            pady=8
-        ).pack(side="left", padx=(0, 8))
+        theme.PillButton(top, "➕ Neuer Wunsch", self.add_roadmap_wunsch, color="#0b4a86", padx=14, pady=8).pack(side="left", padx=(0, 8))
 
-        tk.Button(
-            top,
-            text="Aktualisieren",
-            command=self.show_roadmap_page,
-            padx=14,
-            pady=8
-        ).pack(side="left")
+        theme.PillButton(top, "Aktualisieren", self.show_roadmap_page, kind="neutral", padx=14, pady=8).pack(side="left")
 
         columns = ("id", "status", "bereich", "titel", "prioritaet", "erstellt")
         tree = ttk.Treeview(body, columns=columns, show="headings", selectmode="browse")
@@ -12517,10 +12304,10 @@ LIMIT 500
             update_roadmap_status(item_id, status)
             self.show_roadmap_page()
 
-        tk.Button(actionbar, text="💡 Idee", command=lambda: set_status("Idee"), padx=12, pady=7).pack(side="left", padx=(0, 6))
-        tk.Button(actionbar, text="⬜ Offen", command=lambda: set_status("Offen"), padx=12, pady=7).pack(side="left", padx=6)
-        tk.Button(actionbar, text="🔄 Begonnen", command=lambda: set_status("Begonnen"), padx=12, pady=7).pack(side="left", padx=6)
-        tk.Button(actionbar, text="✅ Erledigt", command=lambda: set_status("Erledigt"), padx=12, pady=7).pack(side="left", padx=6)
+        theme.PillButton(actionbar, "💡 Idee", lambda: set_status("Idee"), kind="neutral", padx=12, pady=7).pack(side="left", padx=(0, 6))
+        theme.PillButton(actionbar, "⬜ Offen", lambda: set_status("Offen"), kind="neutral", padx=12, pady=7).pack(side="left", padx=6)
+        theme.PillButton(actionbar, "🔄 Begonnen", lambda: set_status("Begonnen"), kind="neutral", padx=12, pady=7).pack(side="left", padx=6)
+        theme.PillButton(actionbar, "✅ Erledigt", lambda: set_status("Erledigt"), kind="neutral", padx=12, pady=7).pack(side="left", padx=6)
 
         self.status.set(f"Roadmap: {len(rows)} Einträge angezeigt.")
 
@@ -12577,8 +12364,8 @@ LIMIT 500
 
         buttons = tk.Frame(win, bg="#f5f7fb")
         buttons.pack(fill="x", padx=22, pady=(0, 18))
-        tk.Button(buttons, text="Abbrechen", command=win.destroy, padx=14, pady=8).pack(side="right", padx=(8, 0))
-        tk.Button(buttons, text="Speichern", command=save, bg="#0b4a86", fg="white", relief="flat", padx=18, pady=9).pack(side="right")
+        theme.PillButton(buttons, "Abbrechen", win.destroy, kind="neutral", padx=14, pady=8).pack(side="right", padx=(8, 0))
+        theme.PillButton(buttons, "Speichern", save, color="#0b4a86", padx=18, pady=9).pack(side="right")
 
     def show_help_center(self):
         """Die Hilfe ist ein eigenes Fenster (bebildertes Handbuch). Diese
@@ -12592,9 +12379,7 @@ LIMIT 500
         tk.Label(body, text="Die Hilfe wurde in einem eigenen Fenster geöffnet.\n"
                             "Hol sie bei Bedarf über die Taskleiste nach vorn.",
                  justify="left", bg="#ffffff", fg="#222", font=(theme.FONT, 11)).pack(anchor="w", pady=(0, 12))
-        tk.Button(body, text="❓  Hilfe öffnen", command=self.open_hilfe_app,
-                  bg="#208acd", fg="white", relief="flat", font=(theme.FONT, 11, "bold"),
-                  padx=18, pady=8, cursor="hand2").pack(anchor="w")
+        theme.PillButton(body, "❓  Hilfe öffnen", self.open_hilfe_app, color="#208acd", font_size=11, padx=18, pady=8).pack(anchor="w")
 
 
 
@@ -12694,11 +12479,8 @@ def _show_splash_screen():
         started["ok"] = True
         splash_root.destroy()
 
-    start_btn = tk.Button(
-        controls, text=T("Starten"), command=_on_start,
-        bg="#0b4a86", fg="white", relief="flat",
-        font=(theme.FONT, 12, "bold"), padx=32, pady=8, cursor="hand2",
-    )
+    start_btn = theme.PillButton(controls, T("Starten"), _on_start,
+                                 color="#0b4a86", font_size=12, padx=32, pady=8)
     start_btn.pack(pady=(0, 10))
 
     from .backup import APP_VERSION_DISPLAY
@@ -12721,9 +12503,10 @@ def main():
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("NMG.NMGone")
         except Exception:
             pass
-    # SP11: erst Splash, dann Hauptprogramm. Wenn der User die Splash
-    # ueber X/Escape schliesst, wird das Hauptprogramm nicht gestartet.
-    if not _show_splash_screen():
-        return
+    # Sprache wird jetzt zentral im Cockpit gewaehlt und in language.json
+    # gespeichert; NMGone uebernimmt sie still beim Start. Das fruehere
+    # Splash-/Sprach-Fenster (_show_splash_screen) entfaellt deshalb.
+    from .i18n import load_language
+    load_language()
     app = NMGApp()
     app.mainloop()

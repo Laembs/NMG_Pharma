@@ -25,6 +25,7 @@ import json
 import base64
 import getpass
 import subprocess
+from datetime import datetime
 
 # Repo-Root in den Pfad, damit das 'app'-Paket im Dev-Modus gefunden wird.
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -42,6 +43,7 @@ i18n.load_language()
 APP_STARTER = {
     "analysen":    "start_nmgone.py",   # NMGone-Modul "Analysen" (Vertrieb)
     "kunden":      "start_kunden.py",
+    "kasse":       "start_kasse.py",    # PC = volle Desktop-Kasse (Web-Kasse nur fuers Handy)
     "faktura":     "start_faktura.py",
     "gdp":         "start_gdp.py",
     "einkauf":     "start_einkauf.py",
@@ -59,8 +61,6 @@ APP_STARTER = {
 #   dir:      lokales Repo fuer Notstart (nur same-machine); "" = nie lokal starten.
 WEB_APPS = {
     "personal": {"title": "Personal · Pennone One", "next": "/personal"},
-    "kasse":    {"title": "Kasse · Pennone", "next": "/kasse",
-                 "base_url": "https://nmgkasse.pennone.de", "dir": ""},
 }
 
 
@@ -75,6 +75,7 @@ class CockpitApi:
 
     def __init__(self):
         self.user = None
+        self._window = None   # wird in main() gesetzt; fuer Live-Sprachwechsel
 
     # -- Login (Pennone One als Quelle, lokaler Cache) ----------------------
     def login_prefill(self):
@@ -165,6 +166,100 @@ class CockpitApi:
         except Exception as exc:  # pragma: no cover - Prototyp
             return {"ok": False, "msg": str(exc)}
 
+    # -- Aufgaben (geteilte Team-Todos) -------------------------------------
+    # Eine gemeinsame Liste fuer alle: jeder Mitarbeiter kann Aufgaben
+    # eintragen, abhaken und loeschen. Gespeichert neben den Cockpit-Daten
+    # (in der Ziel-Multiuser-Architektur liegt das spaeter zentral).
+    def _todos_path(self):
+        return os.path.join(_userdata_base(), "cockpit_todos.json")
+
+    def get_todos(self):
+        try:
+            p = self._todos_path()
+            if os.path.exists(p):
+                with open(p, encoding="utf-8") as fh:
+                    data = json.load(fh)
+                    if isinstance(data, list):
+                        return data
+        except Exception:
+            pass
+        return []
+
+    def _save_todos(self, todos):
+        p = self._todos_path()
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as fh:
+            json.dump(todos, fh, ensure_ascii=False)
+
+    def _who(self):
+        if self.user and self.user.get("name"):
+            return self.user["name"].split()[0]
+        try:
+            return getpass.getuser()
+        except Exception:
+            return ""
+
+    def add_todo(self, text):
+        text = (text or "").strip()
+        if not text:
+            return {"ok": False, "todos": self.get_todos()}
+        todos = self.get_todos()
+        todos.insert(0, {
+            "id": int(datetime.now().timestamp() * 1000),
+            "text": text[:200], "done": False,
+            "by": self._who(),
+            "ts": datetime.now().strftime("%d.%m. %H:%M"),
+        })
+        try:
+            self._save_todos(todos)
+        except Exception as exc:  # pragma: no cover - Prototyp
+            return {"ok": False, "msg": str(exc), "todos": self.get_todos()}
+        return {"ok": True, "todos": todos}
+
+    def toggle_todo(self, todo_id):
+        todos = self.get_todos()
+        for t in todos:
+            if t.get("id") == todo_id:
+                t["done"] = not t.get("done")
+                break
+        try:
+            self._save_todos(todos)
+        except Exception:  # pragma: no cover - Prototyp
+            pass
+        return {"ok": True, "todos": todos}
+
+    def delete_todo(self, todo_id):
+        todos = [t for t in self.get_todos() if t.get("id") != todo_id]
+        try:
+            self._save_todos(todos)
+        except Exception:  # pragma: no cover - Prototyp
+            pass
+        return {"ok": True, "todos": todos}
+
+    # -- Hinweise: Verfall aus dem Lager ------------------------------------
+    # Spiegelt die Verfall-Logik der Kasse (kasse_reports.verfall_rows):
+    # abgelaufene + bald (<=90 Tage) ablaufende Chargen aus tbl_lagerbestand.
+    def get_hinweise(self):
+        try:
+            from app import kasse_reports
+            from app.config import DB_PATH
+            rows = kasse_reports.verfall_rows(str(DB_PATH), warn_tage=90)
+        except Exception:
+            return {"ok": True, "items": [], "abgelaufen": 0, "bald": 0}
+        items = [r for r in rows if r["status"] in ("abgelaufen", "bald")]
+        abg = sum(1 for r in items if r["status"] == "abgelaufen")
+        bald = sum(1 for r in items if r["status"] == "bald")
+        return {
+            "ok": True, "abgelaufen": abg, "bald": bald,
+            "items": [{
+                "artikel": r["artikelname"] or r["pzn"],
+                "charge": r["charge"] or "—",
+                "verfall": r["verfall"] or "—",
+                "menge": r["menge"],
+                "status": r["status"],
+            } for r in items[:8]],
+        }
+
     # -- Sprache (zentral fuer alle Apps) -----------------------------------
     def get_languages(self):
         from app.i18n import LANGUAGES, get_language, load_language
@@ -172,9 +267,21 @@ class CockpitApi:
         return {"languages": LANGUAGES, "current": get_language()}
 
     def set_language(self, code):
-        from app.i18n import save_language, get_language
-        save_language(code)
-        return {"ok": True, "current": get_language()}
+        i18n.save_language(code)
+        # Cockpit-Fenster sofort in der neuen Sprache neu rendern. Die Anmeldung
+        # bleibt erhalten (self.user) -> JS springt per get_session direkt zurueck
+        # ins Dashboard, kein erneuter Login.
+        if self._window is not None:
+            try:
+                self._window.load_html(build_html())
+            except Exception:  # pragma: no cover - Prototyp
+                pass
+        return {"ok": True, "current": i18n.get_language()}
+
+    def get_session(self):
+        """Aktueller Login (oder {ok:False}). Nach einem Reload (Sprachwechsel)
+        kann das JS damit ohne neuen Login direkt ins Dashboard."""
+        return self.user if self.user else {"ok": False}
 
     def whoami(self):
         return getpass.getuser()
@@ -200,6 +307,17 @@ def _logo_data_uri(width=200):
         return ""
 
 
+# ── Login-Hintergrund (NMG-Berge) als data-URI einbetten ─────────────────────
+def _login_bg_data_uri():
+    try:
+        p = os.path.join(ROOT, "assets", "cockpit_login_bg.png")
+        with open(p, "rb") as fh:
+            data = fh.read()
+        return "data:image/png;base64," + base64.b64encode(data).decode("ascii")
+    except Exception:
+        return ""
+
+
 # ── Design aus theme.py -> CSS-Variablen + Palette fuer JS ───────────────────
 CSSVARS = {
     "--bg": theme.BG, "--card": theme.CARD, "--card-alt": theme.CARD_ALT,
@@ -220,6 +338,10 @@ PALETTE_JSON = json.dumps({
 _logo = _logo_data_uri()
 BRAND_HTML = (f'<img class="logo" src="{_logo}" alt="NMGone">'
               if _logo else '<div class="brand">NMGone</div>')
+_login_bg = _login_bg_data_uri()
+# CSS fuer den Login-Hintergrund: Bild (mit Zoom) wenn vorhanden, sonst nur var(--bg).
+LOGIN_BG_CSS = (f'#07172a url("{_login_bg}") center / cover no-repeat'
+                if _login_bg else 'var(--bg)')
 
 
 RAW = r"""<!DOCTYPE html>
@@ -309,22 +431,90 @@ RAW = r"""<!DOCTYPE html>
   .team .role { color: var(--faint); font-size: 11px; }
   .team .state { margin-left: auto; color: var(--faint); font-size: 11px; }
 
-  .chat { margin-top: 16px; }
-  .bubbles { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
-  .b { font-size: 12px; padding: 6px 10px; border-radius: 10px; max-width: 88%; }
-  .b.them { align-self: flex-start; background: var(--card-alt); border: 1px solid var(--border); color: var(--ink); }
-  .b.me { align-self: flex-end; background: var(--select); color: var(--primary); }
-  .chat-in { display: flex; gap: 6px; }
-  .chat-in input { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px;
-                   font-size: 12px; outline: none; }
-  .chat-in input:focus { border-color: var(--accent); }
-  .chat-in button { background: var(--primary); color: #fff; border: none; border-radius: 8px;
-                    padding: 0 12px; font-size: 12px; cursor: pointer; }
+  .side-card { margin-top: 16px; }
+  .empty { font-size: 12px; color: var(--faint); padding: 4px 2px; }
 
-  /* Login */
-  .login { height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); }
+  /* Aufgaben (Team-Todos) */
+  .todo-in { display: flex; gap: 6px; margin-bottom: 10px; }
+  .todo-in input { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px;
+                   font-size: 12px; outline: none; color: var(--ink); background: var(--card); }
+  .todo-in input:focus { border-color: var(--accent); }
+  .todo-in button { background: var(--primary); color: #fff; border: none; border-radius: 8px;
+                    width: 32px; font-size: 18px; line-height: 1; cursor: pointer; }
+  .todo-in button:hover { background: var(--primary-dark); }
+  .todos { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; }
+  .todo { display: flex; align-items: flex-start; gap: 7px; padding: 6px 4px; border-radius: 8px;
+          font-size: 12px; }
+  .todo:hover { background: var(--card-alt); }
+  .todo .tck { cursor: pointer; color: var(--primary); font-size: 14px; line-height: 1.2; flex: none; }
+  .todo .ttxt { flex: 1; color: var(--ink); display: flex; flex-direction: column; }
+  .todo .tmeta { color: var(--faint); font-size: 10px; margin-top: 1px; }
+  .todo.done .ttxt { color: var(--faint); text-decoration: line-through; }
+  .todo .tdel { cursor: pointer; color: var(--faint); font-size: 15px; line-height: 1; flex: none;
+                visibility: hidden; padding: 0 2px; }
+  .todo:hover .tdel { visibility: visible; }
+  .todo .tdel:hover { color: var(--danger); }
+
+  /* Hinweise / Verfall */
+  .hsum { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+  .hpill { font-size: 10px; font-weight: 700; border-radius: 6px; padding: 2px 7px; }
+  .hpill.abg { background: #fde2e2; color: #a11; }
+  .hpill.bald { background: #fff4d6; color: #8a6d00; }
+  .hinweise { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
+  .hrow { font-size: 12px; padding: 6px 8px; border-radius: 8px; border-left: 3px solid var(--border); }
+  .hrow.abgelaufen { background: #fde2e2; border-left-color: var(--danger); }
+  .hrow.bald { background: #fff4d6; border-left-color: var(--warning); }
+  .hrow .hart { display: block; font-weight: 700; color: var(--ink); }
+  .hrow .hinfo { display: block; color: var(--muted); font-size: 11px; margin-top: 1px; }
+
+  /* Login (Hero mit NMG-Berge-Hintergrund + Intro-Animation, wie ONE) */
+  .login { position: relative; overflow: hidden; height: 100vh; display: flex;
+           flex-direction: column; align-items: center; justify-content: center;
+           gap: 22px; background: #07172a; }
+  .login::before { content: ""; position: absolute; inset: 0; z-index: 0;
+                   background: /*LOGINBG*/; }
+  .login::after { content: ""; position: absolute; inset: 0; z-index: 1;
+                  background: linear-gradient(180deg, rgba(7,23,42,.35) 0%, rgba(7,23,42,.82) 100%); }
+  .login .brand-hero, .login .login-card, .login .login-foot { position: relative; z-index: 2; }
   .login-card { width: 360px; background: var(--card); border: 1px solid var(--border);
-                border-radius: 14px; padding: 26px 26px 22px; }
+                border-radius: 14px; padding: 26px 26px 22px;
+                box-shadow: 0 18px 50px rgba(0,0,0,.45); }
+
+  /* Marke ueber der Karte (wie die Wortmarke bei ONE) */
+  .brand-hero { display: flex; flex-direction: column; align-items: center; text-align: center; }
+  .brand-hero .one-word { font-size: 40px; font-weight: 800; letter-spacing: -.5px;
+                          color: #fff; line-height: 1; }
+  .brand-hero .one-by { font-size: 12px; font-weight: 700; letter-spacing: 5px;
+                        color: #9DC4FF; margin-top: 6px; }
+
+  /* Intro: Vorhang faellt, Hintergrund zoomt, Marke + Karte blenden gestaffelt ein */
+  .intro-curtain { position: fixed; inset: 0; z-index: 50; background: #07172a;
+                   pointer-events: none; display: none; }
+  .intro-skip { position: fixed; bottom: 18px; right: 18px; z-index: 60;
+                display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px;
+                font: inherit; font-size: 13px; font-weight: 600; color: #fff; cursor: pointer;
+                background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.35);
+                border-radius: 999px; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+  .intro-skip:hover { background: rgba(255,255,255,.26); }
+  .intro-skip::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #6FD3FF; }
+  .login.intro-done .brand-hero, .login.intro-done .login-card, .login.intro-done .intro-skip {
+    animation: none !important; opacity: 1 !important; transform: none !important; }
+  .login.intro-done::before { animation: none !important; transform: none !important; }
+  .login.intro-done .intro-curtain { display: none !important; }
+  .login.intro .intro-curtain { display: block; animation: curtainOut 1.3s ease-out forwards; }
+  .login.intro::before { animation: heroZoom 7s ease-out forwards; }
+  .login.intro .brand-hero { opacity: 0; animation: introUp 1s ease-out 1.1s forwards; }
+  .login.intro .login-card { opacity: 0; animation: introUp 1.1s ease-out 1.9s forwards; }
+  .login.intro .intro-skip { opacity: 0; animation: introFade .6s ease-out .4s forwards; }
+  .login.intro .intro-skip::before { animation: skipPulse 1.5s ease-out infinite; }
+  @keyframes curtainOut { from { opacity: 1; } to { opacity: 0; } }
+  @keyframes heroZoom { from { transform: scale(1.12); } to { transform: scale(1); } }
+  @keyframes introUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: none; } }
+  @keyframes introFade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes skipPulse {
+    0% { box-shadow: 0 0 0 0 rgba(111,211,255,.55); }
+    70% { box-shadow: 0 0 0 8px rgba(111,211,255,0); }
+    100% { box-shadow: 0 0 0 0 rgba(111,211,255,0); } }
   .login-card img.logo { width: 170px; margin: 0 auto 6px; }
   .login-card .brand { color: var(--primary); font-size: 22px; font-weight: 700; text-align: center; }
   .login-card .sub { color: var(--muted); font-size: 12px; text-align: center; margin-bottom: 14px; }
@@ -349,7 +539,13 @@ RAW = r"""<!DOCTYPE html>
 </style>
 </head>
 <body>
-<div class="login" id="login">
+<div class="login intro" id="login">
+  <div class="intro-curtain" aria-hidden="true"></div>
+  <button type="button" class="intro-skip" id="lg-skip" aria-label="Animation überspringen">Animation überspringen</button>
+  <div class="brand-hero">
+    <span class="one-word">NMGone</span>
+    <span class="one-by">COCKPIT</span>
+  </div>
   <div class="login-card">
     <!--LOGO-->
     <div class="sub">Cockpit · Anmelden</div>
@@ -414,16 +610,17 @@ RAW = r"""<!DOCTYPE html>
           <h3>Team</h3>
           <div class="team" id="team"></div>
         </div>
-        <div class="card chat">
-          <h3>Chat &middot; Markus</h3>
-          <div class="bubbles">
-            <div class="b them">Hast du die EU-Lieferung schon?</div>
-            <div class="b me">Ja, mach ich gleich &#128077;</div>
+        <div class="card side-card">
+          <h3>Aufgaben &middot; Team</h3>
+          <div class="todo-in">
+            <input id="todo-in" type="text" placeholder="Neue Aufgabe&hellip;" maxlength="200">
+            <button id="todo-add" title="Aufgabe hinzufügen">+</button>
           </div>
-          <div class="chat-in">
-            <input type="text" placeholder="Nachricht&hellip;">
-            <button>Senden</button>
-          </div>
+          <div class="todos" id="todos"></div>
+        </div>
+        <div class="card side-card">
+          <h3>&#9888; Verfall im Blick</h3>
+          <div class="hinweise" id="hinweise"></div>
         </div>
       </div>
     </div>
@@ -438,7 +635,7 @@ RAW = r"""<!DOCTYPE html>
   var ALL_TILES = [
     {k:"analysen",    e:"📊", n:"Analysen",     d:"Auswertungen für den Vertrieb.", c:PALETTE.primary, kind:"NMGone-Modul"},
     {k:"kunden",      e:"📇", n:"Kunden",       d:"Apotheken-CRM, ABC & Landkarte.",     c:PALETTE.accent,  kind:"lokal"},
-    {k:"kasse",       e:"🛒", n:"Kasse",        d:"Verkauf & Wareneingang (online).",     c:PALETTE.warning, kind:"web · Pennone"},
+    {k:"kasse",       e:"🛒", n:"Kasse",        d:"Verkauf & Wareneingang.",             c:PALETTE.warning, kind:"lokal"},
     {k:"gdp",         e:"📦", n:"Wareneingang", d:"Chargen & Retouren (GDP).",           c:"#0B6E6E",       kind:"lokal"},
     {k:"einkauf",     e:"🚚", n:"Einkauf",      d:"Beschaffung EU-Ausland.",             c:PALETTE.primary, kind:"lokal"},
     {k:"faktura",     e:"🧾", n:"Faktura",      d:"Rechnungen & Gutschriften.",          c:PALETTE.primary, kind:"lokal"},
@@ -537,6 +734,68 @@ RAW = r"""<!DOCTYPE html>
       + '<span class="state">' + p[3] + '</span></div>';
   }).join("");
 
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, function(c){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];
+    });
+  }
+
+  // ── Aufgaben (geteilte Team-Todos) ───────────────────────────────────────
+  function renderTodos(todos) {
+    var box = document.getElementById("todos");
+    if (!box) return;
+    if (!todos || !todos.length) {
+      box.innerHTML = '<div class="empty">Noch keine Aufgaben &#8211; trag die erste ein.</div>';
+      return;
+    }
+    box.innerHTML = todos.map(function(t){
+      var meta = esc(t.by || "") + (t.ts ? " &middot; " + esc(t.ts) : "");
+      return '<div class="todo' + (t.done ? ' done' : '') + '">'
+        + '<span class="tck" data-id="' + t.id + '">' + (t.done ? '&#9745;' : '&#9744;') + '</span>'
+        + '<span class="ttxt">' + esc(t.text) + '<span class="tmeta">' + meta + '</span></span>'
+        + '<span class="tdel" data-id="' + t.id + '" title="Löschen">&times;</span>'
+        + '</div>';
+    }).join("");
+    box.querySelectorAll(".tck").forEach(function(el){
+      el.addEventListener("click", function(){
+        api.toggle_todo(Number(el.getAttribute("data-id"))).then(function(r){ renderTodos(r.todos); });
+      });
+    });
+    box.querySelectorAll(".tdel").forEach(function(el){
+      el.addEventListener("click", function(){
+        api.delete_todo(Number(el.getAttribute("data-id"))).then(function(r){ renderTodos(r.todos); });
+      });
+    });
+  }
+
+  function addTodo() {
+    var inp = document.getElementById("todo-in");
+    var txt = (inp.value || "").trim();
+    if (!txt || !api || !api.add_todo) return;
+    api.add_todo(txt).then(function(r){ if (r.ok) { inp.value = ""; } renderTodos(r.todos); });
+  }
+
+  // ── Hinweise / Verfall (aus dem Lager) ───────────────────────────────────
+  function renderHinweise(r) {
+    var box = document.getElementById("hinweise");
+    if (!box) return;
+    if (!r || !r.items || !r.items.length) {
+      box.innerHTML = '<div class="empty">Keine Verfall-Warnungen &#128077;</div>';
+      return;
+    }
+    var head = '<div class="hsum">'
+      + (r.abgelaufen ? '<span class="hpill abg">' + r.abgelaufen + ' abgelaufen</span>' : '')
+      + (r.bald ? '<span class="hpill bald">' + r.bald + ' bald</span>' : '')
+      + '</div>';
+    box.innerHTML = head + r.items.map(function(it){
+      return '<div class="hrow ' + it.status + '">'
+        + '<span class="hart">' + esc(it.artikel) + '</span>'
+        + '<span class="hinfo">Charge ' + esc(it.charge) + ' &middot; ' + esc(it.verfall)
+        + ' &middot; ' + it.menge + ' St.</span>'
+        + '</div>';
+    }).join("");
+  }
+
   function toast(msg) {
     var t = document.getElementById("toast");
     t.textContent = msg; t.classList.add("show");
@@ -559,6 +818,8 @@ RAW = r"""<!DOCTYPE html>
 
   function initDashboard() {
     if (api && api.get_languages) api.get_languages().then(buildLang);
+    if (api && api.get_todos) api.get_todos().then(renderTodos);
+    if (api && api.get_hinweise) api.get_hinweise().then(renderHinweise);
     if (api && api.get_layout) {
       api.get_layout().then(function(saved){
         if (saved && saved.order) {
@@ -611,11 +872,42 @@ RAW = r"""<!DOCTYPE html>
   }
 
   document.getElementById("btn-edit").addEventListener("click", toggleEdit);
+  document.getElementById("todo-add").addEventListener("click", addTodo);
+  document.getElementById("todo-in").addEventListener("keydown", function(e){ if (e.key === "Enter") addTodo(); });
   document.getElementById("lg-go").addEventListener("click", doLogin);
   document.getElementById("lg-pw").addEventListener("keydown", function(e){ if (e.key === "Enter") doLogin(); });
   document.getElementById("lg-login").addEventListener("keydown", function(e){ if (e.key === "Enter") doLogin(); });
-  if (window.pywebview && window.pywebview.api) bootLogin();
-  else window.addEventListener("pywebviewready", bootLogin);
+
+  // Login-Intro (wie ONE): Animation ueberspringen + Skip-Button nach Ablauf ausblenden
+  function skipIntro() {
+    var w = document.getElementById("login");
+    if (w) { w.classList.add("intro-done"); w.classList.remove("intro"); }
+    var b = document.getElementById("lg-skip");
+    if (b) { b.style.display = "none"; }
+  }
+  document.getElementById("lg-skip").addEventListener("click", skipIntro);
+  window.setTimeout(function () {
+    var b = document.getElementById("lg-skip");
+    if (!b || !document.querySelector(".login.intro")) return;
+    b.style.animation = "none";
+    b.style.transition = "opacity .5s ease";
+    b.style.opacity = "0";
+    window.setTimeout(function () { if (b) b.style.display = "none"; }, 500);
+  }, 4000);
+
+  // Boot: nach einem Reload (z. B. Sprachwechsel) ist evtl. noch ein Login aktiv
+  // -> direkt ins Dashboard, sonst Login-Maske.
+  function boot() {
+    api = (window.pywebview && window.pywebview.api) ? window.pywebview.api : null;
+    if (!api) return;
+    if (api.get_session) {
+      api.get_session().then(function(s){ if (s && s.ok) showApp(s); else bootLogin(); });
+    } else {
+      bootLogin();
+    }
+  }
+  if (window.pywebview && window.pywebview.api) boot();
+  else window.addEventListener("pywebviewready", boot);
 </script>
 </body>
 </html>
@@ -668,10 +960,14 @@ COCKPIT_SK = {
         "Presúvajte dlaždice na zoradenie &middot; &bdquo;Skryť&ldquo; skryje. Ukladá sa automaticky.",
     "Meine Apps": "Moje aplikácie",
     "Team": "Tím",
-    "Hast du die EU-Lieferung schon?": "Máš už zásielku z EÚ?",
-    "Ja, mach ich gleich": "Áno, hneď to spravím",
-    "Nachricht": "Správa",
-    "Senden": "Odoslať",
+    "Aufgaben &middot; Team": "Úlohy &middot; Tím",
+    "Neue Aufgabe&hellip;": "Nová úloha&hellip;",
+    "Aufgabe hinzufügen": "Pridať úlohu",
+    "Noch keine Aufgaben &#8211; trag die erste ein.":
+        "Zatiaľ žiadne úlohy &#8211; pridajte prvú.",
+    "Löschen": "Odstrániť",
+    "Verfall im Blick": "Exspirácia na očiach",
+    "Keine Verfall-Warnungen": "Žiadne upozornenia na exspiráciu",
     # Kacheln (Beschreibungen + Namen, die nicht schon in der Sidebar stehen)
     "Auswertungen für den Vertrieb.": "Vyhodnotenia pre obchod.",
     "Apotheken-CRM, ABC & Landkarte.": "CRM lekární, ABC a mapa.",
@@ -703,7 +999,6 @@ COCKPIT_SK = {
     "beschäftigt": "zaneprázdnený",
     "weg": "preč",
     "nicht stören": "nerušiť",
-    "du": "ty",
 }
 i18n.register_translations(COCKPIT_SK, "SK")
 
@@ -725,22 +1020,41 @@ def _localize(html):
     return html
 
 
-HTML = _localize(RAW
-        .replace("/*ROOTVARS*/", ROOTVARS)
-        .replace("/*PALETTEJSON*/", PALETTE_JSON)
-        .replace("<!--LOGO-->", BRAND_HTML))
+def build_html():
+    """Baut das Cockpit-HTML in der aktuell gesetzten Sprache (DE = unveraendert).
+
+    Wichtig: zuerst die Texte uebersetzen (nur die RAW-Vorlage), DANACH Logo
+    (Base64), Farben und Palette einsetzen. So kann die String-Ersetzung niemals
+    den Logo-Datenstrom treffen (sonst zerschiesst ein kurzer Treffer das PNG)."""
+    return (_localize(RAW)
+            .replace("/*ROOTVARS*/", ROOTVARS)
+            .replace("/*PALETTEJSON*/", PALETTE_JSON)
+            .replace("/*LOGINBG*/", LOGIN_BG_CSS)
+            .replace("<!--LOGO-->", BRAND_HTML))
+
+
+HTML = build_html()
 
 
 def main():
     api = CockpitApi()
-    win = webview.create_window(
-        "NMGone Cockpit",
+    # Maximiert (Vollbild-Fenster) starten – wie die lokalen Apps. width/height
+    # bleiben als Groesse fuer den wiederhergestellten Zustand erhalten.
+    win_kwargs = dict(
         html=HTML,
         js_api=api,
         width=1100,
         height=720,
         min_size=(960, 600),
+        maximized=True,
     )
+    try:
+        win = webview.create_window("NMGone Cockpit", **win_kwargs)
+    except TypeError:
+        # aeltere pywebview-Versionen kennen 'maximized' nicht.
+        win_kwargs.pop("maximized", None)
+        win = webview.create_window("NMGone Cockpit", **win_kwargs)
+    api._window = win   # ermoeglicht Live-Reload bei Sprachwechsel
     icon = os.path.join(ROOT, "assets", "NMGone.ico")
     try:
         webview.start(icon=icon if os.path.exists(icon) else None)

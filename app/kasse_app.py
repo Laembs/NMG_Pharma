@@ -26,6 +26,7 @@ from tkinter import ttk, messagebox, simpledialog, filedialog
 
 from .config import DB_PATH, ASSETS_DIR, BASE_DIR, DEMO_SUFFIX
 from . import kasse_import
+from . import online_verkaeufe
 from . import auftrag
 from . import lieferschein
 from . import defektmeldung
@@ -639,27 +640,14 @@ class KassePanel(tk.Frame):
         self._setup_style()
         self._current_view = None
 
-        # ---------------- linke Menueleiste (dunkle Sidebar wie NMGone) -------
-        left = tk.Frame(self, bg=SIDEBAR, width=248)
-        left.grid(row=0, column=0, sticky="ns")
-        left.grid_propagate(False)
-        left.rowconfigure(2, weight=1)
-
-        # Eigenes Kasse-Symbol oben in der Sidebar.
-        logo_box = tk.Frame(left, bg=SIDEBAR)
-        logo_box.grid(row=0, column=0, sticky="ew", padx=16, pady=(18, 0))
+        # ---------------- linke Menueleiste (zentrale theme.Sidebar) ----------
+        self.sidebar = theme.Sidebar(self, width=248, title="Kasse",
+                                     subtitle="Verkauf & Lager")
+        self.sidebar.grid(row=0, column=0, sticky="ns")
         self._app_icon = theme.load_icon(ASSETS_DIR / "Kasse.ico", 60)
         if self._app_icon:
-            tk.Label(logo_box, image=self._app_icon, bg=SIDEBAR).pack(anchor="w")
-        else:
-            tk.Label(logo_box, text="🛒", font=(theme.FONT, 30), bg=SIDEBAR, fg="#FFFFFF").pack(anchor="w")
-        tk.Label(left, text="Kasse", font=(theme.FONT, 18, "bold"),
-                 fg="#FFFFFF", bg=SIDEBAR).grid(row=1, column=0, sticky="w", padx=18, pady=(4, 10))
-
-        nav = tk.Frame(left, bg=SIDEBAR)
-        nav.grid(row=2, column=0, sticky="new", padx=8)
-        self._nav_buttons = {}
-        self._nav_bars = {}
+            self.sidebar.set_logo(self._app_icon)
+        self.sidebar.add_section("Kasse")
         for key, text, icon in (("uebersicht", "Übersicht", "📊"),
                                  ("verkauf", "Verkauf", "🛒"),
                                  ("vorbestellungen", "Vorbestellungen", "🕓"),
@@ -669,31 +657,17 @@ class KassePanel(tk.Frame):
                                  ("auswertung", "Auswertung", "📈"),
                                  ("protokoll", "Protokoll", "📝"),
                                  ("einstellungen", "Einstellungen", "⚙")):
-            rowf = tk.Frame(nav, bg=SIDEBAR)
-            rowf.pack(fill="x", pady=1)
-            bar = tk.Frame(rowf, bg=SIDEBAR, width=4)   # Akzent-Balken (nur aktiv sichtbar)
-            bar.pack(side="left", fill="y")
-            b = tk.Button(rowf, text=f"   {icon}   {text}", anchor="w", relief="flat",
-                          bg=SIDEBAR, fg=SIDEBAR_TEXT, font=(theme.FONT, 11), bd=0,
-                          activebackground=SIDEBAR_ACTIVE, activeforeground="#FFFFFF",
-                          cursor="hand2", command=lambda k=key: self._show_view(k))
-            b.pack(side="left", fill="x", expand=True, ipady=7)
-            b.bind("<Enter>", lambda _e, k=key: self._nav_hover(k, True))
-            b.bind("<Leave>", lambda _e, k=key: self._nav_hover(k, False))
-            self._nav_buttons[key] = b
-            self._nav_bars[key] = bar
+            self.sidebar.add_item(key, icon, text, lambda k=key: self._show_view(k))
 
-        bottom = tk.Frame(left, bg=SIDEBAR)
-        bottom.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 6))
-        tk.Button(bottom, text="🏠  NMGone öffnen", command=self._open_nmgone,
+        foot = self.sidebar.footer()
+        tk.Button(foot, text="🏠  NMGone öffnen", command=self._open_nmgone,
                   bg=SIDEBAR_ACTIVE, fg="#FFFFFF", relief="flat", font=(theme.FONT, 10, "bold"),
                   activebackground="#1B5085", activeforeground="#FFFFFF",
-                  padx=10, pady=7, cursor="hand2").pack(fill="x", pady=(0, 6))
-        tk.Button(bottom, text="Schließen", command=self._on_close, relief="flat",
+                  padx=10, pady=7, cursor="hand2").pack(fill="x", padx=10, pady=(0, 6))
+        tk.Button(foot, text="Schließen", command=self._on_close, relief="flat",
                   bg="#0E3454", fg=SIDEBAR_TEXT, activebackground="#15466E",
-                  activeforeground="#FFFFFF", padx=10, pady=5, cursor="hand2").pack(fill="x")
-        tk.Label(left, text=f"Datenbank:\n{Path(self.db_path).name}", justify="left",
-                 bg=SIDEBAR, fg=SIDEBAR_MUTED, font=(theme.FONT, 9)).grid(row=4, column=0, sticky="w", padx=16, pady=12)
+                  activeforeground="#FFFFFF", padx=10, pady=5, cursor="hand2").pack(fill="x", padx=10)
+        self.sidebar.add_footer_note(f"Datenbank:\n{Path(self.db_path).name}")
 
         # ---------------- Hauptbereich ----------------
         main = tk.Frame(self, bg=SHELL_BG)
@@ -734,13 +708,6 @@ class KassePanel(tk.Frame):
         self._show_view("uebersicht")
         self._restyle_buttons(self)
 
-    def _nav_hover(self, key, on):
-        """Maus-ueber-Hervorhebung in der Navigation (aktiver Eintrag bleibt
-        unveraendert)."""
-        if key == self._current_view:
-            return
-        self._nav_buttons[key].config(bg=SIDEBAR_ACTIVE if on else SIDEBAR)
-
     def _show_view(self, key):
         self._current_view = key
         self._views[key].tkraise()
@@ -776,13 +743,7 @@ class KassePanel(tk.Frame):
             self._refresh_auswertung()
         elif key == "protokoll":
             self._refresh_log()
-        for k, b in self._nav_buttons.items():
-            if k == key:
-                b.config(bg=SIDEBAR_ACTIVE, fg="#FFFFFF", font=(theme.FONT, 11, "bold"))
-                self._nav_bars[k].config(bg=theme.ACCENT)
-            else:
-                b.config(bg=SIDEBAR, fg=SIDEBAR_TEXT, font=(theme.FONT, 11))
-                self._nav_bars[k].config(bg=SIDEBAR)
+        self.sidebar.set_active(key)
 
     def _open_nmgone(self):
         # Aus NMGone heraus: Hauptfenster nach vorn holen.
@@ -2269,6 +2230,8 @@ class KassePanel(tk.Frame):
         self._vh_status_var.trace_add("write", lambda *_: self._refresh_verkaeufe())
         tk.Button(bar, text="📥 Verkäufe importieren", command=self._import_verkaeufe_datei,
                   font=(theme.FONT, 8), padx=6, pady=1).pack(side="left", padx=(12, 0))
+        tk.Button(bar, text="🌐 Online laden", command=self._online_verkaeufe_laden,
+                  font=(theme.FONT, 8), padx=6, pady=1).pack(side="left", padx=(6, 0))
         tk.Button(bar, text="🔄 Aktualisieren", command=self._refresh_verkaeufe,
                   font=(theme.FONT, 9), padx=8, pady=2).pack(side="right")
         self.vh_info = tk.Label(bar, text="", bg=BG, fg=ACCENT, font=(theme.FONT, 9, "bold"))
@@ -2325,6 +2288,7 @@ class KassePanel(tk.Frame):
                 90 if c in ("bearbeiter", "msk", "status") else (60 if c == "nr" else 70)))
             tree.column(c, width=w, anchor="w")
         tree.tag_configure("msk_erfasst", background="#e7f4ea")
+        tree.tag_configure("online", background="#eef4fb")
         tree.pack(side="left", fill="both", expand=True)
         sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
         sb.pack(side="right", fill="y")

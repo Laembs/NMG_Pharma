@@ -281,30 +281,22 @@ class BerichtPanel(tk.Frame):
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
 
-        # Linke Menueleiste (dunkle Sidebar, einheitlich mit NMGone/Kasse)
-        nav = tk.Frame(self, bg=theme.SIDEBAR, width=224)
-        nav.grid(row=0, column=0, sticky="ns")
-        nav.grid_propagate(False)
-        # Eigenes Report-Symbol oben.
+        # Linke Menueleiste (zentrale theme.Sidebar, einheitlich mit NMGone/Kasse)
+        self.sidebar = theme.Sidebar(self, width=224, title="Auswertungen",
+                                     subtitle="Verkäufe · Kunden · Artikel")
+        self.sidebar.grid(row=0, column=0, sticky="ns")
         self._app_icon = theme.load_icon(ASSETS_DIR / "Report.ico", 56)
         if self._app_icon:
-            tk.Label(nav, image=self._app_icon, bg=theme.SIDEBAR).pack(anchor="w", padx=20, pady=(18, 2))
-        tk.Label(nav, text="Auswertungen", bg=theme.SIDEBAR, fg="white",
-                 font=("Segoe UI", 15, "bold")).pack(anchor="w", padx=20, pady=(2, 2))
-        tk.Label(nav, text="Verkäufe · Kunden · Artikel · Frei", bg=theme.SIDEBAR, fg=theme.SIDEBAR_MUTED,
-                 font=("Segoe UI", 9)).pack(anchor="w", padx=20, pady=(0, 16))
+            self.sidebar.set_logo(self._app_icon)
+        _icons = {"verkaeufe": "🧾", "kunden": "📇", "artikel": "🔍", "frei": "🧱"}
         for key, label in PERSPEKTIVEN:
-            b = tk.Button(nav, text="    " + label, anchor="w", relief="flat",
-                          bg=theme.SIDEBAR, fg=theme.SIDEBAR_TEXT, activebackground=theme.SIDEBAR_ACTIVE,
-                          activeforeground="white", bd=0, font=("Segoe UI", 12),
-                          cursor="hand2", command=lambda k=key: self._select_perspektive(k))
-            b.pack(fill="x", padx=10, pady=2, ipady=9)
-            self._nav_buttons[key] = b
+            self.sidebar.add_item(key, _icons.get(key, "•"), label,
+                                  lambda k=key: self._select_perspektive(k))
 
-        tk.Frame(nav, bg=theme.SIDEBAR).pack(fill="both", expand=True)
-        nmb = tk.Button(nav, text="↩  NMGone öffnen", relief="flat", bg=theme.SIDEBAR_ACTIVE, fg="white",
-                        activebackground="#1B5085", activeforeground="white", bd=0,
-                        font=("Segoe UI", 10), cursor="hand2", command=self._open_nmgone)
+        nmb = tk.Button(self.sidebar.footer(), text="↩  NMGone öffnen", relief="flat",
+                        bg=theme.SIDEBAR_ACTIVE, fg="white", activebackground="#1B5085",
+                        activeforeground="white", bd=0, font=("Segoe UI", 10),
+                        cursor="hand2", command=self._open_nmgone)
         nmb.pack(fill="x", padx=10, pady=(2, 18), ipady=8)
 
         # Rechter Inhalt
@@ -408,9 +400,7 @@ class BerichtPanel(tk.Frame):
     # ── Perspektivenwechsel ──────────────────────────────────────────────────
     def _select_perspektive(self, key):
         self.perspektive = key
-        for k, b in self._nav_buttons.items():
-            b.configure(bg=theme.SIDEBAR_ACTIVE if k == key else theme.SIDEBAR,
-                        fg="white" if k == key else theme.SIDEBAR_TEXT)
+        self.sidebar.set_active(key)
         label = dict(PERSPEKTIVEN)[key]
         self.header.configure(text=f"Auswertung · {label}")
         self._cfg_btn.configure(text="🧱 Bauen…" if key == "frei" else "🔧 Spalten…")
@@ -1073,6 +1063,14 @@ def run_standalone():
     root.title(f"NMG Auswertungen{DEMO_SUFFIX}")
     root.geometry("1280x820")
     root.minsize(1040, 680)
+    # Im Vollbild (maximiert) starten. 'zoomed' = Windows; sonst -zoomed/Bildschirmgroesse.
+    try:
+        root.state("zoomed")
+    except tk.TclError:
+        try:
+            root.attributes("-zoomed", True)
+        except tk.TclError:
+            root.geometry(f"{root.winfo_screenwidth()}x{root.winfo_screenheight()}+0+0")
     root.configure(bg=SHELL_BG)
     theme.apply_theme(root)
     theme.apply_widget_defaults(root)

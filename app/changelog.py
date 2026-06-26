@@ -5,6 +5,15 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V2.2.0", "2026-06-26", [
+        "Neuer Meilenstein V2.2.0 - fasst den kompletten V2.1-Zyklus (SP1-SP3: Wareneingang & Retouren, Meldungen, Einkauf, Parameter, Demo-Modus) zusammen und bringt eine neue Welle eigenstaendiger Apps.",
+        "Neue App 'Buchhaltung': Vorerfassung der Geschaeftsvorfaelle mit DATEV-Export ans Steuerbuero, Empfang elektronischer Rechnungen (eRechnung) als Pflicht-Workflow.",
+        "Neue App 'Kunden' (CRM): Kundenliste mit Steckbrief, ABC-Analyse und Offline-Deutschlandkarte (ohne Internetzugang).",
+        "eRechnung-Modul: Einlesen und Pruefen elektronischer Rechnungen (XRechnung/ZUGFeRD-Struktur) fuer die Buchhaltung.",
+        "Zweite Programmsprache Slowakisch: das Programm laesst sich vollstaendig auf Slowakisch umstellen (Deutsch bleibt Standard).",
+        "Neue 'Revisions-Uebersicht' ('Was wurde veraendert') und eine modernisierte Testoberflaeche fuer die Vorschau neuer Funktionen.",
+        "Parameter/Berechtigungen stark ausgebaut (Rollen, Overrides, Admin-PIN) sowie ueberarbeitetes Cockpit, Dashboard, Theme und Hilfe.",
+    ]),
     ("V2.1 SP3", "2026-06-26", [
         "Einkauf-App: neue Seite 'Importkandidaten' - rechnet aus den gespeicherten Bedarfsanalysen heraus, welche Artikel sich lohnen, als Parallelimport beschafft und ueber NMG in den Markt gebracht zu werden (nachgefragte Artikel, die NMG noch nicht fuehrt und fuer die kein Austausch bekannt ist).",
         "Bewertung je Kandidat: geschaetztes Jahres-Potenzial in Euro (Absatz x Marge/Stueck), eine §129-Machbarkeits-Ampel und ein Mengen-/Break-even-Rechner (echter EU-Einkaufspreis, Mindestabnahme, Einfuehrungskosten -> Marge/Stueck, Break-even-Menge, Deckungsbeitrag).",

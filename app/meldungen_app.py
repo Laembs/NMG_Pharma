@@ -135,55 +135,25 @@ class MeldungenPanel(tk.Frame):
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
 
-        # ---- Sidebar ----
-        left = tk.Frame(self, bg=SIDEBAR, width=256)
-        left.grid(row=0, column=0, sticky="ns")
-        left.grid_propagate(False)
-        left.rowconfigure(2, weight=1)
-
-        logo_box = tk.Frame(left, bg=SIDEBAR)
-        logo_box.grid(row=0, column=0, sticky="ew", padx=16, pady=(18, 0))
+        # ---- Sidebar (zentrale theme.Sidebar) ----
+        self.sidebar = theme.Sidebar(self, width=256, title="Meldungen",
+                                     subtitle="& Qualität")
+        self.sidebar.grid(row=0, column=0, sticky="ns")
         self._app_icon = theme.load_icon(ASSETS_DIR / "Meldungen.ico", 56)
         if self._app_icon:
-            tk.Label(logo_box, image=self._app_icon, bg=SIDEBAR).pack(anchor="w")
-        else:
-            tk.Label(logo_box, text="\U0001F514", font=(theme.FONT, 28),
-                     bg=SIDEBAR, fg="#FFFFFF").pack(anchor="w")
-        tk.Label(left, text="Meldungen\n& Qualität", font=(theme.FONT, 15, "bold"),
-                 fg="#FFFFFF", bg=SIDEBAR, justify="left").grid(
-            row=1, column=0, sticky="w", padx=18, pady=(6, 10))
-
-        nav = tk.Frame(left, bg=SIDEBAR)
-        nav.grid(row=2, column=0, sticky="new", padx=8)
-        self._nav_buttons = {}
-        self._nav_bars = {}
+            self.sidebar.set_logo(self._app_icon)
         for key, text, icon in self.NAV:
-            rowf = tk.Frame(nav, bg=SIDEBAR)
-            rowf.pack(fill="x", pady=1)
-            bar = tk.Frame(rowf, bg=SIDEBAR, width=4)
-            bar.pack(side="left", fill="y")
-            b = tk.Button(rowf, text=f"   {icon}   {text}", anchor="w", relief="flat",
-                          bg=SIDEBAR, fg=SIDEBAR_TEXT, font=(theme.FONT, 11), bd=0,
-                          activebackground=SIDEBAR_ACTIVE, activeforeground="#FFFFFF",
-                          cursor="hand2", command=lambda k=key: self._show_view(k))
-            b.pack(side="left", fill="x", expand=True, ipady=6)
-            b.bind("<Enter>", lambda _e, k=key: self._nav_hover(k, True))
-            b.bind("<Leave>", lambda _e, k=key: self._nav_hover(k, False))
-            self._nav_buttons[key] = b
-            self._nav_bars[key] = bar
+            self.sidebar.add_item(key, icon, text, lambda k=key: self._show_view(k))
 
-        bottom = tk.Frame(left, bg=SIDEBAR)
-        bottom.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 6))
-        tk.Button(bottom, text="\U0001F3E0  NMGone öffnen", command=self._open_nmgone,
+        foot = self.sidebar.footer()
+        tk.Button(foot, text="\U0001F3E0  NMGone öffnen", command=self._open_nmgone,
                   bg=SIDEBAR_ACTIVE, fg="#FFFFFF", relief="flat",
                   font=(theme.FONT, 10, "bold"), activebackground="#1B5085",
-                  activeforeground="#FFFFFF", padx=10, pady=7, cursor="hand2").pack(fill="x", pady=(0, 6))
-        tk.Button(bottom, text="Schließen", command=self._on_close, relief="flat",
+                  activeforeground="#FFFFFF", padx=10, pady=7, cursor="hand2").pack(fill="x", padx=10, pady=(0, 6))
+        tk.Button(foot, text="Schließen", command=self._on_close, relief="flat",
                   bg="#0E3454", fg=SIDEBAR_TEXT, activebackground="#15466E",
-                  activeforeground="#FFFFFF", padx=10, pady=5, cursor="hand2").pack(fill="x")
-        tk.Label(left, text=f"Datenbank:\n{Path(self.db_path).name}", justify="left",
-                 bg=SIDEBAR, fg=SIDEBAR_MUTED, font=(theme.FONT, 9)).grid(
-            row=4, column=0, sticky="w", padx=16, pady=12)
+                  activeforeground="#FFFFFF", padx=10, pady=5, cursor="hand2").pack(fill="x", padx=10)
+        self.sidebar.add_footer_note(f"Datenbank:\n{Path(self.db_path).name}")
 
         # ---- Hauptbereich ----
         main = tk.Frame(self, bg=SHELL_BG)
@@ -224,22 +194,12 @@ class MeldungenPanel(tk.Frame):
         self._current = None
         self._show_view("uebersicht")
 
-    def _nav_hover(self, key, on):
-        if key == self._current:
-            return
-        self._nav_buttons[key].config(bg=SIDEBAR_ACTIVE if on else SIDEBAR)
-
     def _show_view(self, key):
         self._current = key
         self._views[key].tkraise()
         self._view_title.config(text=self.TITEL[key])
         self._view_subtitle.config(text=self.UNTERTITEL.get(key, ""))
-        for k, b in self._nav_buttons.items():
-            active = (k == key)
-            b.config(bg=SIDEBAR_ACTIVE if active else SIDEBAR,
-                     fg="#FFFFFF" if active else SIDEBAR_TEXT,
-                     font=(theme.FONT, 11, "bold" if active else "normal"))
-            self._nav_bars[k].config(bg=ACCENT if active else SIDEBAR)
+        self.sidebar.set_active(key)
         ref = self._refreshers.get(key)
         if ref:
             ref()

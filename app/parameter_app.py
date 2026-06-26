@@ -35,28 +35,30 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
-# ── Palette (aus app/theme.py, hier inline wie die übrigen Einzel-Apps) ───────
-PRIMARY      = "#0B4A86"
-PRIMARY_DARK = "#083A6B"
-ACCENT       = "#208ACD"
-SUCCESS      = "#11823B"
-DANGER       = "#B3261E"
-WARNING      = "#C88200"
-PURPLE       = "#6B4FB3"
-SIDEBAR      = "#0B2C4A"
-SIDEBAR_TEXT = "#D7E6F4"
-BG           = "#EEF2F7"
-CARD         = "#FFFFFF"
-CARD_ALT     = "#F7FAFD"
-INK          = "#1F2933"
-MUTED        = "#626E7D"
-FAINT        = "#9AA5B1"
-BORDER       = "#DCE2E8"
-DIVIDER      = "#EBEFF3"
-SELECT_BG    = "#E8F1FB"
-FONT         = "Segoe UI"
+from . import theme  # zentrales Design-System (Cockpit-Optik, eine Quelle)
 
-from app.config import DB_PATH, fenstertitel  # gemeinsame NMGone-Datenbank
+# ── Palette: zentral aus app/theme.py (gleiche Quelle wie Cockpit & übrige Apps)
+PRIMARY      = theme.PRIMARY
+PRIMARY_DARK = theme.PRIMARY_DARK
+ACCENT       = theme.ACCENT
+SUCCESS      = theme.SUCCESS
+DANGER       = theme.DANGER
+WARNING      = theme.WARNING
+PURPLE       = theme.PURPLE
+SIDEBAR      = theme.SIDEBAR
+SIDEBAR_TEXT = theme.SIDEBAR_TEXT
+BG           = theme.BG
+CARD         = theme.CARD
+CARD_ALT     = theme.CARD_ALT
+INK          = theme.INK
+MUTED        = theme.MUTED
+FAINT        = theme.FAINT
+BORDER       = theme.BORDER
+DIVIDER      = theme.DIVIDER
+SELECT_BG    = theme.SELECT_BG
+FONT         = theme.FONT
+
+from app.config import DB_PATH, fenstertitel, ASSETS_DIR  # gemeinsame NMGone-Datenbank
 
 # Zustände eines Rechts für einen Mitarbeiter
 ST_ALLOW, ST_DENY, ST_NONE = "allow", "deny", "none"
@@ -67,63 +69,137 @@ ST_ALLOW, ST_DENY, ST_NONE = "allow", "deny", "none"
 #  Wird nur beim allerersten Start angelegt; danach im Katalog pflegbar.
 # ──────────────────────────────────────────────────────────────────────────────
 SEED_BERECHTIGUNGEN = [
-    # — Allgemein —
-    ("Allgemein", "app.start",          "Programm starten",          "Darf NMGone und die Apps überhaupt öffnen."),
-    ("Allgemein", "daten.export",        "Daten exportieren",         "Listen/Tabellen als Excel oder PDF ausgeben."),
-    ("Allgemein", "einstellungen.ansehen","Einstellungen ansehen",    "Konfiguration einsehen (ohne Änderung)."),
-    ("Allgemein", "einstellungen.aendern","Einstellungen ändern",     "Programm-Einstellungen anpassen."),
-    ("Allgemein", "backup.erstellen",    "Datensicherung erstellen",  "Backup der Datenbank anstoßen."),
+    # ── Allgemein (modulübergreifend) ──────────────────────────────────────
+    ("Allgemein", "app.start",            "Programm starten",          "Darf NMGone und die Apps überhaupt öffnen."),
+    ("Allgemein", "daten.export",          "Daten exportieren",         "Listen/Tabellen als Excel, CSV oder PDF ausgeben."),
+    ("Allgemein", "drucken",               "Drucken / Vorschau",        "Belege und Listen drucken oder als Vorschau öffnen."),
+    ("Allgemein", "email.senden",          "Per E-Mail versenden",      "Belege/Listen per E-Mail verschicken."),
+    ("Allgemein", "einstellungen.ansehen", "Einstellungen ansehen",     "Konfiguration einsehen (ohne Änderung)."),
+    ("Allgemein", "einstellungen.aendern", "Einstellungen ändern",      "Programm-Einstellungen anpassen."),
 
-    # — Analyse (NMGone-Kern) —
-    ("Analyse", "bedarf.starten",        "Bedarfsanalyse starten",    "Neue Bedarfsanalyse (PK/ZW) durchführen."),
-    ("Analyse", "bedarf.export",         "Bedarfsanalyse exportieren","Kurzbericht/Excel der Analyse ausgeben."),
-    ("Analyse", "rabatte.ansehen",       "NMG-Rabatte ansehen",       "Rabatt-Übersicht, Statistik, Verlauf einsehen."),
-    ("Analyse", "rabatte.bearbeiten",    "NMG-Rabatte bearbeiten",    "Rabatte/Gültigkeiten ändern (mit Audit-Log)."),
-    ("Analyse", "austausch.ansehen",     "Austauschdatenbank ansehen","Biosimilar/Austausch-Einträge einsehen."),
-    ("Analyse", "austausch.bearbeiten",  "Austauschdatenbank pflegen","Austausch-/Biosimilar-Daten bearbeiten."),
-    ("Analyse", "produktanalyse",        "Produktanalyse",            "Produktchancen erstellen/auswerten."),
+    # ── NMGone · Analyse ───────────────────────────────────────────────────
+    ("NMGone · Analyse", "bedarf.starten",   "Bedarfsanalyse starten",    "Neue Bedarfsanalyse (PK/ZW) durchführen."),
+    ("NMGone · Analyse", "bedarf.export",    "Bedarfsanalyse exportieren","Kurzbericht/Excel der Analyse ausgeben."),
+    ("NMGone · Analyse", "analysen.ansehen", "Gespeicherte Analysen öffnen","Vorhandene Analysen ansehen."),
+    ("NMGone · Analyse", "analysen.loeschen","Gespeicherte Analysen löschen","Gespeicherte Analysen entfernen."),
+    ("NMGone · Analyse", "produktanalyse",   "Produktanalyse",            "Produktchancen erstellen/auswerten."),
+    ("NMGone · Analyse", "abweichungsanalyse","Abweichungsanalyse",       "Manuelle vs. Programm-Auswertung vergleichen."),
+    ("NMGone · Analyse", "schulbank.ansehen","Schulbank ansehen",         "Lernvorschläge (Schulbank) einsehen."),
+    ("NMGone · Analyse", "schulbank.entscheiden","Lernvorschläge entscheiden","Vorschläge übernehmen oder ablehnen."),
+    ("NMGone · Analyse", "schulbank.manuelle_pruefung","Manuelle Prüfung","Manuelle Prüfung der Lernvorschläge."),
+    ("NMGone · Analyse", "rabatte.ansehen",  "NMG-Rabatte ansehen",       "Rabatt-Übersicht, Statistik, Verlauf einsehen."),
+    ("NMGone · Analyse", "rabatte.bearbeiten","NMG-Rabatte bearbeiten",    "Rabatte/Gültigkeiten ändern (mit Audit-Log)."),
+    ("NMGone · Analyse", "austausch.ansehen","Austauschdatenbank ansehen","Biosimilar/Austausch-Einträge einsehen."),
+    ("NMGone · Analyse", "austausch.bearbeiten","Austauschdatenbank pflegen","Austausch-/Biosimilar-Daten bearbeiten."),
+    ("NMGone · Analyse", "kunden.ansehen",   "Kundenstamm ansehen",       "Kunden, Steckbrief und Historie einsehen."),
+    ("NMGone · Analyse", "kunden.bearbeiten","Kundenstamm bearbeiten",    "Kunden anlegen/ändern, Listen importieren."),
+    ("NMGone · Analyse", "kunden.email",     "Kunden-E-Mail-Versand",     "Serien-/Einzel-E-Mails an Kunden senden."),
+    ("NMGone · Analyse", "suche.global",     "Globale / Vergleichs-Suche","Kunde, Analyse, PZN oder Artikel suchen."),
+    ("NMGone · Analyse", "todo.ansehen",     "ToDo ansehen",              "Aufgaben und offene Punkte einsehen."),
+    ("NMGone · Analyse", "todo.bearbeiten",  "ToDo bearbeiten",           "Aufgaben anlegen, ändern, erledigen."),
 
-    # — Kasse —
-    ("Kasse", "kasse.wareneingang",      "Wareneingang buchen",       "Ware annehmen und ins Lager buchen."),
+    # ── NMGone · Daten & Import ────────────────────────────────────────────
+    ("NMGone · Daten", "import.zw",          "Manuelle Analysen / ZW importieren","Zukunftswerk-/manuelle Analysen einlesen."),
+    ("NMGone · Daten", "import.partnerkonditionen","Partnerkonditionen importieren","PK-Datensätze einlesen."),
+    ("NMGone · Daten", "import.apu_hap",     "APU/HAP-Daten importieren", "Apothekenpreise/Herstellerabgabepreise einlesen."),
+    ("NMGone · Daten", "import.nmg_artikel", "NMG-Artikel importieren",   "NMG-Artikelstamm einlesen."),
+    ("NMGone · Daten", "import.pk_rabatte",  "PK-Rabatte importieren",    "Partnerkonditionen-Rabatte einlesen."),
+    ("NMGone · Daten", "artikelstamm.ansehen","Artikelstamm ansehen",     "Artikelstamm einsehen."),
+    ("NMGone · Daten", "artikelstamm.bearbeiten","Artikelstamm pflegen",  "Artikelstamm-Einträge ändern."),
+    ("NMGone · Daten", "auswertungsvorlage.bearbeiten","Auswertungsvorlage pflegen","Vorlage für Auswertungen anpassen."),
+
+    # ── NMGone · System (Update / Backup / Datenbank) ──────────────────────
+    ("NMGone · System", "system.update.suchen",     "Nach Updates suchen",      "Online nach neuer Version suchen."),
+    ("NMGone · System", "system.update.installieren","Update installieren",     "Update-Paket einspielen (Neustart)."),
+    ("NMGone · System", "backup.erstellen",         "Datensicherung erstellen", "Backup der Datenbank anstoßen."),
+    ("NMGone · System", "backup.wiederherstellen",  "Sicherung wiederherstellen","Datenbank aus einem Backup zurückspielen."),
+    ("NMGone · System", "db.uebersicht",            "Datenbankübersicht ansehen","Tabellen/Stände der Datenbank einsehen."),
+    ("NMGone · System", "db.pfad.aendern",          "Cloud / DB-Pfad ändern",   "Speicherort der Datenbank umstellen."),
+    ("NMGone · System", "roadmap.ansehen",          "Roadmap ansehen",          "Offene/erledigte Punkte einsehen."),
+    ("NMGone · System", "roadmap.bearbeiten",       "Roadmap bearbeiten",       "Roadmap-Punkte anlegen/ändern."),
+
+    # ── Kasse ──────────────────────────────────────────────────────────────
+    ("Kasse", "kasse.uebersicht",        "Kasse-Übersicht ansehen",   "Kennzahlen und Status der Kasse sehen."),
     ("Kasse", "kasse.verkauf",           "Verkauf erfassen",          "Verkäufe an Apotheken erfassen."),
+    ("Kasse", "kasse.vorbestellung",     "Vorbestellungen verarbeiten","Vorbestellungen importieren/übernehmen."),
+    ("Kasse", "kasse.verkaeufe.import",  "Verkäufe importieren",      "Externe Verkaufsdaten einlesen."),
+    ("Kasse", "kasse.wareneingang",      "Wareneingang buchen",       "Ware annehmen und ins Lager buchen."),
     ("Kasse", "kasse.lager.ansehen",     "Lagerbestand ansehen",      "Bestände und Lagerwert einsehen."),
-    ("Kasse", "kasse.lager.bearbeiten",  "Lagerbestand korrigieren",  "Bestände manuell anpassen/inventieren."),
+    ("Kasse", "kasse.lager.bearbeiten",  "Lagerbestand / Inventur",   "Bestände manuell anpassen/inventieren."),
     ("Kasse", "kasse.preise.bearbeiten", "Preise bearbeiten",         "Verkaufs-/EK-Preise ändern."),
     ("Kasse", "kasse.lieferschein",      "Lieferscheine erstellen",   "Lieferscheine drucken/erzeugen."),
+    ("Kasse", "kasse.auftragsbestaetigung","Auftragsbestätigung",     "Auftragsbestätigungen erstellen."),
     ("Kasse", "kasse.defektmeldung",     "Defektmeldung erfassen",    "Defekte Ware melden."),
-    ("Kasse", "kasse.auswertung",        "Kassen-Auswertung",         "Umsatz-/Bestands-Auswertungen ansehen."),
+    ("Kasse", "kasse.auswertung",        "Kassen-Auswertung",         "Umsatz, Tagesabschluss, Verfall, Inventur."),
+    ("Kasse", "kasse.protokoll",         "Kassen-Protokoll ansehen",  "Protokoll der Kassen-Vorgänge einsehen."),
+    ("Kasse", "kasse.einstellungen",     "Kassen-Einstellungen",      "Einstellungen der Kasse-App pflegen."),
 
-    # — Faktura —
+    # ── Faktura ────────────────────────────────────────────────────────────
+    ("Faktura", "faktura.auftrag",       "Aufträge bearbeiten",       "Aufträge anlegen und pflegen."),
     ("Faktura", "faktura.rechnung",      "Rechnungen erstellen",      "Ausgangsrechnungen schreiben."),
     ("Faktura", "faktura.gutschrift",    "Gutschriften erstellen",    "Gutschriften ausstellen."),
     ("Faktura", "faktura.quartal",       "Quartalsvergütung",         "Quartalsabrechnung/-vergütung erstellen."),
+    ("Faktura", "faktura.staffel",       "Staffel / Konditionen",     "Staffeln und Konditionen pflegen."),
     ("Faktura", "faktura.einstellungen", "Faktura-Einstellungen",     "Vorlagen, Nummernkreise, Stammdaten pflegen."),
 
-    # — Einkauf —
+    # ── Einkauf ────────────────────────────────────────────────────────────
+    ("Einkauf", "einkauf.dashboard",     "Einkauf-Dashboard",         "Einkaufs-Übersicht/Dashboard ansehen."),
+    ("Einkauf", "einkauf.aufgaben",      "Aufgaben & Meldungen",      "Aufgaben/Meldungen im Einkauf bearbeiten."),
+    ("Einkauf", "einkauf.lieferanten",   "Lieferanten pflegen",       "Lieferantenstamm anlegen/ändern."),
+    ("Einkauf", "einkauf.quellen",       "Beschaffungsquellen",       "Beschaffungsquellen pflegen."),
+    ("Einkauf", "einkauf.vorschlag",     "Beschaffungsvorschlag",     "Beschaffungsvorschläge erzeugen/prüfen."),
     ("Einkauf", "einkauf.beschaffung",   "Beschaffung EU-Ausland",    "Einkauf/Beschaffung anlegen und führen."),
-    ("Einkauf", "einkauf.margenrechner", "§129-Margenrechner",        "Margen-/Preiskalkulation nutzen."),
-    ("Einkauf", "einkauf.aufgaben",      "Einkaufs-Aufgaben",         "Aufgaben/Meldungen im Einkauf bearbeiten."),
+    ("Einkauf", "einkauf.importkandidaten","Importkandidaten",        "Hersteller-Pipeline/Importkandidaten pflegen."),
+    ("Einkauf", "einkauf.statistik",     "Statistik & Erfolg",        "Lieferanten-/Einkaufserfolg auswerten."),
+    ("Einkauf", "einkauf.margenrechner", "Margenrechner §129",        "Margen-/Preiskalkulation nutzen."),
+    ("Einkauf", "einkauf.kurse",         "Wechselkurse pflegen",      "Wechselkurse erfassen/aktualisieren."),
+    ("Einkauf", "einkauf.einstellungen", "Einkauf-Einstellungen",     "Einstellungen der Einkauf-App pflegen."),
 
-    # — GDP (Wareneingang & Retouren) —
+    # ── GDP (Wareneingang & Retouren) ──────────────────────────────────────
+    ("GDP", "gdp.uebersicht",            "GDP-Übersicht",             "Offene GDP-Pflichten/Status ansehen."),
     ("GDP", "gdp.wareneingang",          "GDP-Wareneingang",          "Wareneingang mit Chargenerfassung."),
-    ("GDP", "gdp.charge.ansehen",        "Chargen zurückverfolgen",   "Chargen-Rückverfolgung einsehen."),
-    ("GDP", "gdp.retoure",               "Retouren bearbeiten",       "Retouren annehmen und abwickeln."),
+    ("GDP", "gdp.produktionsbestand",    "Produktionsbestand",        "Produktionsbestand verwalten."),
+    ("GDP", "gdp.warenausgang",          "Warenausgang / Avis",       "Warenausgang und Avis bearbeiten."),
+    ("GDP", "gdp.charge.ansehen",        "Chargen-Rückverfolgung",    "Chargen rückverfolgen/einsehen."),
+    ("GDP", "gdp.bewegungen",            "Warenbewegungen ansehen",   "Alle Warenbewegungen einsehen."),
+    ("GDP", "gdp.bestandsdiff",          "Bestandsdifferenzen",       "Bestandsdifferenzen prüfen/buchen."),
+    ("GDP", "gdp.retoure",               "Retouren / Reklamation",    "Retouren annehmen und abwickeln."),
+    ("GDP", "gdp.retourenbestand",       "Retourenbestand",           "Retourenbestand verwalten."),
     ("GDP", "gdp.gutschrift",            "Retouren-Gutschrift",       "Gutschrift für Retoure auslösen."),
-    ("GDP", "gdp.kunde.qualifizieren",   "Kunden qualifizieren",      "Kundenqualifizierung (Erlaubnis) pflegen."),
+    ("GDP", "gdp.kunde.qualifizieren",   "Kundenqualifizierung",      "Kundenqualifizierung (Erlaubnis) pflegen."),
+    ("GDP", "gdp.protokoll",             "GDP-Protokoll ansehen",     "Protokoll der GDP-Vorgänge einsehen."),
+    ("GDP", "gdp.einstellungen",         "GDP-Einstellungen",         "Einstellungen der GDP-App pflegen."),
 
-    # — Meldungen / Qualität —
-    ("Meldungen", "meldungen.gdp",       "GDP-Meldungen",             "Abweichungen/Meldungen erfassen."),
+    # ── Meldungen / Qualität ───────────────────────────────────────────────
+    ("Meldungen", "meldungen.uebersicht","Meldungen-Übersicht",       "Offene Meldungen/Pflichten ansehen."),
+    ("Meldungen", "meldungen.gdp",       "GDP-Meldungen erfassen",    "Abweichungen/Meldungen erfassen."),
     ("Meldungen", "meldungen.kuehlkette","Kühlsachenkontrolle",       "Kühlketten-/Temperaturkontrolle führen."),
     ("Meldungen", "meldungen.selbstinspektion","Selbstinspektion",    "Selbstinspektionen anlegen/auswerten."),
+    ("Meldungen", "meldungen.protokoll", "Meldungen-Protokoll",       "Protokoll der Meldungen einsehen."),
 
-    # — Personal —
+    # ── Buchhaltung (Vorerfassung / DATEV) ─────────────────────────────────
+    ("Buchhaltung", "buchhaltung.uebersicht","Buchhaltung-Übersicht", "Status/Übersicht der Buchhaltung ansehen."),
+    ("Buchhaltung", "buchhaltung.belege","Belege erfassen",           "Belege vorerfassen."),
+    ("Buchhaltung", "buchhaltung.kontenrahmen","Kontenrahmen pflegen","Konten/Kontenrahmen verwalten."),
+    ("Buchhaltung", "buchhaltung.kontierung","Kontierung",            "Belege kontieren."),
+    ("Buchhaltung", "buchhaltung.datev_export","DATEV-Export",        "Export ans Steuerbüro erzeugen."),
+    ("Buchhaltung", "buchhaltung.erechnung","eRechnung empfangen",    "Eingehende eRechnungen verarbeiten."),
+    ("Buchhaltung", "buchhaltung.einstellungen","Buchhaltung-Einstellungen","Berater-/Mandanten-/Wirtschaftsjahr pflegen."),
+
+    # ── Personal ───────────────────────────────────────────────────────────
     ("Personal", "personal.organigramm.ansehen", "Organigramm ansehen", "Organigramm/Struktur einsehen."),
     ("Personal", "personal.organigramm.bearbeiten","Organigramm bearbeiten","Karten/Beziehungen ändern."),
+    ("Personal", "personal.arbeitsbereiche","Arbeitsbereiche pflegen","Arbeitsbereiche und Vertretungen verwalten."),
     ("Personal", "personal.abwesenheit.ansehen","Abwesenheiten ansehen","Urlaub/Krankheit im Kalender sehen."),
     ("Personal", "personal.abwesenheit.bearbeiten","Abwesenheiten eintragen","Urlaub/Krankheit erfassen/ändern."),
     ("Personal", "personal.urlaub.entscheiden","Urlaub genehmigen",   "Über Urlaub/Verfall entscheiden."),
+    ("Personal", "personal.stammdaten.bearbeiten","Mitarbeiter-Stammdaten","Mitarbeiter anlegen/ändern."),
 
-    # — Parameter/Admin (diese App) —
+    # ── Auswertungen (Report) ──────────────────────────────────────────────
+    ("Auswertungen", "report.ansehen",   "Auswertungen öffnen",       "Verkäufe, Kunden, Artikel frei auswerten."),
+    ("Auswertungen", "report.export",    "Auswertungen exportieren",  "Auswertungsergebnisse ausgeben."),
+
+    # ── Verwaltung (diese Parameter-App) ───────────────────────────────────
     ("Verwaltung", "param.ansehen",      "Berechtigungen ansehen",    "Diese Parameter-App nur lesend nutzen."),
     ("Verwaltung", "param.admin",        "Berechtigungen verwalten",  "Rechte freischalten/sperren, Rollen & Katalog pflegen."),
 ]
@@ -133,66 +209,128 @@ SEED_BERECHTIGUNGEN = [
 SEED_ROLLEN = [
     ("Administrator", "Vollzugriff auf alles inkl. dieser Verwaltung.", 1, []),
     ("Geschäftsführung", "Sieht alles, steuert Personal & Einkauf.", 0, [
-        "app.start", "daten.export", "einstellungen.ansehen", "backup.erstellen",
-        "bedarf.starten", "bedarf.export", "rabatte.ansehen", "produktanalyse",
-        "kasse.auswertung", "faktura.quartal",
-        "einkauf.beschaffung", "einkauf.margenrechner",
+        "app.start", "daten.export", "drucken", "email.senden", "einstellungen.ansehen",
+        "bedarf.starten", "bedarf.export", "analysen.ansehen", "produktanalyse",
+        "abweichungsanalyse", "rabatte.ansehen", "kunden.ansehen", "suche.global",
+        "todo.ansehen", "todo.bearbeiten", "db.uebersicht", "roadmap.ansehen", "roadmap.bearbeiten",
+        "kasse.uebersicht", "kasse.auswertung", "faktura.quartal", "faktura.staffel",
+        "einkauf.dashboard", "einkauf.statistik", "einkauf.margenrechner",
+        "gdp.uebersicht", "meldungen.uebersicht", "buchhaltung.uebersicht",
         "personal.organigramm.ansehen", "personal.abwesenheit.ansehen", "personal.urlaub.entscheiden",
-        "param.ansehen",
+        "report.ansehen", "report.export", "param.ansehen",
     ]),
     ("Vertrieb / Außendienst", "Kunden, Verkauf, Analyse.", 0, [
-        "app.start", "daten.export",
-        "bedarf.starten", "bedarf.export", "rabatte.ansehen", "austausch.ansehen",
-        "kasse.verkauf", "kasse.lager.ansehen", "kasse.lieferschein",
-        "param.ansehen",
+        "app.start", "daten.export", "drucken", "email.senden",
+        "bedarf.starten", "bedarf.export", "analysen.ansehen", "rabatte.ansehen",
+        "austausch.ansehen", "kunden.ansehen", "kunden.bearbeiten", "kunden.email",
+        "suche.global", "todo.ansehen", "todo.bearbeiten",
+        "kasse.verkauf", "kasse.lager.ansehen", "kasse.lieferschein", "kasse.auftragsbestaetigung",
+        "report.ansehen", "param.ansehen",
     ]),
     ("Innendienst", "Auftragsbearbeitung, Faktura-Vorbereitung.", 0, [
-        "app.start", "daten.export",
-        "kasse.verkauf", "kasse.lager.ansehen", "kasse.lieferschein", "kasse.defektmeldung",
-        "faktura.rechnung", "faktura.gutschrift",
-        "param.ansehen",
+        "app.start", "daten.export", "drucken", "email.senden",
+        "kunden.ansehen", "kunden.bearbeiten", "suche.global", "todo.ansehen", "todo.bearbeiten",
+        "kasse.verkauf", "kasse.vorbestellung", "kasse.lager.ansehen",
+        "kasse.lieferschein", "kasse.auftragsbestaetigung", "kasse.defektmeldung",
+        "faktura.auftrag", "faktura.rechnung", "faktura.gutschrift",
+        "report.ansehen", "param.ansehen",
     ]),
     ("Lager / Logistik", "Wareneingang, Bestände, Retouren.", 0, [
-        "app.start",
+        "app.start", "drucken",
         "kasse.wareneingang", "kasse.lager.ansehen", "kasse.lager.bearbeiten", "kasse.defektmeldung",
-        "gdp.wareneingang", "gdp.charge.ansehen", "gdp.retoure",
+        "gdp.uebersicht", "gdp.wareneingang", "gdp.produktionsbestand", "gdp.warenausgang",
+        "gdp.charge.ansehen", "gdp.bewegungen", "gdp.bestandsdiff",
+        "gdp.retoure", "gdp.retourenbestand",
         "param.ansehen",
     ]),
     ("Labor / QS", "Qualität, Meldungen, Selbstinspektion.", 0, [
-        "app.start",
-        "gdp.charge.ansehen",
-        "meldungen.gdp", "meldungen.kuehlkette", "meldungen.selbstinspektion",
+        "app.start", "drucken",
+        "gdp.charge.ansehen", "gdp.bewegungen",
+        "meldungen.uebersicht", "meldungen.gdp", "meldungen.kuehlkette",
+        "meldungen.selbstinspektion", "meldungen.protokoll",
         "param.ansehen",
     ]),
-    ("Buchhaltung / Faktura", "Rechnungen, Gutschriften, Quartal.", 0, [
-        "app.start", "daten.export",
-        "faktura.rechnung", "faktura.gutschrift", "faktura.quartal", "faktura.einstellungen",
-        "gdp.gutschrift",
-        "param.ansehen",
+    ("Buchhaltung / Faktura", "Rechnungen, Gutschriften, Buchhaltung.", 0, [
+        "app.start", "daten.export", "drucken", "email.senden",
+        "faktura.auftrag", "faktura.rechnung", "faktura.gutschrift", "faktura.quartal",
+        "faktura.staffel", "faktura.einstellungen",
+        "buchhaltung.uebersicht", "buchhaltung.belege", "buchhaltung.kontenrahmen",
+        "buchhaltung.kontierung", "buchhaltung.datev_export", "buchhaltung.erechnung",
+        "gdp.gutschrift", "report.ansehen", "report.export", "param.ansehen",
     ]),
     ("Einkauf", "Beschaffung & Margen.", 0, [
-        "app.start", "daten.export",
-        "einkauf.beschaffung", "einkauf.margenrechner", "einkauf.aufgaben",
-        "rabatte.ansehen",
-        "param.ansehen",
+        "app.start", "daten.export", "drucken",
+        "einkauf.dashboard", "einkauf.aufgaben", "einkauf.lieferanten", "einkauf.quellen",
+        "einkauf.vorschlag", "einkauf.beschaffung", "einkauf.importkandidaten",
+        "einkauf.statistik", "einkauf.margenrechner", "einkauf.kurse",
+        "rabatte.ansehen", "suche.global", "param.ansehen",
     ]),
     ("GDP-Beauftragter", "Wareneingang, Chargen, Kundenqualifizierung, Meldungen.", 0, [
-        "app.start", "daten.export",
-        "gdp.wareneingang", "gdp.charge.ansehen", "gdp.retoure", "gdp.gutschrift", "gdp.kunde.qualifizieren",
-        "meldungen.gdp", "meldungen.kuehlkette", "meldungen.selbstinspektion",
+        "app.start", "daten.export", "drucken",
+        "gdp.uebersicht", "gdp.wareneingang", "gdp.produktionsbestand", "gdp.warenausgang",
+        "gdp.charge.ansehen", "gdp.bewegungen", "gdp.bestandsdiff", "gdp.retoure",
+        "gdp.retourenbestand", "gdp.gutschrift", "gdp.kunde.qualifizieren", "gdp.protokoll",
+        "meldungen.uebersicht", "meldungen.gdp", "meldungen.kuehlkette",
+        "meldungen.selbstinspektion", "meldungen.protokoll",
         "param.ansehen",
     ]),
     ("Gast / Nur-Lesen", "Darf nur ansehen, nichts ändern.", 0, [
         "app.start", "einstellungen.ansehen",
-        "rabatte.ansehen", "austausch.ansehen", "kasse.lager.ansehen", "kasse.auswertung",
+        "analysen.ansehen", "rabatte.ansehen", "austausch.ansehen", "kunden.ansehen",
+        "suche.global", "todo.ansehen",
+        "kasse.uebersicht", "kasse.lager.ansehen", "kasse.auswertung",
+        "gdp.uebersicht", "meldungen.uebersicht",
         "personal.organigramm.ansehen", "personal.abwesenheit.ansehen",
-        "param.ansehen",
+        "report.ansehen", "param.ansehen",
     ]),
 ]
 
 
+# Beim Erweitern von SEED_BERECHTIGUNGEN hochzaehlen: zwingt bestehende
+# Datenbanken, fehlende Katalog-Punkte EINMAL nachzuziehen (siehe _sync_catalog).
+SEED_CATALOG_VERSION = 2
+
+
 def _hash_pin(pin: str) -> str:
     return hashlib.sha256(("nmgparam::" + (pin or "")).encode("utf-8")).hexdigest()
+
+
+def _sync_catalog(con) -> int:
+    """Bringt eine bereits bestueckte DB auf den aktuellen Katalogstand.
+
+    Laeuft nur, wenn die gespeicherte catalog_version < SEED_CATALOG_VERSION ist
+    (also einmal pro Versionssprung). Dadurch:
+      * neue Berechtigungs-Punkte werden nachgetragen,
+      * vom Admin geloeschte Built-ins kommen NICHT bei jedem Start zurueck,
+      * Modul/Reihenfolge der Built-ins bleiben sauber gruppiert.
+    Gibt die Zahl neu angelegter Punkte zurueck.
+    """
+    row = con.execute("SELECT wert FROM tbl_param_config WHERE schluessel='catalog_version'").fetchone()
+    have_ver = int(row[0]) if row and str(row[0]).isdigit() else 0
+    if have_ver >= SEED_CATALOG_VERSION:
+        return 0
+
+    seed_index = {key: i for i, (_, key, _, _) in enumerate(SEED_BERECHTIGUNGEN)}
+    existing = {r[0] for r in con.execute("SELECT schluessel FROM tbl_berechtigung")}
+    added = 0
+    for modul, key, titel, besch in SEED_BERECHTIGUNGEN:
+        if key in existing:
+            # Built-in: Modul + Sortierung kanonisch halten (Titel/Beschreibung
+            # NICHT ueberschreiben, damit Admin-Anpassungen erhalten bleiben).
+            con.execute("UPDATE tbl_berechtigung SET modul=?, sort=? WHERE schluessel=?",
+                        (modul, seed_index[key], key))
+        else:
+            con.execute("INSERT INTO tbl_berechtigung(modul,schluessel,titel,beschreibung,sort) "
+                        "VALUES(?,?,?,?,?)", (modul, key, titel, besch, seed_index[key]))
+            added += 1
+    # selbst angelegte (Nicht-Built-in) Punkte ans Ende sortieren
+    con.execute("UPDATE tbl_berechtigung SET sort=10000+id "
+                "WHERE schluessel NOT IN (%s)" % ",".join("?" * len(seed_index)),
+                tuple(seed_index.keys()))
+    con.execute("INSERT INTO tbl_param_config(schluessel,wert) VALUES('catalog_version',?) "
+                "ON CONFLICT(schluessel) DO UPDATE SET wert=excluded.wert",
+                (str(SEED_CATALOG_VERSION),))
+    return added
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -247,6 +385,12 @@ def init_db():
         for i, (modul, key, titel, besch) in enumerate(SEED_BERECHTIGUNGEN):
             con.execute("INSERT INTO tbl_berechtigung(modul,schluessel,titel,beschreibung,sort) "
                         "VALUES(?,?,?,?,?)", (modul, key, titel, besch, i))
+        con.execute("INSERT INTO tbl_param_config(schluessel,wert) VALUES('catalog_version',?) "
+                    "ON CONFLICT(schluessel) DO UPDATE SET wert=excluded.wert",
+                    (str(SEED_CATALOG_VERSION),))
+    else:
+        # Bereits bestueckte DB: fehlende Katalog-Punkte einmalig nachziehen.
+        _sync_catalog(con)
     # Start-Rollen nur einmal anlegen
     if not con.execute("SELECT COUNT(*) FROM tbl_rolle").fetchone()[0]:
         key_to_id = {r[0]: r[1] for r in con.execute("SELECT schluessel,id FROM tbl_berechtigung")}
@@ -281,12 +425,17 @@ class App:
         self.root = root
         root.title(fenstertitel("NMGone · Parameter & Berechtigungen"))
         root.geometry("1240x800")
-        root.configure(bg=BG)
-        self.style = ttk.Style(root)
+        # Im Vollbild (maximiert) starten. 'zoomed' = Windows; sonst -zoomed/Bildschirmgroesse.
         try:
-            self.style.theme_use("clam")
-        except Exception:
-            pass
+            root.state("zoomed")
+        except tk.TclError:
+            try:
+                root.attributes("-zoomed", True)
+            except tk.TclError:
+                root.geometry(f"{root.winfo_screenwidth()}x{root.winfo_screenheight()}+0+0")
+        root.configure(bg=BG)
+        self.style = theme.apply_theme(root)   # zentrale ttk-Optik (Cockpit-Look)
+        theme.apply_widget_defaults(root)
         self._style_tree()
 
         self.admin = False
@@ -295,10 +444,17 @@ class App:
         self.sel_rolle = None     # gewählte Rolle (Rollen-Ansicht)
         self.matrix_modul = "Alle"
 
-        self._build_header()
-        self.main = tk.Frame(root, bg=BG)
+        # Cockpit-Layout: links dunkle Sidebar, rechts Arbeitsbereich.
+        shell = tk.Frame(root, bg=BG)
+        shell.pack(fill="both", expand=True)
+        self._build_sidebar(shell)
+
+        right = tk.Frame(shell, bg=BG)
+        right.pack(side="left", fill="both", expand=True)
+        self._build_topbar(right)
+        self.main = tk.Frame(right, bg=BG)
         self.main.pack(side="top", fill="both", expand=True)
-        self._build_status()
+        self._build_status(right)
 
         self.load()
         self.show_matrix()
@@ -314,33 +470,46 @@ class App:
         s.configure("TCombobox", fieldbackground=CARD, background=CARD, foreground=INK,
                     arrowcolor=PRIMARY, padding=5)
 
-    # ---- Kopfleiste -------------------------------------------------------
-    def _build_header(self):
-        h = tk.Frame(self.root, bg=SIDEBAR, height=64)
+    # ---- Linke Navigation (Cockpit-Sidebar) -------------------------------
+    def _build_sidebar(self, parent):
+        self.sidebar = theme.Sidebar(parent, width=250, title="Parameter",
+                                     subtitle="Berechtigungen")
+        self.sidebar.pack(side="left", fill="y")
+        # NMGone-Logo oben in der Sidebar (wie in den übrigen Apps).
+        try:
+            _logo_path = ASSETS_DIR / "NMGone.png"
+            if _logo_path.exists():
+                _raw = tk.PhotoImage(file=str(_logo_path))
+                _factor = max(1, round(max(_raw.width() / 200, _raw.height() / 120)))
+                self._sidebar_logo = _raw.subsample(_factor, _factor)
+                self.sidebar.set_logo(self._sidebar_logo)
+        except Exception:
+            pass
+        self.sidebar.add_section("Ansichten")
+        for key, icon, label in (("matrix", "📋", "Übersicht"),
+                                 ("ma", "👤", "Mitarbeiter"),
+                                 ("rollen", "🧩", "Rollen")):
+            self.sidebar.add_item(key, icon, label, lambda k=key: self._nav(k),
+                                  active=(key == "matrix"))
+        self.sidebar.add_section("Verwaltung")
+        for key, icon, label in (("katalog", "🗂", "Katalog"),
+                                 ("einst", "⚙", "Einstellungen"),
+                                 ("audit", "📜", "Protokoll")):
+            self.sidebar.add_item(key, icon, label, lambda k=key: self._nav(k))
+        self.sidebar.add_footer_note("Wer darf was —\nzentral festlegen.")
+
+    def _build_topbar(self, parent):
+        """Schmale Kopfleiste rechts oben: Admin-/Ansehen-Umschalter (Schloss)."""
+        h = tk.Frame(parent, bg=BG, height=54)
         h.pack(side="top", fill="x")
         h.pack_propagate(False)
-        tk.Label(h, text="🔐  Parameter & Berechtigungen", bg=SIDEBAR, fg="white",
-                 font=(FONT, 18, "bold")).pack(side="left", padx=22)
-        tk.Label(h, text="Wer darf was — zentral festlegen und nachsehen",
-                 bg=SIDEBAR, fg=SIDEBAR_TEXT, font=(FONT, 10)).pack(side="left", padx=4)
-
-        # Schloss / Admin-Umschalter
+        tk.Label(h, text="🔐  Parameter & Berechtigungen", bg=BG, fg=INK,
+                 font=(FONT, 15, "bold")).pack(side="left", padx=(22, 6), pady=12)
         self.lock_btn = tk.Button(h, text="🔒  Ansehen", command=self.toggle_admin,
-                                  bg="#16395C", fg="white", relief="flat",
+                                  bg=SIDEBAR, fg="white", relief="flat",
                                   font=(FONT, 10, "bold"), padx=14, pady=7, cursor="hand2",
-                                  activebackground="#1C476E", activeforeground="white")
-        self.lock_btn.pack(side="right", padx=(0, 18))
-
-        sw = tk.Frame(h, bg=SIDEBAR)
-        sw.pack(side="right", padx=4)
-        self.nav_btns = {}
-        for key, text in (("matrix", "📋  Übersicht"), ("ma", "👤  Mitarbeiter"),
-                          ("rollen", "🧩  Rollen"), ("katalog", "🗂  Katalog"),
-                          ("einst", "⚙  Einstellungen"), ("audit", "📜  Protokoll")):
-            b = tk.Button(sw, text=text, command=lambda k=key: self._nav(k),
-                          relief="flat", font=(FONT, 10, "bold"), padx=12, pady=7, cursor="hand2")
-            b.pack(side="left", padx=3)
-            self.nav_btns[key] = b
+                                  activebackground=PRIMARY_DARK, activeforeground="white")
+        self.lock_btn.pack(side="right", padx=(0, 22))
 
     def _nav(self, key):
         {"matrix": self.show_matrix, "ma": self.show_mitarbeiter,
@@ -348,15 +517,12 @@ class App:
          "einst": self.show_einstellungen, "audit": self.show_audit}[key]()
 
     def _nav_state(self):
-        for key, b in self.nav_btns.items():
-            if self.view == key:
-                b.configure(bg="white", fg=PRIMARY, activebackground="white")
-            else:
-                b.configure(bg=SIDEBAR, fg=SIDEBAR_TEXT, activebackground=SIDEBAR)
+        # Aktiven Eintrag in der Sidebar hervorheben.
+        self.sidebar.set_active(self.view)
 
-    def _build_status(self):
+    def _build_status(self, parent):
         self.status = tk.StringVar(value="Bereit.")
-        s = tk.Frame(self.root, bg="#E3EAF1", height=26)
+        s = tk.Frame(parent, bg="#E3EAF1", height=26)
         s.pack(side="bottom", fill="x")
         tk.Label(s, textvariable=self.status, bg="#E3EAF1", fg=MUTED,
                  font=(FONT, 9), anchor="w").pack(side="left", padx=14)
@@ -432,8 +598,8 @@ class App:
     def _after_mode_change(self, msg):
         self.lock_btn.configure(
             text=("🔓  Admin" if self.admin else "🔒  Ansehen"),
-            bg=(SUCCESS if self.admin else "#16395C"),
-            activebackground=("#0D6630" if self.admin else "#1C476E"))
+            bg=(SUCCESS if self.admin else SIDEBAR),
+            activebackground=(theme.SUCCESS_DARK if self.admin else PRIMARY_DARK))
         self._refresh_mode_label()
         self.status.set(msg)
         self._nav(self.view)  # aktuelle Ansicht mit neuen Rechten neu zeichnen
@@ -470,7 +636,7 @@ class App:
             "SELECT id,vorname,name,abteilung,position FROM tbl_mitarbeiter "
             "ORDER BY name, vorname").fetchall()]
         self.berecht = [dict(r) for r in con.execute(
-            "SELECT * FROM tbl_berechtigung WHERE aktiv=1 ORDER BY sort, modul, titel").fetchall()]
+            "SELECT * FROM tbl_berechtigung WHERE aktiv=1 ORDER BY sort, id").fetchall()]
         self.rollen = [dict(r) for r in con.execute(
             "SELECT * FROM tbl_rolle ORDER BY ist_admin DESC, name").fetchall()]
         rr = con.execute("SELECT rolle_id, berechtigung_id FROM tbl_rolle_recht").fetchall()
@@ -622,6 +788,24 @@ class App:
         if self.sel_ma is None or self.sel_ma not in {e["id"] for e in self.emps}:
             self.sel_ma = self.emps[0]["id"]
 
+        # Aktionsleiste: Sammel-Zuweisung + Rechte kopieren/übertragen
+        tb = tk.Frame(self.main, bg=CARD, height=48)
+        tb.pack(side="top", fill="x")
+        tb.configure(highlightbackground=BORDER, highlightthickness=1)
+        tk.Label(tb, text="Mitarbeiter-Berechtigungen", bg=CARD, fg=PRIMARY,
+                 font=(FONT, 12, "bold")).pack(side="left", padx=16, pady=10)
+        if self.admin:
+            tk.Button(tb, text="👥  Rolle an mehrere zuweisen", command=self._bulk_role_dialog,
+                      bg=PRIMARY, fg="white", relief="flat", font=(FONT, 10, "bold"),
+                      padx=12, pady=6, cursor="hand2").pack(side="left", padx=(8, 4), pady=8)
+            tk.Button(tb, text="📋  Rechte kopieren / übertragen",
+                      command=lambda: self._copy_rights_dialog(self.sel_ma),
+                      bg=ACCENT, fg="white", relief="flat", font=(FONT, 10, "bold"),
+                      padx=12, pady=6, cursor="hand2").pack(side="left", padx=4, pady=8)
+        else:
+            tk.Label(tb, text="Zum Zuweisen/Kopieren Admin-Modus aktivieren (Schloss oben rechts).",
+                     bg=CARD, fg=FAINT, font=(FONT, 9)).pack(side="left", padx=10)
+
         body = tk.Frame(self.main, bg=BG)
         body.pack(fill="both", expand=True)
 
@@ -664,6 +848,11 @@ class App:
 
         head = tk.Frame(self.ma_detail, bg=BG)
         head.pack(fill="x", padx=18, pady=(14, 6))
+        if self.admin:
+            tk.Button(head, text="→ Rechte auf andere übertragen",
+                      command=lambda src=self.sel_ma: self._copy_rights_dialog(src),
+                      bg="#EDF1F6", fg=PRIMARY, relief="flat", font=(FONT, 9, "bold"),
+                      padx=10, pady=5, cursor="hand2").pack(side="right", anchor="n")
         tk.Label(head, text=f"{e['vorname']} {e['name']}".strip(), bg=BG, fg=INK,
                  font=(FONT, 18, "bold")).pack(anchor="w")
         sub = " · ".join(x for x in [e.get("abteilung"), e.get("position")] if x)
@@ -792,6 +981,229 @@ class App:
         _audit("recht_override", f"{self._name(self.sel_ma)} · '{self.b_by_id[bid]['titel']}' {akt}")
         self.load()
         self._draw_ma_detail()
+
+    # ---- Sammel-Zuweisung & Kopieren -------------------------------------
+    def _emp_multipicker(self, parent, exclude=None, preselect=None, height=12):
+        """Scrollbare Mehrfachauswahl der Mitarbeiter (Listbox 'extended') mit
+        Alle/Keine und Abteilungsfilter. Liefert eine Funktion -> Liste von IDs."""
+        exclude = exclude or set()
+        emps = [e for e in self.emps if e["id"] not in exclude]
+        box = tk.Frame(parent, bg=BG)
+        top = tk.Frame(box, bg=BG)
+        top.pack(fill="x", pady=(0, 4))
+        tk.Label(top, text="Abteilung:", bg=BG, fg=MUTED, font=(FONT, 9)).pack(side="left")
+        depts = ["Alle"] + sorted({(e.get("abteilung") or "—") for e in emps})
+        dept_cb = ttk.Combobox(top, state="readonly", width=18, values=depts)
+        dept_cb.set("Alle")
+        dept_cb.pack(side="left", padx=6)
+        lb = tk.Listbox(box, selectmode="extended", height=height, bg=CARD, fg=INK,
+                        font=(FONT, 10), bd=0, highlightthickness=1,
+                        highlightbackground=BORDER, activestyle="none",
+                        selectbackground=SELECT_BG, selectforeground=PRIMARY,
+                        exportselection=False)
+        lb.pack(fill="both", expand=True, pady=2)
+        shown = []  # parallele Liste der angezeigten emp-ids
+
+        def refill():
+            d = dept_cb.get()
+            lb.delete(0, "end")
+            shown.clear()
+            for e in emps:
+                if d != "Alle" and (e.get("abteilung") or "—") != d:
+                    continue
+                shown.append(e["id"])
+                lb.insert("end", f"  {e['vorname']} {e['name']}".rstrip()
+                          + (f"   ({e['abteilung']})" if e.get("abteilung") else ""))
+            if preselect:
+                for i, mid in enumerate(shown):
+                    if mid in preselect:
+                        lb.selection_set(i)
+        refill()
+        dept_cb.bind("<<ComboboxSelected>>", lambda _e: refill())
+        btnrow = tk.Frame(box, bg=BG)
+        btnrow.pack(fill="x", pady=(4, 0))
+        tk.Button(btnrow, text="Alle", command=lambda: lb.selection_set(0, "end"),
+                  padx=10, pady=3, cursor="hand2").pack(side="left")
+        tk.Button(btnrow, text="Keine", command=lambda: lb.selection_clear(0, "end"),
+                  padx=10, pady=3, cursor="hand2").pack(side="left", padx=6)
+        return box, (lambda: [shown[i] for i in lb.curselection()])
+
+    def _bulk_role_dialog(self):
+        if not self._require_admin():
+            return
+        if not self.rollen:
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Rolle an mehrere Mitarbeiter")
+        win.configure(bg=BG)
+        win.transient(self.root)
+        win.grab_set()
+        win.geometry("520x560")
+        tk.Label(win, text="Rolle an mehrere Mitarbeiter zuweisen",
+                 bg=BG, fg=INK, font=(FONT, 14, "bold")).pack(anchor="w", padx=16, pady=(14, 2))
+        tk.Label(win, text="Wähle eine Rolle, die Aktion und die betroffenen Mitarbeiter.",
+                 bg=BG, fg=MUTED, font=(FONT, 10)).pack(anchor="w", padx=16)
+
+        row = tk.Frame(win, bg=BG)
+        row.pack(fill="x", padx=16, pady=(12, 4))
+        tk.Label(row, text="Rolle:", bg=BG, fg=PRIMARY, font=(FONT, 10, "bold")).pack(side="left")
+        role_cb = ttk.Combobox(row, state="readonly", width=30,
+                               values=[r["name"] + ("  ★" if r["ist_admin"] else "") for r in self.rollen])
+        role_cb.current(0)
+        role_cb.pack(side="left", padx=8)
+
+        mode = tk.StringVar(value="zuweisen")
+        mrow = tk.Frame(win, bg=BG)
+        mrow.pack(fill="x", padx=16, pady=(2, 8))
+        tk.Radiobutton(mrow, text="Zuweisen (hinzufügen)", variable=mode, value="zuweisen",
+                       bg=BG, fg=INK, font=(FONT, 10), selectcolor=CARD, activebackground=BG).pack(side="left")
+        tk.Radiobutton(mrow, text="Entfernen", variable=mode, value="entfernen",
+                       bg=BG, fg=INK, font=(FONT, 10), selectcolor=CARD, activebackground=BG).pack(side="left", padx=12)
+
+        tk.Label(win, text="Mitarbeiter:", bg=BG, fg=PRIMARY, font=(FONT, 10, "bold")).pack(anchor="w", padx=16)
+        picker, get_ids = self._emp_multipicker(win, height=12)
+        picker.pack(fill="both", expand=True, padx=16, pady=(2, 8))
+
+        def apply():
+            targets = get_ids()
+            if not targets:
+                messagebox.showinfo("Hinweis", "Bitte mindestens einen Mitarbeiter wählen.", parent=win)
+                return
+            r = self.rollen[role_cb.current()]
+            add = (mode.get() == "zuweisen")
+            con = sqlite3.connect(DB_PATH)
+            for mid in targets:
+                if add:
+                    con.execute("INSERT OR IGNORE INTO tbl_ma_rolle(mitarbeiter_id,rolle_id) VALUES(?,?)", (mid, r["id"]))
+                else:
+                    con.execute("DELETE FROM tbl_ma_rolle WHERE mitarbeiter_id=? AND rolle_id=?", (mid, r["id"]))
+            con.commit()
+            con.close()
+            _audit("rolle_sammel", f"Rolle '{r['name']}' {'zugewiesen an' if add else 'entfernt von'} "
+                                   f"{len(targets)} Mitarbeiter: " + ", ".join(self._name(m) for m in targets))
+            win.destroy()
+            self.load()
+            self.show_mitarbeiter()
+            self.status.set(f"Rolle '{r['name']}' bei {len(targets)} Mitarbeiter(n) "
+                            f"{'zugewiesen' if add else 'entfernt'}.")
+
+        bar = tk.Frame(win, bg=BG)
+        bar.pack(fill="x", padx=16, pady=12)
+        tk.Button(bar, text="Abbrechen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8, 0))
+        tk.Button(bar, text="Anwenden", command=apply, bg=PRIMARY, fg="white", relief="flat",
+                  padx=18, pady=8, cursor="hand2").pack(side="right")
+
+    def _copy_rights_dialog(self, source_id=None):
+        if not self._require_admin():
+            return
+        if len(self.emps) < 2:
+            messagebox.showinfo("Rechte kopieren",
+                                "Dafür werden mindestens zwei Mitarbeiter benötigt.", parent=self.root)
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Rechte kopieren / übertragen")
+        win.configure(bg=BG)
+        win.transient(self.root)
+        win.grab_set()
+        win.geometry("560x640")
+        tk.Label(win, text="Rechte von einem Mitarbeiter übertragen",
+                 bg=BG, fg=INK, font=(FONT, 14, "bold")).pack(anchor="w", padx=16, pady=(14, 2))
+        tk.Label(win, text="Kopiert die Rollen (und optional die persönlichen Ausnahmen) eines\n"
+                           "Vorlage-Mitarbeiters auf einen oder mehrere Ziel-Mitarbeiter.",
+                 bg=BG, fg=MUTED, font=(FONT, 10), justify="left").pack(anchor="w", padx=16)
+
+        row = tk.Frame(win, bg=BG)
+        row.pack(fill="x", padx=16, pady=(12, 6))
+        tk.Label(row, text="Vorlage (Quelle):", bg=BG, fg=PRIMARY, font=(FONT, 10, "bold")).pack(side="left")
+        src_cb = ttk.Combobox(row, state="readonly", width=34,
+                              values=[f"{e['vorname']} {e['name']}".strip()
+                                      + (f"  ({e['abteilung']})" if e.get("abteilung") else "")
+                                      for e in self.emps])
+        src_idx = next((i for i, e in enumerate(self.emps) if e["id"] == source_id), 0)
+        src_cb.current(src_idx)
+        src_cb.pack(side="left", padx=8)
+
+        opt = tk.Frame(win, bg=BG)
+        opt.pack(fill="x", padx=16, pady=(2, 4))
+        copy_roles = tk.BooleanVar(value=True)
+        copy_overrides = tk.BooleanVar(value=False)
+        tk.Checkbutton(opt, text="Rollen kopieren", variable=copy_roles, bg=BG, fg=INK,
+                       font=(FONT, 10), selectcolor=CARD, activebackground=BG).pack(anchor="w")
+        tk.Checkbutton(opt, text="Persönliche Ausnahmen (Freischaltungen/Sperren) mitkopieren",
+                       variable=copy_overrides, bg=BG, fg=INK, font=(FONT, 10),
+                       selectcolor=CARD, activebackground=BG).pack(anchor="w")
+
+        mode = tk.StringVar(value="ergaenzen")
+        mrow = tk.Frame(win, bg=BG)
+        mrow.pack(fill="x", padx=16, pady=(2, 8))
+        tk.Radiobutton(mrow, text="Ergänzen (zu vorhandenen hinzufügen)", variable=mode, value="ergaenzen",
+                       bg=BG, fg=INK, font=(FONT, 10), selectcolor=CARD, activebackground=BG).pack(anchor="w")
+        tk.Radiobutton(mrow, text="Ersetzen (Ziel zuerst leeren, dann übernehmen)", variable=mode, value="ersetzen",
+                       bg=BG, fg=INK, font=(FONT, 10), selectcolor=CARD, activebackground=BG).pack(anchor="w")
+
+        tk.Label(win, text="Ziel-Mitarbeiter:", bg=BG, fg=PRIMARY, font=(FONT, 10, "bold")).pack(anchor="w", padx=16)
+        # Quelle aus Zielauswahl ausschließen; bei Wechsel der Quelle neu aufbauen
+        picker_holder = tk.Frame(win, bg=BG)
+        picker_holder.pack(fill="both", expand=True, padx=16, pady=(2, 8))
+        state = {"get_ids": None}
+
+        def rebuild_picker(*_a):
+            for w in picker_holder.winfo_children():
+                w.destroy()
+            src = self.emps[src_cb.current()]["id"]
+            pk, getter = self._emp_multipicker(picker_holder, exclude={src}, height=11)
+            pk.pack(fill="both", expand=True)
+            state["get_ids"] = getter
+        rebuild_picker()
+        src_cb.bind("<<ComboboxSelected>>", rebuild_picker)
+
+        def apply():
+            src = self.emps[src_cb.current()]["id"]
+            targets = state["get_ids"]() if state["get_ids"] else []
+            if not targets:
+                messagebox.showinfo("Hinweis", "Bitte mindestens einen Ziel-Mitarbeiter wählen.", parent=win)
+                return
+            if not copy_roles.get() and not copy_overrides.get():
+                messagebox.showinfo("Hinweis", "Bitte mindestens 'Rollen' oder 'Ausnahmen' wählen.", parent=win)
+                return
+            ersetzen = (mode.get() == "ersetzen")
+            src_roles = sorted(self.ma_roles.get(src, set()))
+            src_ovr = [(bid, erl) for (mid, bid), erl in self.overrides.items() if mid == src]
+            con = sqlite3.connect(DB_PATH)
+            for mid in targets:
+                if copy_roles.get():
+                    if ersetzen:
+                        con.execute("DELETE FROM tbl_ma_rolle WHERE mitarbeiter_id=?", (mid,))
+                    for rid in src_roles:
+                        con.execute("INSERT OR IGNORE INTO tbl_ma_rolle(mitarbeiter_id,rolle_id) VALUES(?,?)", (mid, rid))
+                if copy_overrides.get():
+                    if ersetzen:
+                        con.execute("DELETE FROM tbl_ma_recht_override WHERE mitarbeiter_id=?", (mid,))
+                    for bid, erl in src_ovr:
+                        con.execute("INSERT INTO tbl_ma_recht_override(mitarbeiter_id,berechtigung_id,erlaubt) "
+                                    "VALUES(?,?,?) ON CONFLICT(mitarbeiter_id,berechtigung_id) "
+                                    "DO UPDATE SET erlaubt=excluded.erlaubt", (mid, bid, erl))
+            con.commit()
+            con.close()
+            was = []
+            if copy_roles.get():
+                was.append(f"{len(src_roles)} Rolle(n)")
+            if copy_overrides.get():
+                was.append(f"{len(src_ovr)} Ausnahme(n)")
+            _audit("rechte_kopiert",
+                   f"{' + '.join(was)} von {self._name(src)} ({mode.get()}) auf "
+                   f"{len(targets)} Mitarbeiter: " + ", ".join(self._name(m) for m in targets))
+            win.destroy()
+            self.load()
+            self.show_mitarbeiter()
+            self.status.set(f"{' + '.join(was)} von {self._name(src)} auf "
+                            f"{len(targets)} Mitarbeiter übertragen ({mode.get()}).")
+
+        bar = tk.Frame(win, bg=BG)
+        bar.pack(fill="x", padx=16, pady=12)
+        tk.Button(bar, text="Abbrechen", command=win.destroy, padx=14, pady=7).pack(side="right", padx=(8, 0))
+        tk.Button(bar, text="Übertragen", command=apply, bg=PRIMARY, fg="white", relief="flat",
+                  padx=18, pady=8, cursor="hand2").pack(side="right")
 
     # =========================================================================
     #  ANSICHT 3 · ROLLEN
@@ -1222,8 +1634,78 @@ def run_standalone():
     root.mainloop()
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+#  TESTUMGEBUNG – isolierte DB, Demo-Mitarbeiter, Admin sofort offen
+# ──────────────────────────────────────────────────────────────────────────────
+DEMO_MITARBEITER = [
+    # (vorname, name, abteilung, position, rollen-name, [extra-allow], [extra-deny])
+    ("Anna",  "Maier",  "Geschäftsführung", "Geschäftsführung", "Geschäftsführung", [], []),
+    ("Ben",   "Krause", "Vertrieb",         "Außendienst",      "Vertrieb / Außendienst",
+        ["einkauf.margenrechner"], ["rabatte.ansehen"]),
+    ("Carla", "Sommer", "Vertrieb",         "Innendienst",      "Innendienst", ["gdp.retoure"], []),
+    ("David", "Reuter", "Lager",            "Logistik",         "Lager / Logistik", [], []),
+    ("Eva",   "Lang",   "Labor",            "QS / Analytik",    "Labor / QS", [], []),
+    ("Felix", "Thiel",  "Buchhaltung",      "Buchhalter",       "Buchhaltung / Faktura", [], []),
+    ("Gina",  "Wolf",   "Einkauf",          "Einkäuferin",      "Einkauf", [], []),
+    ("Hans",  "Berg",   "Qualität",         "GDP-Beauftragter", "GDP-Beauftragter", [], []),
+]
+
+
+def _seed_testdaten():
+    """Legt Demo-Mitarbeiter inkl. Rollen-Zuordnungen und ein paar persönlichen
+    Ausnahmen an – nur, wenn die Test-DB noch keine Mitarbeiter hat (damit eigene
+    Experimente über Neustarts erhalten bleiben)."""
+    con = sqlite3.connect(DB_PATH)
+    if con.execute("SELECT COUNT(*) FROM tbl_mitarbeiter").fetchone()[0]:
+        con.close()
+        return
+    role_id = {r[0]: r[1] for r in con.execute("SELECT name, id FROM tbl_rolle")}
+    berecht_id = {r[0]: r[1] for r in con.execute("SELECT schluessel, id FROM tbl_berechtigung")}
+    for vn, nn, ab, po, rolle, allow, deny in DEMO_MITARBEITER:
+        cur = con.execute("INSERT INTO tbl_mitarbeiter(vorname,name,abteilung,position) "
+                          "VALUES(?,?,?,?)", (vn, nn, ab, po))
+        mid = cur.lastrowid
+        if rolle in role_id:
+            con.execute("INSERT OR IGNORE INTO tbl_ma_rolle(mitarbeiter_id,rolle_id) VALUES(?,?)",
+                        (mid, role_id[rolle]))
+        for key in allow:
+            if key in berecht_id:
+                con.execute("INSERT OR IGNORE INTO tbl_ma_recht_override(mitarbeiter_id,berechtigung_id,erlaubt) "
+                            "VALUES(?,?,1)", (mid, berecht_id[key]))
+        for key in deny:
+            if key in berecht_id:
+                con.execute("INSERT OR IGNORE INTO tbl_ma_recht_override(mitarbeiter_id,berechtigung_id,erlaubt) "
+                            "VALUES(?,?,0)", (mid, berecht_id[key]))
+    con.commit()
+    con.close()
+
+
+def run_testmode():
+    """Startet die App in einer eigenen Test-Datenbank mit Demo-Daten und sofort
+    geöffnetem Admin-Modus (volle Rechte, keine PIN). Die echte NMGone-Datenbank
+    wird dabei NICHT berührt."""
+    global DB_PATH
+    from app.config import DATA_DIR
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DB_PATH = DATA_DIR / "nmg_parameter_testumgebung.sqlite"  # isolierte Test-DB
+    init_db()
+    _seed_testdaten()
+
+    root = tk.Tk()
+    app = App(root)
+    root.title("NMGone · Parameter & Berechtigungen — TESTUMGEBUNG (volle Rechte)")
+    # Admin ohne PIN sofort aktiv schalten
+    app.admin = True
+    app._after_mode_change("TESTUMGEBUNG – volle Rechte aktiv. Eigene Test-Datenbank, "
+                           "echte Daten bleiben unberührt.")
+    root.mainloop()
+
+
 def main():
-    run_standalone()
+    if "--test" in sys.argv or "--testmode" in sys.argv:
+        run_testmode()
+    else:
+        run_standalone()
 
 
 if __name__ == "__main__":

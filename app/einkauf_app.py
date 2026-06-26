@@ -3332,6 +3332,14 @@ def run_standalone():
     root.title("NMG Einkauf")
     root.geometry("1160x760")
     root.minsize(1000, 640)
+    # Im Vollbild (maximiert) starten. 'zoomed' = Windows; sonst -zoomed/Bildschirmgroesse.
+    try:
+        root.state("zoomed")
+    except tk.TclError:
+        try:
+            root.attributes("-zoomed", True)
+        except tk.TclError:
+            root.geometry(f"{root.winfo_screenwidth()}x{root.winfo_screenheight()}+0+0")
     root.configure(bg=SHELL_BG)
     theme.apply_theme(root)
     theme.apply_widget_defaults(root)

@@ -780,31 +780,20 @@ class HilfePanel(tk.Frame):
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
 
-        # Linke Sidebar (dunkel, einheitlich mit NMGone/Kasse/Report)
-        nav = tk.Frame(self, bg=theme.SIDEBAR, width=244)
-        nav.grid(row=0, column=0, sticky="ns")
-        nav.grid_propagate(False)
-
+        # Linke Sidebar (zentrale theme.Sidebar, einheitlich mit NMGone/Kasse/…)
+        self.sidebar = theme.Sidebar(self, width=244, title="Hilfe",
+                                     subtitle="Handbuch · Schritt für Schritt")
+        self.sidebar.grid(row=0, column=0, sticky="ns")
         self._app_icon = theme.load_icon(ASSETS_DIR / "Hilfe.ico", 56)
         if self._app_icon:
-            tk.Label(nav, image=self._app_icon, bg=theme.SIDEBAR).pack(anchor="w", padx=20, pady=(18, 2))
-        tk.Label(nav, text="Hilfe", bg=theme.SIDEBAR, fg="white",
-                 font=(theme.FONT, 16, "bold")).pack(anchor="w", padx=20, pady=(2, 2))
-        tk.Label(nav, text="Handbuch · Schritt für Schritt", bg=theme.SIDEBAR,
-                 fg=theme.SIDEBAR_MUTED, font=(theme.FONT, 9)).pack(anchor="w", padx=20, pady=(0, 14))
-
+            self.sidebar.set_logo(self._app_icon)
         for key, icon, label in TOPICS:
-            b = tk.Button(nav, text=f"   {icon}   {label}", anchor="w", relief="flat",
-                          bg=theme.SIDEBAR, fg=theme.SIDEBAR_TEXT, activebackground=theme.SIDEBAR_ACTIVE,
-                          activeforeground="white", bd=0, font=(theme.FONT, 11),
-                          cursor="hand2", command=lambda k=key: self._select_topic(k))
-            b.pack(fill="x", padx=10, pady=1, ipady=8)
-            self._nav_buttons[key] = b
+            self.sidebar.add_item(key, icon, label, lambda k=key: self._select_topic(k))
 
-        tk.Frame(nav, bg=theme.SIDEBAR).pack(fill="both", expand=True)
-        nmb = tk.Button(nav, text="↩  NMGone öffnen", relief="flat", bg=theme.SIDEBAR_ACTIVE,
-                        fg="white", activebackground="#1B5085", activeforeground="white", bd=0,
-                        font=(theme.FONT, 10), cursor="hand2", command=self._open_nmgone)
+        nmb = tk.Button(self.sidebar.footer(), text="↩  NMGone öffnen", relief="flat",
+                        bg=theme.SIDEBAR_ACTIVE, fg="white", activebackground="#1B5085",
+                        activeforeground="white", bd=0, font=(theme.FONT, 10),
+                        cursor="hand2", command=self._open_nmgone)
         nmb.pack(fill="x", padx=10, pady=(2, 18), ipady=8)
 
         # Rechter Inhalt (scrollbar)
@@ -825,10 +814,10 @@ class HilfePanel(tk.Frame):
         head_text = tk.Frame(self.header, bg=theme.BG)
         head_text.pack(side="left", fill="x", expand=True)
         self._title_lbl = tk.Label(head_text, text="", bg=theme.BG, fg=theme.INK,
-                                    font=(theme.FONT, 22, "bold"))
+                                    font=(theme.FONT, 18, "bold"))
         self._title_lbl.pack(anchor="w")
         self._subtitle_lbl = tk.Label(head_text, text="", bg=theme.BG, fg=theme.MUTED,
-                                       font=(theme.FONT, 12))
+                                       font=(theme.FONT, 11))
         self._subtitle_lbl.pack(anchor="w", pady=(2, 0))
 
         # Scrollbarer Bereich: Canvas + inneres Frame
@@ -859,9 +848,7 @@ class HilfePanel(tk.Frame):
     # ── Themenwechsel ────────────────────────────────────────────────────────
     def _select_topic(self, key):
         self._topic = key
-        for k, b in self._nav_buttons.items():
-            b.configure(bg=theme.SIDEBAR_ACTIVE if k == key else theme.SIDEBAR,
-                        fg="white" if k == key else theme.SIDEBAR_TEXT)
+        self.sidebar.set_active(key)
         data = HELP_CONTENT.get(key, {})
         self._title_lbl.configure(text=data.get("title", ""))
         self._subtitle_lbl.configure(text=data.get("subtitle", ""))
@@ -1032,6 +1019,14 @@ def run_standalone():
     root.title(f"NMGone{DEMO_SUFFIX} Hilfe")
     root.geometry("1180x800")
     root.minsize(980, 640)
+    # Im Vollbild (maximiert) starten. 'zoomed' = Windows; sonst -zoomed/Bildschirmgroesse.
+    try:
+        root.state("zoomed")
+    except tk.TclError:
+        try:
+            root.attributes("-zoomed", True)
+        except tk.TclError:
+            root.geometry(f"{root.winfo_screenwidth()}x{root.winfo_screenheight()}+0+0")
     root.configure(bg=theme.BG)
     theme.apply_theme(root)
     theme.apply_widget_defaults(root)

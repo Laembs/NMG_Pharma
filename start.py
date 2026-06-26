@@ -37,6 +37,10 @@ if __name__ == "__main__":
     elif "--parameter" in sys.argv:
         from app.parameter_app import run_standalone
         run_standalone()
+    # NMGone.exe --kunden startet direkt die Kunden-App (CRM, Apotheken-Kunden).
+    elif "--kunden" in sys.argv:
+        from app.kunden_app import run_standalone
+        run_standalone()
     else:
         from app.gui import main
         main()
