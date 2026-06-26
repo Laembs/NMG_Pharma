@@ -25,6 +25,9 @@ whatsapp_config.txt
 # === Lokale Laufzeit-State-Files ===
 logs/
 language.json
+cockpit_auth_cache.json
+cockpit_layout_*.json
+cockpit_config.json
 
 # === Stray empty file ===
 /python
