@@ -5,7 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ titel|default("NMGone-Web") }} · Pharma-Suite</title>
   <link rel="stylesheet" href="/static/app.css">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#0B4A86">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
   <script src="/static/htmx.min.js" defer></script>
+  <script>
+    // PWA: Service Worker registrieren (eigenes App-Icon, „zum Startbildschirm
+    // hinzufügen", Cache-Notnagel bei Netzausfall). Im Desktop-Fenster (pywebview)
+    // schadet es nicht; ohne HTTPS/localhost wird es vom Browser ignoriert.
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", function () {
+        navigator.serviceWorker.register("/sw.js").catch(function () {});
+      });
+    }
+  </script>
 </head>
 <body hx-boost="true">
   <div class="layout">

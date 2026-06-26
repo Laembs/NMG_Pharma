@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+  <header class="page-head">
+    <h1>Kasse</h1>
+    <div class="head-actions">
+      <a class="btn" href="/kasse/lager">Lagerbestand</a>
+      <a class="btn btn-primary" href="/kasse/verkauf">+ Verkauf</a>
+    </div>
+  </header>
+
+  <div class="kacheln">
+    <div class="kachel kachel-aus">
+      <div class="kachel-titel">{{ daten.auftraege_heute }}</div>
+      <div class="kachel-desc">Aufträge heute</div>
+    </div>
+    <div class="kachel kachel-aus">
+      <div class="kachel-titel">{{ daten.offene }}</div>
+      <div class="kachel-desc">offene Aufträge</div>
+    </div>
+    <div class="kachel kachel-aus">
+      <div class="kachel-titel">{{ "%.2f"|format(daten.umsatz_heute) }} €</div>
+      <div class="kachel-desc">Umsatz heute</div>
+    </div>
+    <div class="kachel kachel-aus">
+      <div class="kachel-titel">{{ daten.lagerpositionen }}</div>
+      <div class="kachel-desc">Lagerpositionen</div>
+    </div>
+  </div>
+
+  <section class="card">
+    <h2>Letzte Vorgänge</h2>
+    {% if daten.letzte %}
+    <table class="tabelle">
+      <thead><tr>
+        <th>Nr.</th><th>Kunde</th><th>Datum</th>
+        <th class="num">Summe</th><th>Status</th>
+      </tr></thead>
+      <tbody>
+      {% for b in daten.letzte %}
+        <tr>
+          <td>{{ b.id }}</td>
+          <td>{{ b.kunde_name }}</td>
+          <td>{{ b.datum }}</td>
+          <td class="num">{{ "%.2f"|format(b.summe or 0) }} €</td>
+          <td>{{ b.status }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">Noch keine Verkäufe erfasst. Der Verkaufs-Flow folgt in der
+       nächsten Ausbaustufe.</p>
+    {% endif %}
+  </section>
+{% endblock %}

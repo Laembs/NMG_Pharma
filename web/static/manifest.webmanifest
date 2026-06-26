@@ -1,0 +1,16 @@
+{
+  "name": "NMGone Kasse",
+  "short_name": "Kasse",
+  "description": "Verkauf & Wareneingang – Pharma-Großhandel",
+  "start_url": "/kasse",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0B4A86",
+  "theme_color": "#0B4A86",
+  "lang": "de",
+  "icons": [
+    { "src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

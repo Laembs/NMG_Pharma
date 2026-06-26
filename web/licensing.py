@@ -16,7 +16,7 @@ from .tenancy import platform_con
 MODULE_CATALOG: list[dict] = [
     {"key": "personal",  "titel": "Personal",  "desc": "Mitarbeiter, Urlaub, Zeit & Akte",   "ready": True},
     {"key": "faktura",   "titel": "Faktura",   "desc": "Rechnungen & Gutschriften",          "ready": False},
-    {"key": "kasse",     "titel": "Kasse",     "desc": "Verkauf & Wareneingang",             "ready": False},
+    {"key": "kasse",     "titel": "Kasse",     "desc": "Verkauf & Wareneingang",             "ready": True},
     {"key": "einkauf",   "titel": "Einkauf",   "desc": "Beschaffung EU-Ausland",             "ready": False},
     {"key": "gdp",       "titel": "GDP",       "desc": "Wareneingang & Retouren",            "ready": False},
     {"key": "meldungen", "titel": "Meldungen", "desc": "GDP-Meldewesen & Kühlkette",         "ready": False},

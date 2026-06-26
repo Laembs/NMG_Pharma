@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+  <header class="page-head">
+    <h1>Lagerbestand</h1>
+    <div class="head-actions">
+      <a class="btn" href="/kasse">Zur Kasse</a>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2>Bestand je PZN / Charge / Verfall</h2>
+    {% if bestand %}
+    <table class="tabelle">
+      <thead><tr>
+        <th>PZN</th><th>Bezeichnung</th><th>Charge</th>
+        <th>Verfall</th><th class="num">Menge</th>
+      </tr></thead>
+      <tbody>
+      {% for p in bestand %}
+        <tr>
+          <td>{{ p.pzn }}</td>
+          <td>{{ p.bezeichnung }}</td>
+          <td>{{ p.charge }}</td>
+          <td>{{ p.verfall }}</td>
+          <td class="num">{{ p.menge }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">Noch kein Bestand. Wareneingang und Verkauf füllen das Lager
+       in den nächsten Ausbaustufen.</p>
+    {% endif %}
+  </section>
+{% endblock %}

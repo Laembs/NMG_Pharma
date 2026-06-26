@@ -9,13 +9,13 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import auth
 from .licensing import module_fuer_dashboard
-from .routers import personal
+from .routers import kasse, personal
 from .templating import page, templates
 from .tenancy import init_platform_db, platform_con
 
@@ -25,9 +25,25 @@ app = FastAPI(title="NMGone-Web (Pilot)")
 
 app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 app.include_router(personal.router)
+app.include_router(kasse.router)
 
-# Pfade, die ohne Login erreichbar sind.
-_OEFFENTLICH = ("/login", "/logout", "/static", "/healthz")
+# Pfade, die ohne Login erreichbar sind (inkl. PWA-Dateien im Root-Scope).
+_OEFFENTLICH = ("/login", "/logout", "/static", "/healthz",
+                "/sw.js", "/manifest.webmanifest")
+
+
+# ── PWA: Service Worker + Manifest im Root-Scope ─────────────────────────────
+# Der Service Worker muss von "/" ausgeliefert werden, damit sein Scope die
+# ganze App umfasst (aus /static/ wäre der Scope zu eng).
+@app.get("/sw.js")
+def service_worker():
+    return FileResponse(str(WEB_DIR / "static" / "sw.js"), media_type="text/javascript")
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    return FileResponse(str(WEB_DIR / "static" / "manifest.webmanifest"),
+                        media_type="application/manifest+json")
 
 
 @app.on_event("startup")
