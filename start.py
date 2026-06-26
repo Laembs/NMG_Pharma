@@ -41,6 +41,10 @@ if __name__ == "__main__":
     elif "--kunden" in sys.argv:
         from app.kunden_app import run_standalone
         run_standalone()
+    # NMGone.exe --buchhaltung startet direkt die Buchhaltungs-App.
+    elif "--buchhaltung" in sys.argv:
+        from app.buchhaltung_app import run_standalone
+        run_standalone()
     else:
         from app.gui import main
         main()
