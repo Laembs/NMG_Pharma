@@ -4,9 +4,15 @@
     <h1>Kasse</h1>
     <div class="head-actions">
       <a class="btn" href="/kasse/lager">Lagerbestand</a>
-      <a class="btn btn-primary" href="/kasse/verkauf">+ Verkauf</a>
+      <a class="btn btn-primary" href="/kasse/verkauf">+ Schnellverkauf</a>
     </div>
   </header>
+
+  {% if request.query_params.get('ok') %}
+    <div class="erfolg">Auftrag #{{ request.query_params.get('ok') }} gespeichert.{%
+      if request.query_params.get('vor') and request.query_params.get('vor') != '0'
+      %} {{ request.query_params.get('vor') }} Stück in Vorbestellung.{% endif %}</div>
+  {% endif %}
 
   <div class="kacheln">
     <div class="kachel kachel-aus">
@@ -32,7 +38,7 @@
     {% if daten.letzte %}
     <table class="tabelle">
       <thead><tr>
-        <th>Nr.</th><th>Kunde</th><th>Datum</th>
+        <th>Nr.</th><th>Kunde</th><th>Erfasst von</th><th>Datum</th>
         <th class="num">Summe</th><th>Status</th>
       </tr></thead>
       <tbody>
@@ -40,6 +46,7 @@
         <tr>
           <td>{{ b.id }}</td>
           <td>{{ b.kunde_name }}</td>
+          <td>{{ b.erfasst_von or "–" }}{% if b.quelle == "online" %} <span class="tag-online">(online)</span>{% endif %}</td>
           <td>{{ b.datum }}</td>
           <td class="num">{{ "%.2f"|format(b.summe or 0) }} €</td>
           <td>{{ b.status }}</td>

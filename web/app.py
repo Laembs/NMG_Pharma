@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import auth, sso
-from .licensing import module_fuer_dashboard
+from .licensing import landing_path, module_fuer_dashboard
 from .routers import kasse, personal
 from .templating import page, templates
 from .tenancy import init_platform_db, platform_con
@@ -69,7 +69,8 @@ def healthz():
 
 @app.get("/")
 def root(request: Request):
-    ziel = "/dashboard" if request.session.get("user") else "/login"
+    user = request.session.get("user")
+    ziel = landing_path(user["firma_id"]) if user else "/login"
     return RedirectResponse(ziel, status_code=303)
 
 
@@ -93,7 +94,7 @@ def login_submit(request: Request,
         return RedirectResponse(
             "/login?fehler=Anmeldung+fehlgeschlagen", status_code=303)
     auth.login_session(request, user)
-    return RedirectResponse("/dashboard", status_code=303)
+    return RedirectResponse(landing_path(user["firma_id"]), status_code=303)
 
 
 @app.get("/logout")

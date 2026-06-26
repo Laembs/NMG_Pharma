@@ -52,7 +52,23 @@ def ensure_schema(con: sqlite3.Connection) -> None:
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         zeit TEXT DEFAULT (datetime('now')),
         benutzer TEXT, aktion TEXT, detail TEXT)""")
+    con.execute("""CREATE TABLE IF NOT EXISTS tbl_kunden (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT, inhaber TEXT, plz TEXT, ort TEXT)""")
+    con.execute("""CREATE TABLE IF NOT EXISTS tbl_artikel (
+        pzn TEXT PRIMARY KEY, bezeichnung TEXT)""")
+    # Migration: woher kam der Auftrag + wer hat ihn erfasst (für die spätere
+    # Zusammenführung mit der Desktop-Kasse: "User (online)").
+    _add_col(con, "tbl_bestellungen", "erfasst_von", "erfasst_von TEXT")
+    _add_col(con, "tbl_bestellungen", "quelle", "quelle TEXT DEFAULT 'online'")
     con.commit()
+
+
+def _add_col(con: sqlite3.Connection, table: str, col: str, ddl: str) -> None:
+    """Fügt eine Spalte hinzu, falls sie noch fehlt (einfache Migration)."""
+    cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()}
+    if col not in cols:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
 
 def uebersicht(con: sqlite3.Connection) -> dict:
@@ -73,7 +89,7 @@ def uebersicht(con: sqlite3.Connection) -> dict:
     lagerpositionen = _scalar("SELECT COUNT(*) FROM tbl_lagerbestand")
 
     letzte = [dict(r) for r in con.execute(
-        """SELECT id, kunde_name, datum, summe, status
+        """SELECT id, kunde_name, datum, summe, status, erfasst_von, quelle
              FROM tbl_bestellungen
             ORDER BY id DESC LIMIT 8""").fetchall()]
 
@@ -92,3 +108,166 @@ def lagerbestand(con: sqlite3.Connection) -> list[dict]:
         """SELECT pzn, bezeichnung, charge, verfall, menge
              FROM tbl_lagerbestand
             ORDER BY bezeichnung, verfall""").fetchall()]
+
+
+# ── Schnellverkauf (Handy: Kunde + Artikel -> bestellen/vorbestellen) ─────────
+def artikel_vorschlag(con: sqlite3.Connection) -> list[dict]:
+    """PZN + Bezeichnung fuer die Artikel-Auswahl (aus dem Lagerbestand).
+
+    Vorbestellungen duerfen auch nicht gelagerte Artikel enthalten – die Liste
+    dient nur als Tipphilfe (datalist), nicht als Zwang.
+    """
+    return [dict(r) for r in con.execute(
+        """SELECT pzn, bezeichnung FROM tbl_lagerbestand
+            WHERE pzn IS NOT NULL AND pzn <> ''
+            GROUP BY pzn ORDER BY bezeichnung""").fetchall()]
+
+
+def kunden_vorschlag(con: sqlite3.Connection) -> list[str]:
+    """Bisher erfasste Kundennamen (Tipphilfe fuer das Kundenfeld)."""
+    return [r[0] for r in con.execute(
+        """SELECT kunde_name FROM tbl_bestellungen
+            WHERE kunde_name IS NOT NULL AND kunde_name <> ''
+            GROUP BY kunde_name ORDER BY kunde_name""").fetchall()]
+
+
+def schnellverkauf_speichern(con: sqlite3.Connection, kunde_name: str, art: str,
+                             liefertermin: str, positionen, benutzer: str) -> int:
+    """Legt eine Bestellung bzw. Vorbestellung mit Positionen an.
+
+    ``art`` = "Bestellung" oder "Vorbestellung" (steuert den Status). ``positionen``
+    ist eine Liste von (pzn, bezeichnung, menge, einzelpreis) – leere/0-Mengen-Zeilen
+    werden uebersprungen. Gibt die neue Bestell-ID zurueck (0, wenn keine gueltige
+    Position dabei war).
+    """
+    ist_vor = (art or "").strip().lower().startswith("vor")
+    status = "vorbestellt" if ist_vor else "offen"
+    heute = date.today().isoformat()
+
+    rows, summe = [], 0.0
+    for pzn, bez, menge, preis in positionen:
+        pzn = (pzn or "").strip()
+        bez = (bez or "").strip()
+        if not pzn and not bez:
+            continue
+        try:
+            m = int(float(str(menge or "0").replace(",", ".")))
+        except ValueError:
+            m = 0
+        try:
+            p = float(str(preis or "0").replace(",", "."))
+        except ValueError:
+            p = 0.0
+        if m <= 0:
+            continue
+        rows.append((pzn, bez, m, p))
+        summe += m * p
+    if not rows:
+        return 0
+
+    cur = con.execute(
+        """INSERT INTO tbl_bestellungen(kunde_name, datum, liefertermin, summe, status)
+           VALUES(?,?,?,?,?)""",
+        (kunde_name.strip() or "—", heute, (liefertermin or "").strip() or None,
+         summe, status))
+    best_id = cur.lastrowid
+    con.executemany(
+        """INSERT INTO tbl_bestellpositionen
+               (bestellung_id, pzn, bezeichnung, menge, einzelpreis, bestellart)
+           VALUES(?,?,?,?,?,?)""",
+        [(best_id, pzn, bez, m, p, ("Vorbestellung" if ist_vor else "Bestellung"))
+         for (pzn, bez, m, p) in rows])
+    con.execute(
+        "INSERT INTO tbl_kasse_log(benutzer, aktion, detail) VALUES(?,?,?)",
+        (benutzer, "schnellverkauf",
+         f"{'Vorbestellung' if ist_vor else 'Bestellung'}: {kunde_name} "
+         f"({len(rows)} Pos., {summe:.2f} EUR)"))
+    con.commit()
+    return best_id
+
+
+# ── Mobiler Verkaufs-Flow v2 (Warenkorb + Bestands-Split + Apothekensuche) ────
+def artikel_mit_bestand(con: sqlite3.Connection) -> list[dict]:
+    """Alle bekannten Artikel (Artikelstamm + alles, was im Lager liegt) je PZN,
+    mit verfügbarem Gesamtbestand. Artikel ohne Bestand erscheinen mit 0 – so sind
+    sie auswählbar und gehen beim Speichern automatisch in die Vorbestellung.
+    """
+    return [dict(r) for r in con.execute(
+        """SELECT pzn, MAX(bezeichnung) AS bezeichnung,
+                  COALESCE(SUM(bestand), 0) AS bestand
+             FROM (
+                 SELECT pzn, bezeichnung, 0 AS bestand FROM tbl_artikel
+                 UNION ALL
+                 SELECT pzn, bezeichnung, menge AS bestand FROM tbl_lagerbestand
+             )
+            WHERE pzn IS NOT NULL AND pzn <> ''
+            GROUP BY pzn ORDER BY bezeichnung""").fetchall()]
+
+
+def kunden_alle(con: sqlite3.Connection) -> list[dict]:
+    """Apotheken für die Suche (Name/Inhaber/PLZ) – clientseitig gefiltert."""
+    return [dict(r) for r in con.execute(
+        "SELECT id, name, inhaber, plz, ort FROM tbl_kunden ORDER BY name").fetchall()]
+
+
+def verkauf_speichern_v2(con: sqlite3.Connection, kunde_id, kunde_name: str,
+                         positionen, benutzer: str) -> dict | None:
+    """Ein Auftrag mit markierten Positionen + automatischer Bestands-Split.
+
+    ``positionen`` = Liste von (pzn, bezeichnung, menge). Je Position wird gegen
+    den Lagerbestand geprüft: der lieferbare Teil bekommt bestellart 'Bestellung',
+    der Rest (und alles ohne Bestand) bestellart 'Vorbestellung'. Gibt eine
+    Zusammenfassung zurück (oder None, wenn keine gültige Position dabei war).
+    """
+    bestand = {r["pzn"]: int(r["bestand"]) for r in artikel_mit_bestand(con)}
+    pos_rows, vorbestellt_stueck = [], 0
+    for pzn, bez, menge in positionen:
+        pzn = (pzn or "").strip()
+        bez = (bez or "").strip()
+        try:
+            m = int(float(str(menge or "0").replace(",", ".")))
+        except ValueError:
+            m = 0
+        if (not pzn and not bez) or m <= 0:
+            continue
+        verf = bestand.get(pzn, 0) if pzn else 0
+        lieferbar = max(0, min(m, verf))
+        vor = m - lieferbar
+        if lieferbar > 0:
+            pos_rows.append((pzn, bez, lieferbar, "Bestellung"))
+        if vor > 0:
+            pos_rows.append((pzn, bez, vor, "Vorbestellung"))
+            vorbestellt_stueck += vor
+    if not pos_rows:
+        return None
+
+    status = "offen" if any(p[3] == "Bestellung" for p in pos_rows) else "vorbestellt"
+    try:
+        kid = int(kunde_id) if str(kunde_id or "").strip() else None
+    except ValueError:
+        kid = None
+    cur = con.execute(
+        """INSERT INTO tbl_bestellungen(kunde_id, kunde_name, datum, status,
+                                        erfasst_von, quelle)
+           VALUES(?,?,?,?,?,?)""",
+        (kid, kunde_name.strip() or "—", date.today().isoformat(), status,
+         benutzer, "online"))
+    best_id = cur.lastrowid
+    con.executemany(
+        """INSERT INTO tbl_bestellpositionen
+               (bestellung_id, pzn, bezeichnung, menge, bestellart)
+           VALUES(?,?,?,?,?)""",
+        [(best_id, *p) for p in pos_rows])
+    vorbestellt_pos = sum(1 for p in pos_rows if p[3] == "Vorbestellung")
+    con.execute(
+        "INSERT INTO tbl_kasse_log(benutzer, aktion, detail) VALUES(?,?,?)",
+        (benutzer, "verkauf",
+         f"{kunde_name}: {len(pos_rows)} Pos. ({vorbestellt_stueck} Stk Vorbestellung)"))
+    con.commit()
+    return {
+        "best_id": best_id,
+        "positionen": len(pos_rows),
+        "vorbestellt_pos": vorbestellt_pos,
+        "vorbestellt_stueck": vorbestellt_stueck,
+        "status": status,
+    }

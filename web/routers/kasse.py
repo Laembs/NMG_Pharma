@@ -7,7 +7,8 @@ damit das Modul ohne separaten Migrationslauf läuft.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Form, Request
+from fastapi.responses import RedirectResponse
 
 from ..licensing import require_module
 from ..services import kasse_service as svc
@@ -44,10 +45,37 @@ def lager(request: Request):
 
 @router.get("/verkauf")
 def verkauf(request: Request):
-    # Platzhalter: der Verkaufs-Flow ist die nächste Ausbaustufe (P2).
+    """Mobiler Verkaufs-Flow: Artikel suchen -> Warenkorb -> Apotheke -> speichern."""
     con = tenant_for(request)
     try:
         svc.ensure_schema(con)
+        artikel = svc.artikel_mit_bestand(con)
+        kunden = svc.kunden_alle(con)
     finally:
         con.close()
-    return page(request, "kasse/verkauf.html", titel="Verkauf")
+    return page(request, "kasse/verkauf.html", titel="Schnellverkauf",
+                artikel=artikel, kunden=kunden)
+
+
+@router.post("/verkauf")
+def verkauf_speichern(request: Request,
+                      kunde_id: str = Form(""),
+                      kunde_name: str = Form(""),
+                      pzn: list[str] = Form(default=[]),
+                      bezeichnung: list[str] = Form(default=[]),
+                      menge: list[str] = Form(default=[])):
+    """Speichert den Auftrag (mit Bestands-Split) und kehrt zur Übersicht zurück."""
+    user = request.session["user"]
+    positionen = list(zip(pzn, bezeichnung, menge))
+    con = tenant_for(request)
+    try:
+        svc.ensure_schema(con)
+        res = svc.verkauf_speichern_v2(
+            con, kunde_id, kunde_name, positionen,
+            user.get("anzeigename") or user.get("login") or "?")
+    finally:
+        con.close()
+    if not res:
+        return RedirectResponse("/kasse/verkauf?fehler=1", status_code=303)
+    return RedirectResponse(
+        f"/kasse?ok={res['best_id']}&vor={res['vorbestellt_stueck']}", status_code=303)

@@ -41,6 +41,15 @@ def module_fuer_dashboard(firma_id: int) -> list[dict]:
     return [_CATALOG_BY_KEY[k] for k in (m["key"] for m in MODULE_CATALOG) if k in aktiv]
 
 
+def landing_path(firma_id: int) -> str:
+    """Wohin nach dem Login? Ist nur EIN lauffähiges Modul freigeschaltet, direkt
+    dorthin (z. B. /kasse) – sonst aufs Dashboard mit der Modulauswahl."""
+    ready = [m for m in module_fuer_dashboard(firma_id) if m.get("ready")]
+    if len(ready) == 1:
+        return "/" + ready[0]["key"]
+    return "/dashboard"
+
+
 def require_module(modul_key: str):
     """FastAPI-Dependency: sperrt eine Route, wenn das Modul nicht lizenziert ist.
 

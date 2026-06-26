@@ -1,22 +1,201 @@
 {% extends "base.html" %}
 {% block content %}
   <header class="page-head">
-    <h1>Verkauf</h1>
-    <div class="head-actions">
-      <a class="btn" href="/kasse">Zur Kasse</a>
-    </div>
+    <h1>Schnellverkauf</h1>
+    <div class="head-actions"><a class="btn" href="/kasse">Zur Kasse</a></div>
   </header>
 
-  <section class="card">
-    <h2>Verkaufs-Flow folgt in der nächsten Ausbaustufe</h2>
-    <p class="muted">
-      Hier entsteht das Herzstück der Kasse: Kunde suchen → Artikel (PZN) →
-      Charge/Verfall wählen → Rabatt automatisch → Position → Abschluss.
-      Auf dem Handy mit Kamera-Scan der PZN.
-    </p>
-    <p class="hint">
-      Dieses Gerüst (P0) beweist Login, Fenster und Modul-Freischaltung.
-      Datenmodell (P1) und Verkaufs-Flow (P2) bauen darauf auf.
-    </p>
+  <div class="sv-tabs">
+    <button class="sv-tab aktiv" data-tab="artikel" type="button">Artikel</button>
+    <button class="sv-tab" data-tab="korb" type="button">Warenkorb <span id="korb-zahl" class="zahl">0</span></button>
+  </div>
+
+  <!-- ── Artikel suchen ─────────────────────────────────────── -->
+  <section id="screen-artikel" class="card">
+    <input id="suche" type="search" inputmode="search" autocomplete="off"
+           placeholder="PZN oder Artikel suchen …">
+    <div id="artikel-liste" class="sv-liste"></div>
+    <div id="kein-treffer" class="sv-leer" hidden></div>
+    <button id="zum-korb" class="btn btn-primary sv-cta" type="button" hidden></button>
   </section>
+
+  <!-- ── Warenkorb ──────────────────────────────────────────── -->
+  <section id="screen-korb" class="card" hidden>
+    <div id="korb-liste" class="sv-liste"></div>
+    <p id="korb-leer" class="muted">Noch keine Artikel im Warenkorb.</p>
+
+    <h2 style="font-size:15px;margin:16px 0 8px;">Apotheke</h2>
+    <div id="kunde-gewaehlt" class="sv-chip" hidden></div>
+    <input id="kunde-suche" type="search" autocomplete="off"
+           placeholder="PLZ, Apothekenname oder Inhaber …">
+    <div id="kunde-liste" class="sv-liste"></div>
+
+    <div id="korb-summary" class="sv-summary"></div>
+    <div class="form-actions">
+      <button id="speichern" class="btn btn-primary" type="button" disabled>Auftrag speichern</button>
+    </div>
+  </section>
+
+  <form id="verkauf-form" method="post" action="/kasse/verkauf" hx-boost="false" hidden></form>
+
+  <script>
+    var ARTIKEL = {{ artikel|tojson }};
+    var KUNDEN  = {{ kunden|tojson }};
+    var BMAP = {}; ARTIKEL.forEach(function(a){ BMAP[a.pzn] = a.bestand; });
+
+    var cart = [];        // {pzn, bezeichnung, menge}
+    var kunde = null;     // {id, name, inhaber, plz, ort}
+
+    function $(id){ return document.getElementById(id); }
+    function norm(s){ return (s||"").toString().toLowerCase(); }
+
+    // ---- Tabs ----
+    document.querySelectorAll(".sv-tab").forEach(function(b){
+      b.addEventListener("click", function(){ zeigeTab(b.dataset.tab); });
+    });
+    function zeigeTab(t){
+      document.querySelectorAll(".sv-tab").forEach(function(b){
+        b.classList.toggle("aktiv", b.dataset.tab===t);
+      });
+      $("screen-artikel").hidden = (t!=="artikel");
+      $("screen-korb").hidden    = (t!=="korb");
+    }
+
+    // ---- Artikel-Suche ----
+    function bestandLabel(b){ return b>0 ? (b+" auf Lager") : "kein Bestand"; }
+    function renderArtikel(){
+      var q = norm($("suche").value);
+      var treffer = ARTIKEL.filter(function(a){
+        return !q || norm(a.pzn).indexOf(q)>=0 || norm(a.bezeichnung).indexOf(q)>=0;
+      });
+      var box = $("artikel-liste"); box.innerHTML = "";
+      treffer.slice(0,50).forEach(function(a){
+        var q = cartQty(a.pzn, a.bezeichnung);
+        var el = document.createElement("button");
+        el.type = "button"; el.className = "sv-item" + (q>0 ? " im-korb" : "");
+        el.innerHTML = '<div class="sv-item-txt"><b>'+a.bezeichnung+'</b>'
+          + '<small>PZN '+a.pzn+'</small></div>'
+          + '<span class="sv-lager '+(a.bestand>0?'ok':'aus')+'">'+bestandLabel(a.bestand)+'</span>'
+          + '<span class="sv-add">'+(q>0 ? ('✓ '+q) : '＋')+'</span>';
+        el.addEventListener("click", function(){ addArtikel(a.pzn, a.bezeichnung); });
+        box.appendChild(el);
+      });
+      var leer = $("kein-treffer");
+      if (treffer.length===0 && q){
+        leer.hidden = false;
+        leer.innerHTML = 'Kein Lagerartikel gefunden. '
+          + '<button type="button" class="btn" id="alsvor">„'+$("suche").value+'" als Vorbestellung</button>';
+        $("alsvor").addEventListener("click", function(){
+          addArtikel("", $("suche").value.trim());
+        });
+      } else { leer.hidden = true; }
+    }
+
+    // ---- Warenkorb ----
+    function cartQty(pzn, bez){
+      var key = pzn || ("free:"+bez);
+      var c = cart.find(function(x){ return (x.pzn||("free:"+x.bezeichnung))===key; });
+      return c ? c.menge : 0;
+    }
+    function addArtikel(pzn, bez){
+      var key = pzn || ("free:"+bez);
+      var vorh = cart.find(function(c){ return (c.pzn||("free:"+c.bezeichnung))===key; });
+      if (vorh) vorh.menge += 1;
+      else cart.push({pzn:pzn, bezeichnung:bez||pzn, menge:1});
+      // bewusst NICHT in den Warenkorb springen – mehrere Artikel sammeln.
+      updateKorbZahl(); renderKorb(); renderArtikel(); updateZumKorb();
+    }
+    function updateZumKorb(){
+      var btn = $("zum-korb");
+      btn.hidden = (cart.length === 0);
+      btn.textContent = "Warenkorb ansehen (" + cart.length + ") →";
+    }
+    function setMenge(i, d){
+      cart[i].menge = Math.max(1, cart[i].menge + d);
+      renderKorb(); renderArtikel();
+    }
+    function removeItem(i){
+      cart.splice(i,1); updateKorbZahl(); renderKorb(); renderArtikel(); updateZumKorb();
+    }
+    function updateKorbZahl(){ $("korb-zahl").textContent = cart.length; }
+
+    function splitInfo(c){
+      var b = c.pzn ? (BMAP[c.pzn]||0) : 0;
+      var lief = Math.max(0, Math.min(c.menge, b));
+      var vor  = c.menge - lief;
+      if (vor<=0) return {txt:"lieferbar", vor:0};
+      if (lief<=0) return {txt:"Vorbestellung", vor:vor};
+      return {txt:"lieferbar "+lief+" · Vorbestellung "+vor, vor:vor};
+    }
+    function renderKorb(){
+      var box = $("korb-liste"); box.innerHTML = "";
+      cart.forEach(function(c,i){
+        var s = splitInfo(c);
+        var el = document.createElement("div"); el.className = "sv-korb-item";
+        el.innerHTML = '<div class="sv-item-txt"><b>'+c.bezeichnung+'</b>'
+          + '<small>'+(c.pzn?("PZN "+c.pzn+" · "):"")+'<span class="'
+          + (s.vor>0?'vor':'lief')+'">'+s.txt+'</span></small></div>'
+          + '<div class="sv-qty"><button type="button" data-a="m">－</button>'
+          + '<span>'+c.menge+'</span><button type="button" data-a="p">＋</button>'
+          + '<button type="button" class="sv-del" data-a="x">✕</button></div>';
+        el.querySelector('[data-a="m"]').onclick = function(){ setMenge(i,-1); };
+        el.querySelector('[data-a="p"]').onclick = function(){ setMenge(i, 1); };
+        el.querySelector('[data-a="x"]').onclick = function(){ removeItem(i); };
+        box.appendChild(el);
+      });
+      $("korb-leer").hidden = cart.length>0;
+      renderSummary();
+    }
+
+    // ---- Apothekensuche ----
+    $("kunde-suche").addEventListener("input", renderKunden);
+    function renderKunden(){
+      var q = norm($("kunde-suche").value);
+      var box = $("kunde-liste"); box.innerHTML = "";
+      if (!q) return;
+      KUNDEN.filter(function(k){
+        return norm(k.name).indexOf(q)>=0 || norm(k.inhaber).indexOf(q)>=0
+            || norm(k.plz).indexOf(q)>=0 || norm(k.ort).indexOf(q)>=0;
+      }).slice(0,30).forEach(function(k){
+        var el = document.createElement("button");
+        el.type="button"; el.className="sv-item";
+        el.innerHTML = '<div class="sv-item-txt"><b>'+k.name+'</b>'
+          + '<small>'+k.plz+' '+k.ort+(k.inhaber?(' · '+k.inhaber):'')+'</small></div>';
+        el.addEventListener("click", function(){ waehleKunde(k); });
+        box.appendChild(el);
+      });
+    }
+    function waehleKunde(k){
+      kunde = k;
+      var c = $("kunde-gewaehlt"); c.hidden=false;
+      c.innerHTML = '<span><b>'+k.name+'</b> · '+k.plz+' '+k.ort+'</span>'
+        + '<button type="button" class="btn" id="kundeweg">ändern</button>';
+      $("kundeweg").addEventListener("click", function(){
+        kunde=null; c.hidden=true; $("kunde-suche").value=""; $("kunde-liste").innerHTML=""; renderSummary();
+      });
+      $("kunde-suche").value=""; $("kunde-liste").innerHTML=""; renderSummary();
+    }
+
+    // ---- Summary + Speichern ----
+    function renderSummary(){
+      var vor = cart.reduce(function(s,c){ return s + splitInfo(c).vor; }, 0);
+      var t = cart.length + " Position(en)";
+      if (vor>0) t += " · <b>"+vor+" Stück gehen in die Vorbestellung</b>";
+      if (!kunde) t += '<br><span class="muted">Bitte noch eine Apotheke wählen.</span>';
+      $("korb-summary").innerHTML = t;
+      $("speichern").disabled = !(cart.length>0 && kunde);
+    }
+    $("speichern").addEventListener("click", function(){
+      if (!(cart.length>0 && kunde)) return;
+      var f = $("verkauf-form"); f.innerHTML = "";
+      function add(n,v){ var i=document.createElement("input"); i.type="hidden"; i.name=n; i.value=v; f.appendChild(i); }
+      add("kunde_id", kunde.id); add("kunde_name", kunde.name);
+      cart.forEach(function(c){ add("pzn", c.pzn); add("bezeichnung", c.bezeichnung); add("menge", c.menge); });
+      f.submit();
+    });
+
+    $("zum-korb").addEventListener("click", function(){ zeigeTab("korb"); });
+    $("suche").addEventListener("input", renderArtikel);
+    renderArtikel(); updateZumKorb();
+  </script>
 {% endblock %}

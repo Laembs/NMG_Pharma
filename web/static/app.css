@@ -51,6 +51,32 @@ a { color: var(--primary); text-decoration: none; }
 
 .content { flex: 1; padding: 28px 34px; max-width: 1100px; }
 
+/* ── Mobil: Sidebar wird zur schmalen Topbar ──────────────── */
+@media (max-width: 720px) {
+  .layout { flex-direction: column; }
+  .sidebar {
+    width: 100%; flex: none; flex-direction: row; flex-wrap: wrap;
+    align-items: center; gap: 6px 12px; padding: 10px 14px;
+    position: sticky; top: 0; z-index: 20;
+  }
+  .brand { font-size: 17px; }
+  .firma { margin: 0; font-size: 12px; }
+  .sidebar nav {
+    order: 3; width: 100%; margin: 4px 0 0;
+    flex-direction: row; flex-wrap: nowrap; gap: 6px;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+  }
+  .navlink { padding: 7px 14px; white-space: nowrap; font-size: 14px; }
+  .sidebar-foot {
+    margin: 0 0 0 auto; padding: 0; border: none;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .who { margin: 0; }
+  .content { padding: 14px; max-width: none; }
+  .page-head { flex-wrap: wrap; gap: 8px; }
+  .page-head h1 { font-size: 20px; }
+}
+
 /* ── Kopf / Karten ────────────────────────────────────────── */
 .page-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
 .page-head h1 { font-size: 24px; margin: 0; }
@@ -126,6 +152,56 @@ label.check input { width: auto; }
 .login-card label { color: var(--ink); font-weight: 600; }
 .login-card .btn-primary { margin-top: 6px; padding: 11px; }
 .fehler { background: #FBE9E7; color: var(--danger); border: 1px solid #F3C0BA; padding: 9px 12px; border-radius: 8px; font-size: 13.5px; }
+.erfolg { background: #E4F4EA; color: #11823B; border: 1px solid #BFE6CC; padding: 9px 12px; border-radius: 8px; font-size: 13.5px; margin-bottom: 16px; }
+
+/* ── Schnellverkauf-Formular (mobil-tauglich) ─────────────── */
+.feld-reihe { display: flex; flex-wrap: wrap; gap: 12px; }
+.feld-reihe label { flex: 1 1 160px; }
+.pos-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.pos-row .pzn { flex: 1 1 110px; }
+.pos-row .bez { flex: 3 1 200px; }
+.pos-row .menge { flex: 1 1 80px; }
+.pos-row .preis { flex: 1 1 90px; }
+
+/* ── Mobiler Verkaufs-Flow (Warenkorb) ────────────────────── */
+.sv-tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+.sv-tab { flex: 1; padding: 11px; border: 1px solid var(--border); background: var(--card);
+          border-radius: 10px; font-size: 15px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.sv-tab.aktiv { background: var(--primary); border-color: var(--primary); color: #fff; }
+.sv-tab .zahl { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 999px;
+                background: rgba(255,255,255,.25); font-size: 13px; }
+.sv-tab:not(.aktiv) .zahl { background: var(--select-bg); color: var(--primary); }
+#suche, #kunde-suche { width: 100%; margin-bottom: 12px; padding: 12px; font-size: 16px; }
+.sv-liste { display: flex; flex-direction: column; gap: 8px; }
+.sv-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+           padding: 11px 12px; border: 1px solid var(--border); border-radius: 10px;
+           background: var(--card); cursor: pointer; }
+.sv-item:hover { border-color: var(--primary); }
+.sv-item-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sv-item-txt b { font-size: 14.5px; color: var(--ink); }
+.sv-item-txt small { font-size: 12.5px; color: var(--muted); }
+.sv-lager { font-size: 12px; font-weight: 600; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
+.sv-lager.ok { background: #E4F4EA; color: #11823B; }
+.sv-lager.aus { background: #FCF3E6; color: #9A6700; }
+.sv-add { font-size: 20px; color: var(--primary); font-weight: 700; }
+.sv-korb-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+                border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
+.sv-korb-item small .lief { color: #11823B; font-weight: 600; }
+.sv-korb-item small .vor { color: #9A6700; font-weight: 600; }
+.sv-qty { display: flex; align-items: center; gap: 6px; }
+.sv-qty button { width: 34px; height: 34px; border: 1px solid var(--border); background: var(--card);
+                 border-radius: 8px; font-size: 17px; line-height: 1; cursor: pointer; color: var(--ink); }
+.sv-qty span { min-width: 26px; text-align: center; font-weight: 600; }
+.sv-qty .sv-del { color: var(--danger); border-color: #F3C0BA; }
+.sv-chip { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+           padding: 10px 12px; background: var(--select-bg); border-radius: 10px; margin-bottom: 10px; font-size: 14px; }
+.sv-summary { margin: 14px 0 4px; font-size: 14px; }
+.sv-leer { margin-top: 12px; font-size: 13.5px; color: var(--muted); }
+.sv-item.im-korb { border-color: var(--ok); background: #F2FBF5; }
+.sv-item.im-korb .sv-add { color: var(--ok); font-size: 15px; font-weight: 700; }
+.sv-cta { width: 100%; margin-top: 14px; padding: 13px; font-size: 16px;
+          position: sticky; bottom: 10px; }
+.tag-online { color: var(--primary); font-size: 12px; font-weight: 600; }
 
 /* ── Genehmigungs-Status / Hinweise ───────────────────────── */
 .status { padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }

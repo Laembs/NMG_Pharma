@@ -9,7 +9,7 @@
  * Warteschlange + Sync) ist eine eigene Ausbaustufe (siehe Plan_Kasse_Web.pdf).
  * POST-Anfragen werden nie gecacht.
  */
-const CACHE = "nmgone-shell-v1";
+const CACHE = "nmgone-shell-v3";
 const SHELL = [
   "/static/app.css",
   "/static/htmx.min.js",
