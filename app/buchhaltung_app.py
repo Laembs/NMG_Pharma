@@ -18,6 +18,7 @@ Planung: docs/Plan_Buchhaltung_App.pdf
 from __future__ import annotations
 
 import os
+from .i18n import T as _T
 import sqlite3
 from datetime import datetime, date
 from pathlib import Path
@@ -298,7 +299,7 @@ class BuchhaltungPanel(tk.Frame):
         tk.Button(foot, text="Schließen", command=self._on_close, relief="flat",
                   bg="#0E3454", fg=SIDEBAR_TEXT, activebackground="#15466E",
                   activeforeground="#FFFFFF", padx=10, pady=5, cursor="hand2").pack(fill="x", padx=10)
-        self.sidebar.add_footer_note(f"Datenbank:\n{Path(self.db_path).name}")
+        self.sidebar.add_footer_note(_T('Datenbank:\n{p0}', p0=Path(self.db_path).name))
 
         main = tk.Frame(self, bg=SHELL_BG)
         main.grid(row=0, column=1, sticky="nsew")
@@ -361,7 +362,7 @@ class BuchhaltungPanel(tk.Frame):
                 start_py = Path(__file__).resolve().parent.parent / "start.py"
                 subprocess.Popen([sys.executable, str(start_py)], close_fds=True, creationflags=flags)
         except Exception as exc:
-            messagebox.showerror("NMGone", f"NMGone konnte nicht gestartet werden:\n{exc}", parent=self)
+            messagebox.showerror("NMGone", _T('NMGone konnte nicht gestartet werden:\n{p0}', p0=exc), parent=self)
 
     # =============================================================== ÜBERSICHT
     def _build_uebersicht(self, parent):
@@ -462,7 +463,7 @@ class BuchhaltungPanel(tk.Frame):
                 "Eingang" if r[1] == "eingang" else "Ausgang", r[2] or "—", r[3] or "",
                 r[4] or "", _eur(r[5]), _eur(r[6]), _eur(r[7]),
                 (r[8] or "").capitalize(), r[9] or ""))
-        self._belege_count.config(text=f"{len(rows)} Beleg(e)")
+        self._belege_count.config(text=_T('{p0} Beleg(e)', p0=len(rows)))
 
     def _beleg_auswahl_id(self):
         sel = self._belege_tree.selection()
@@ -480,7 +481,7 @@ class BuchhaltungPanel(tk.Frame):
         try:
             daten = erech.lies_erechnung(pfad)
         except Exception as exc:
-            messagebox.showerror("eRechnung", f"Konnte nicht gelesen werden:\n{exc}", parent=self)
+            messagebox.showerror("eRechnung", _T('Konnte nicht gelesen werden:\n{p0}', p0=exc), parent=self)
             return
         richtung = "eingang" if messagebox.askyesno(
             "Richtung", "Eingangsrechnung (vom Lieferanten)?\n\n"
@@ -510,9 +511,7 @@ class BuchhaltungPanel(tk.Frame):
         self._refresh_belege()
         hinweis = ("\n\n⚠ Pflichtfeld-Hinweise:\n" + "\n".join("• " + x for x in fehler)) if fehler else ""
         messagebox.showinfo("Beleg angelegt",
-                            f"{'Eingangs' if richtung == 'eingang' else 'Ausgangs'}rechnung "
-                            f"{daten.get('rechnungsnr', '')} als Entwurf übernommen "
-                            f"({_eur(s.get('brutto', 0))}).{hinweis}", parent=self)
+                            _T('{p0}rechnung {p1} als Entwurf übernommen ({p2}).{p3}', p0='Eingangs' if richtung == 'eingang' else 'Ausgangs', p1=daten.get('rechnungsnr', ''), p2=_eur(s.get('brutto', 0)), p3=hinweis), parent=self)
 
     def _beleg_status_weiter(self):
         bid = self._beleg_auswahl_id()
@@ -546,7 +545,7 @@ class BuchhaltungPanel(tk.Frame):
                 messagebox.showwarning("Löschen", "Nur Belege im Status 'Entwurf' können gelöscht werden "
                                        "(GoBD-Unveränderbarkeit).", parent=self)
                 return
-            if not messagebox.askyesno("Löschen", f"Beleg {r[1] or '(Entwurf)'} wirklich löschen?", parent=self):
+            if not messagebox.askyesno("Löschen", _T('Beleg {p0} wirklich löschen?', p0=r[1] or '(Entwurf)'), parent=self):
                 return
             con.execute("DELETE FROM tbl_buha_belege WHERE id=?", (bid,))
             con.commit()
@@ -669,7 +668,7 @@ class BuchhaltungPanel(tk.Frame):
             messagebox.showinfo("Löschen", "Bitte zuerst ein Konto auswählen.", parent=self)
             return
         konto = sel[0]
-        if not messagebox.askyesno("Löschen", f"Konto {konto} aus {rahmen} löschen?", parent=self):
+        if not messagebox.askyesno("Löschen", _T('Konto {p0} aus {p1} löschen?', p0=konto, p1=rahmen), parent=self):
             return
         with self._conn() as con:
             con.execute("DELETE FROM tbl_buha_konten WHERE kontenrahmen=? AND konto=?", (rahmen, konto))
@@ -746,8 +745,7 @@ class BuchhaltungPanel(tk.Frame):
         rahmen = self._ko_var.get()
         opt = self._konto_optionen(rahmen)
         if not opt:
-            messagebox.showinfo("Kontierung", f"Für {rahmen} sind keine Konten vorhanden – "
-                                "bitte zuerst im Kontenrahmen anlegen.", parent=self)
+            messagebox.showinfo("Kontierung", _T('Für {p0} sind keine Konten vorhanden – bitte zuerst im Kontenrahmen anlegen.', p0=rahmen), parent=self)
             return
 
         def save(v):

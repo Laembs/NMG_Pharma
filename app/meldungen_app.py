@@ -22,6 +22,7 @@ run_standalone() wird von start_meldungen.py und NMGone.exe --meldungen genutzt.
 from __future__ import annotations
 
 import csv
+from .i18n import T as _T
 import os
 import sqlite3
 from datetime import datetime, timedelta
@@ -153,7 +154,7 @@ class MeldungenPanel(tk.Frame):
         tk.Button(foot, text="Schließen", command=self._on_close, relief="flat",
                   bg="#0E3454", fg=SIDEBAR_TEXT, activebackground="#15466E",
                   activeforeground="#FFFFFF", padx=10, pady=5, cursor="hand2").pack(fill="x", padx=10)
-        self.sidebar.add_footer_note(f"Datenbank:\n{Path(self.db_path).name}")
+        self.sidebar.add_footer_note(_T('Datenbank:\n{p0}', p0=Path(self.db_path).name))
 
         # ---- Hauptbereich ----
         main = tk.Frame(self, bg=SHELL_BG)
@@ -217,7 +218,7 @@ class MeldungenPanel(tk.Frame):
                 start_py = Path(__file__).resolve().parent.parent / "start.py"
                 subprocess.Popen([sys.executable, str(start_py)], close_fds=True, creationflags=flags)
         except Exception as exc:
-            messagebox.showerror("NMGone", f"NMGone konnte nicht gestartet werden:\n{exc}", parent=self)
+            messagebox.showerror("NMGone", _T('NMGone konnte nicht gestartet werden:\n{p0}', p0=exc), parent=self)
 
     # =============================================================== ÜBERSICHT
     def _build_uebersicht(self, parent):
@@ -516,7 +517,7 @@ class MeldungenPanel(tk.Frame):
             w.writerow(["Datum", "Typ", "Titel", "Prioritaet", "Betrifft", "PZN", "Charge",
                         "Verantwortlich", "Faellig", "Status", "Erledigt am", "Massnahme", "Beschreibung"])
             w.writerows(rows)
-        messagebox.showinfo("Export", f"{len(rows)} Meldung(en) gespeichert:\n{path}", parent=self)
+        messagebox.showinfo("Export", _T('{p0} Meldung(en) gespeichert:\n{p1}', p0=len(rows), p1=path), parent=self)
 
     # ===================================================== KÜHLSACHENKONTROLLE
     def _build_kuehlkette(self, parent):
@@ -606,8 +607,7 @@ class MeldungenPanel(tk.Frame):
             self._log("Kuehlkette", f"Messung {status}", tid, f"{v['messpunkt']}: {temp} C")
             if status == "Abweichung":
                 messagebox.showwarning("Abweichung",
-                    f"{temp} C liegt außerhalb {smin}-{smax} C!\n"
-                    "Bitte Maßnahme dokumentieren (Abweichung bearbeiten).", parent=self)
+                    _T('{p0} C liegt außerhalb {p1}-{p2} C!\nBitte Maßnahme dokumentieren (Abweichung bearbeiten).', p0=temp, p1=smin, p2=smax), parent=self)
             self._refresh_kuehlkette()
 
         FormDialog(self, "Temperatur-Messung erfassen", [
@@ -802,7 +802,7 @@ class MeldungenPanel(tk.Frame):
                 (iid,)).fetchone()[0]
         if offen:
             if not messagebox.askyesno("Abschließen",
-                    f"Es sind noch {offen} Prüfpunkt(e) offen. Trotzdem abschließen?", parent=self):
+                    _T('Es sind noch {p0} Prüfpunkt(e) offen. Trotzdem abschließen?', p0=offen), parent=self):
                 return
         self._insp_set(iid)
 
@@ -868,7 +868,7 @@ class MeldungenPanel(tk.Frame):
             w = csv.writer(f, delimiter=";")
             w.writerow(["Zeitpunkt", "Bearbeiter", "Modul", "Aktion", "Details"])
             w.writerows(rows)
-        messagebox.showinfo("Export", f"{len(rows)} Protokoll-Zeile(n) gespeichert.", parent=self)
+        messagebox.showinfo("Export", _T('{p0} Protokoll-Zeile(n) gespeichert.', p0=len(rows)), parent=self)
 
 
 # ════════════════════════════════════════════════════════════════════════════

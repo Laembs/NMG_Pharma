@@ -15,6 +15,7 @@ Das Modul ist reine Anzeige - es liest und schreibt KEINE Programmdaten.
 from __future__ import annotations
 
 import os
+from .i18n import T as _T
 import sys
 import webbrowser
 from pathlib import Path
@@ -979,13 +980,12 @@ class HilfePanel(tk.Frame):
         if not path.exists():
             messagebox.showinfo(
                 "Handout",
-                f"Das Handout wurde nicht gefunden:\n{path}\n\n"
-                "Es sollte unter assets/handouts/ liegen.")
+                _T('Das Handout wurde nicht gefunden:\n{p0}\n\nEs sollte unter assets/handouts/ liegen.', p0=path))
             return
         try:
             webbrowser.open(path.as_uri())
         except Exception as exc:
-            messagebox.showwarning("Handout", f"Das Handout konnte nicht geöffnet werden:\n{exc}")
+            messagebox.showwarning("Handout", _T('Das Handout konnte nicht geöffnet werden:\n{p0}', p0=exc))
 
     # ── NMGone-Verbindung ────────────────────────────────────────────────────
     def _open_nmgone(self):

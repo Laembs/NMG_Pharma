@@ -195,7 +195,7 @@ def _open_folder(path: Path):
         else:
             os.system(f'xdg-open "{path}"')
     except Exception:
-        messagebox.showinfo("Ordner", f"Ordner:\n{path}")
+        messagebox.showinfo("Ordner", _T('Ordner:\n{p0}', p0=path))
 
 
 def _open_file(path: Path):
@@ -208,7 +208,7 @@ def _open_file(path: Path):
         else:
             os.system(f'xdg-open "{path}"')
     except Exception:
-        messagebox.showinfo("Datei", f"Datei:\n{path}")
+        messagebox.showinfo("Datei", _T('Datei:\n{p0}', p0=path))
 
 
 def _show_output_actions(title: str, path):
@@ -374,8 +374,7 @@ class NMGApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror(
                 "Update",
-                f"Setup konnte nicht gestartet werden:\n{exc}\n\n"
-                f"Datei liegt unter:\n{setup_path}"
+                _T('Setup konnte nicht gestartet werden:\n{p0}\n\nDatei liegt unter:\n{p1}', p0=exc, p1=setup_path)
             )
             return False
         self.after(800, self.destroy)
@@ -390,12 +389,7 @@ class NMGApp(tk.Tk):
             path, version_str = pending
             if messagebox.askyesno(
                 "Lokales Update verfuegbar",
-                f"Im Update-Ordner liegt ein heruntergeladenes Setup bereit:\n\n"
-                f"Version: V{version_str}\n"
-                f"Aktuell installiert: V{APP_VERSION}\n"
-                f"Datei: {path.name}\n\n"
-                f"Jetzt installieren?"
-                f"{self.SMARTSCREEN_HINT}"
+                _T('Im Update-Ordner liegt ein heruntergeladenes Setup bereit:\n\nVersion: V{p0}\nAktuell installiert: V{p1}\nDatei: {p2}\n\nJetzt installieren?{p3}', p0=version_str, p1=APP_VERSION, p2=path.name, p3=self.SMARTSCREEN_HINT)
             ):
                 self._launch_setup_and_exit(path)
             # Wer "Nein" sagt: kein Online-Check (gleiche Version).
@@ -453,8 +447,7 @@ class NMGApp(tk.Tk):
             import webbrowser
             if messagebox.askyesno(
                 "Update verfuegbar",
-                f"Neue Version: {tag}\nAktuell: V{APP_VERSION}\n\n"
-                f"Konnte das Setup nicht direkt finden. Download-Seite oeffnen?"
+                _T('Neue Version: {p0}\nAktuell: V{p1}\n\nKonnte das Setup nicht direkt finden. Download-Seite oeffnen?', p0=tag, p1=APP_VERSION)
             ):
                 try:
                     webbrowser.open(html_url or "https://github.com/Laembs/NMG_Pharma/releases")
@@ -464,12 +457,7 @@ class NMGApp(tk.Tk):
 
         if messagebox.askyesno(
             "Update verfuegbar",
-            f"Eine neuere Version von NMGone ist verfuegbar: {tag}\n"
-            f"Aktuell installiert: V{APP_VERSION}\n\n"
-            f"Jetzt herunterladen und installieren?\n\n"
-            f"NMGone schliesst sich automatisch, der Setup-Assistent startet,\n"
-            f"deine Daten unter C:\\ProgramData\\NMGone bleiben unberuehrt."
-            f"{self.SMARTSCREEN_HINT}"
+            _T('Eine neuere Version von NMGone ist verfuegbar: {p0}\nAktuell installiert: V{p1}\n\nJetzt herunterladen und installieren?\n\nNMGone schliesst sich automatisch, der Setup-Assistent startet,\ndeine Daten unter C:\\ProgramData\\NMGone bleiben unberuehrt.{p2}', p0=tag, p1=APP_VERSION, p2=self.SMARTSCREEN_HINT)
         ):
             self._download_and_install_update(asset_url, tag)
 
@@ -525,17 +513,12 @@ class NMGApp(tk.Tk):
                     # Yes = Jetzt, No = Spaeter (Datei bleibt), Cancel = loeschen
                     answer = messagebox.askyesnocancel(
                         "Update bereit",
-                        f"Download abgeschlossen ({final_size / 1024 / 1024:.1f} MB).\n\n"
-                        f"Setup liegt unter:\n{final_path}\n\n"
-                        f"JA = jetzt installieren (NMGone beendet sich kurz und oeffnet sich danach wieder)\n"
-                        f"NEIN = spaeter installieren (Setup bleibt im updates-Ordner und wird beim naechsten Start angeboten)\n"
-                        f"ABBRECHEN = Datei wieder loeschen"
-                        f"{self.SMARTSCREEN_HINT}"
+                        _T('Download abgeschlossen ({p0:.1f} MB).\n\nSetup liegt unter:\n{p1}\n\nJA = jetzt installieren (NMGone beendet sich kurz und oeffnet sich danach wieder)\nNEIN = spaeter installieren (Setup bleibt im updates-Ordner und wird beim naechsten Start angeboten)\nABBRECHEN = Datei wieder loeschen{p2}', p0=final_size / 1024 / 1024, p1=final_path, p2=self.SMARTSCREEN_HINT)
                     )
                     if answer is True:
                         self._launch_setup_and_exit(final_path)
                     elif answer is False:
-                        self.status.set(f"Update {tag} heruntergeladen. Installation auf spaeter verschoben.")
+                        self.status.set(_T('Update {p0} heruntergeladen. Installation auf spaeter verschoben.', p0=tag))
                     else:
                         try:
                             final_path.unlink()
@@ -550,9 +533,7 @@ class NMGApp(tk.Tk):
                     self._close_busy_modal(busy)
                     messagebox.showerror(
                         "Update fehlgeschlagen",
-                        f"Konnte das Update nicht herunterladen:\n\n{error_text}\n\n"
-                        f"Du kannst das Update auch manuell holen:\n"
-                        f"https://github.com/Laembs/NMG_Pharma/releases/tag/{tag}"
+                        _T('Konnte das Update nicht herunterladen:\n\n{p0}\n\nDu kannst das Update auch manuell holen:\nhttps://github.com/Laembs/NMG_Pharma/releases/tag/{p1}', p0=error_text, p1=tag)
                     )
                 self.after(0, failed)
 
@@ -727,7 +708,7 @@ class NMGApp(tk.Tk):
                             except Exception:
                                 pass
                             try:
-                                messagebox.showerror(title, f"{worker_exc}\n\n(Folgefehler im on_error-Handler: {cb_exc})")
+                                messagebox.showerror(title, _T('{p0}\n\n(Folgefehler im on_error-Handler: {p1})', p0=worker_exc, p1=cb_exc))
                             except Exception:
                                 pass
                     else:
@@ -752,7 +733,7 @@ class NMGApp(tk.Tk):
                         except Exception:
                             pass
                         try:
-                            messagebox.showerror(title, f"Nachverarbeitung fehlgeschlagen:\n{cb_exc}")
+                            messagebox.showerror(title, _T('Nachverarbeitung fehlgeschlagen:\n{p0}', p0=cb_exc))
                         except Exception:
                             pass
                 else:
@@ -851,7 +832,7 @@ class NMGApp(tk.Tk):
         except Exception:
             pass
         self._build_nav_tree()
-        self.sidebar.add_footer_note(f"Datenbank:\n{DB_PATH.name}")
+        self.sidebar.add_footer_note(_T('Datenbank:\n{p0}', p0=DB_PATH.name))
 
         # Hauptbereich
         main = tk.Frame(self, bg=theme.BG)
@@ -898,7 +879,7 @@ class NMGApp(tk.Tk):
         ).pack(side="right", padx=(0, 4))
 
         if self.pending_update:
-            self.status.set(f"Update verfügbar: Version {self.pending_update.get('target_version')} ({self.pending_update.get('name')}). Links auf 'Update installieren' klicken.")
+            self.status.set(_T("Update verfügbar: Version {p0} ({p1}). Links auf 'Update installieren' klicken.", p0=self.pending_update.get('target_version'), p1=self.pending_update.get('name')))
 
         self.navigate("startseite")
         self.show_startseite()
@@ -1014,9 +995,7 @@ class NMGApp(tk.Tk):
 
         tk.Label(win, text="👤  Mitarbeiterprofil", font=(theme.FONT, 16, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=22, pady=(18, 4))
         tk.Label(win, text=(
-            f"Hallo {self.bearbeiter}!\n"
-            "Bitte Vorname und Nachname einmalig eintragen.\n"
-            "Ohne Profil kann das Programm nicht genutzt werden."
+            _T('Hallo {p0}!\nBitte Vorname und Nachname einmalig eintragen.\nOhne Profil kann das Programm nicht genutzt werden.', p0=self.bearbeiter)
         ), font=(theme.FONT, 10), fg="#444", bg="#f5f7fb", justify="left").pack(anchor="w", padx=22, pady=(0, 12))
 
         form = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
@@ -1752,8 +1731,7 @@ class NMGApp(tk.Tk):
         tk.Label(
             box_bearbeiter,
             text=(
-                f"Windows-Login:\n{self.bearbeiter or 'unbekannt'}\n\n"
-                f"Version:\n{APP_VERSION}"
+                _T('Windows-Login:\n{p0}\n\nVersion:\n{p1}', p0=self.bearbeiter or 'unbekannt', p1=APP_VERSION)
             ),
             justify="left",
             bg="#ffffff",
@@ -1813,7 +1791,7 @@ class NMGApp(tk.Tk):
         box_backup.pack(fill="x", side="bottom")
         txt = "Backup heute erstellt" if auto.get("created") else "Backup heute vorhanden"
         tk.Label(box_backup, text="✅ Backup-Status", font=(theme.FONT, 13, "bold"), fg="#0b4a86", bg="#ffffff").pack(anchor="w", padx=14, pady=(14, 6))
-        tk.Label(box_backup, text=f"{txt}\nAufbewahrung: 7 Tage\nÄltestes Auto-Backup wird zuerst gelöscht.", justify="left", bg="#ffffff", fg="#222").pack(anchor="w", padx=14, pady=(0, 12))
+        tk.Label(box_backup, text=_T('{p0}\nAufbewahrung: 7 Tage\nÄltestes Auto-Backup wird zuerst gelöscht.', p0=txt), justify="left", bg="#ffffff", fg="#222").pack(anchor="w", padx=14, pady=(0, 12))
         theme.PillButton(box_backup, "Backup-Verwaltung", self.show_backup_dialog, kind="neutral", padx=12, pady=7).pack(fill="x", padx=14, pady=(0, 6))
         theme.PillButton(box_backup, "📋 Protokolle", self.show_protocol_center, kind="neutral", padx=12, pady=7).pack(fill="x", padx=14, pady=(0, 14))
 
@@ -1907,13 +1885,13 @@ class NMGApp(tk.Tk):
             self._run_neue_auswertung_export(file, analyse_name)
         except UnknownInputFormatError as exc:
             self.status.set(str(exc))
-            if messagebox.askyesno("Format nicht erkannt", f"{exc}\n\nSoll der Rohdaten-Formatassistent geöffnet werden?"):
+            if messagebox.askyesno("Format nicht erkannt", _T('{p0}\n\nSoll der Rohdaten-Formatassistent geöffnet werden?', p0=exc)):
                 mapping = self._open_rohdaten_format_assistent(file, str(exc))
                 if mapping:
                     try:
                         self._run_auswertung_after_mapping(file, mapping, analyse_name)
                     except Exception as mapped_exc:
-                        self.status.set(f"Auswertung nach Mapping fehlgeschlagen: {mapped_exc}")
+                        self.status.set(_T('Auswertung nach Mapping fehlgeschlagen: {p0}', p0=mapped_exc))
                         messagebox.showerror("Auswertungsfehler nach Mapping", str(mapped_exc))
             else:
                 messagebox.showwarning("Format nicht erkannt", str(exc))
@@ -2050,7 +2028,7 @@ ORDER BY datetime(datum) DESC, id DESC
 LIMIT 500
                 """).fetchall()
         except Exception as exc:
-            messagebox.showerror("Gespeicherte Analysen", f"Datenbank konnte nicht gelesen werden:\n{exc}")
+            messagebox.showerror("Gespeicherte Analysen", _T('Datenbank konnte nicht gelesen werden:\n{p0}', p0=exc))
 
         # Spalten kundennummer/kundenname ggf. nachrüsten
         _sa_row_map = {}
@@ -2186,13 +2164,7 @@ LIMIT 500
                 return
             dq = "PK" if row["datenquelle"] == "NMG" else row["datenquelle"]
             detail.set(
-                f"Analyse-ID: {row['id']}\n"
-                f"Name: {row['apotheke']}\n"
-                f"Typ: {dq}\n"
-                f"Kundennr.: {row.get('kundennummer') or '–'}\n"
-                f"Kunde: {row.get('kundenname') or '–'}\n"
-                f"Positionen: {row['anzahl_positionen'] or 0}\n"
-                f"Treffer: {row['nmg_treffer'] or 0}"
+                _T('Analyse-ID: {p0}\nName: {p1}\nTyp: {p2}\nKundennr.: {p3}\nKunde: {p4}\nPositionen: {p5}\nTreffer: {p6}', p0=row['id'], p1=row['apotheke'], p2=dq, p3=row.get('kundennummer') or '–', p4=row.get('kundenname') or '–', p5=row['anzahl_positionen'] or 0, p6=row['nmg_treffer'] or 0)
             )
 
         def _on_dbl_click(event=None):
@@ -2260,8 +2232,8 @@ LIMIT 500
 
             # Hintergrund-Lauf mit Animation rechts oben, UI bleibt klickbar.
             def on_done(out):
-                self.status.set(f"Produktanalyse für Analyse {rid} erzeugt: {out}")
-                messagebox.showinfo("Produktanalyse", f"Produktanalyse erstellt:\n{out}")
+                self.status.set(_T('Produktanalyse für Analyse {p0} erzeugt: {p1}', p0=rid, p1=out))
+                messagebox.showinfo("Produktanalyse", _T('Produktanalyse erstellt:\n{p0}', p0=out))
 
             self._run_background(
                 lambda: export_marktanalyse_produktchancen(limit=500, min_apotheken=1, datenquelle=dq, auswertung_id=rid),
@@ -2290,7 +2262,7 @@ LIMIT 500
                     title="Abweichungsanalyse",
                     subtitle="Manuelle und Programm-Auswertung vergleichen ...",
                 )
-                self.status.set(f"Abweichungsanalyse erzeugt: {out}")
+                self.status.set(_T('Abweichungsanalyse erzeugt: {p0}', p0=out))
                 self._roadmap_mark_abweichung_schulbank_v9_erledigt()
                 self.show_abweichungs_editor(out)
             except Exception as exc:
@@ -2325,7 +2297,7 @@ LIMIT 500
         file = filedialog.askopenfilename(filetypes=SUPPORTED_DATA_FILETYPES)
         if file:
             self.input_file.set(file)
-            self.status.set(f"Datei ausgewählt: {Path(file).name}")
+            self.status.set(_T('Datei ausgewählt: {p0}', p0=Path(file).name))
 
 
     def _ask_data_source(self, title="Datenquelle auswählen"):
@@ -2390,7 +2362,7 @@ LIMIT 500
         if not files:
             return
         name = simpledialog.askstring("ZW-Import", "Name/Kommentar für den ZW-Import:", initialvalue="ZW Daten") or "ZW Daten"
-        ok = messagebox.askyesno("ZW-Daten importieren", f"{len(files)} Datei(en) als ZW-Daten importieren?\n\nDiese Daten werden NICHT als PK-Lernstand übernommen.")
+        ok = messagebox.askyesno("ZW-Daten importieren", _T('{p0} Datei(en) als ZW-Daten importieren?\n\nDiese Daten werden NICHT als PK-Lernstand übernommen.', p0=len(files)))
         if not ok:
             return
         def _do_zw_import():
@@ -2409,7 +2381,7 @@ LIMIT 500
         imported, rows, errors = self._run_busy(
             _do_zw_import,
             title="ZW-Daten importieren",
-            subtitle=f"Importiere {len(files)} Datei(en) ...",
+            subtitle=_T('Importiere {p0} Datei(en) ...', p0=len(files)),
         )
         msg = f"ZW-Import fertig.\nAusgewählte Dateien: {len(files)}\nErfolgreich importiert: {imported}\nPositionen: {rows}"
         if errors:
@@ -2475,9 +2447,9 @@ LIMIT 500
         def on_done(out):
             self._log_action("produktanalyse", "Produktanalyse erzeugt",
                              f"Kundentyp: {kundentyp} | Datei: {out}")
-            self.status.set(f"Produktanalyse erzeugt: {out}")
+            self.status.set(_T('Produktanalyse erzeugt: {p0}', p0=out))
             if messagebox.askyesno("Fertig",
-                                   f"Produktanalyse {kundentyp} erstellt:\n{out}\n\nDatei jetzt oeffnen?"):
+                                   _T('Produktanalyse {p0} erstellt:\n{p1}\n\nDatei jetzt oeffnen?', p0=kundentyp, p1=out)):
                 _open_file(out)
 
         def on_error(exc):
@@ -2487,7 +2459,7 @@ LIMIT 500
         self._run_background(
             lambda: export_produktanalyse_neu(kundentyp=kundentyp, monate=6),
             title="Produktanalyse",
-            subtitle=f"Erzeuge Produktanalyse {kundentyp} ...",
+            subtitle=_T('Erzeuge Produktanalyse {p0} ...', p0=kundentyp),
             progress=False,
             on_done=on_done,
             on_error=on_error,
@@ -2504,7 +2476,7 @@ LIMIT 500
         try:
             out = export_abweichungsanalyse(manuell, programm)
             self._log_action("abweichungsanalyse", "Abweichungsanalyse erzeugt", f"Manuell: {manuell} | Programm: {programm} | Ausgabe: {out}")
-            self.status.set(f"Abweichungsanalyse erzeugt: {out}")
+            self.status.set(_T('Abweichungsanalyse erzeugt: {p0}', p0=out))
             self._roadmap_mark_abweichung_schulbank_v9_erledigt()
             self.show_abweichungs_editor(out)
         except Exception as exc:
@@ -2895,7 +2867,7 @@ LIMIT 500
             try:
                 self._import_abweichungs_editor_file(output_file)
             except Exception as exc:
-                messagebox.showwarning("Abweichungsanalyse-Editor", f"Abweichungsdatei konnte nicht vollständig eingelesen werden:\n{exc}")
+                messagebox.showwarning("Abweichungsanalyse-Editor", _T('Abweichungsdatei konnte nicht vollständig eingelesen werden:\n{p0}', p0=exc))
 
         win = tk.Toplevel(self)
         win.resizable(True, True)
@@ -2945,7 +2917,7 @@ LIMIT 500
         tk.Label(top, text="Filter:", bg="#ffffff", fg="#0b4a86", font=(theme.FONT, 10, "bold")).pack(side="left", padx=(0, 6))
         status_var = tk.StringVar(value="offen")
         source_label = Path(output_file).name if output_file else "alle Abweichungen"
-        tk.Label(top, text=f"Quelle: {source_label}", bg="#ffffff", fg="#333").pack(side="right")
+        tk.Label(top, text=_T('Quelle: {p0}', p0=source_label), bg="#ffffff", fg="#333").pack(side="right")
 
         columns = ("id", "anzahl", "pzn", "artikel", "df", "pck", "nmg_pzn", "nmg_artikel", "austauschbar", "abweichende_felder", "nmg_rabatt", "apu", "status")
         tree = ttk.Treeview(body, columns=columns, show="headings", selectmode="extended")
@@ -3019,7 +2991,7 @@ LIMIT 500
                     nmg_value, nmg_artikel, austausch_value, changed_fields, nmg_rabatt, apu, row["status"]
                 ))
                 row_map[iid] = {"row": row, "ids": summary.get("ids") or [int(row["id"])], "summary": summary}
-            self.status.set(f"Abweichungsanalyse-Editor: {len(rows)} Einträge angezeigt.")
+            self.status.set(_T('Abweichungsanalyse-Editor: {p0} Einträge angezeigt.', p0=len(rows)))
 
         def selected_ids():
             sel = tree.selection()
@@ -3059,19 +3031,7 @@ LIMIT 500
             nmg_varianten = "; ".join(summary.get("nmg_varianten") or [])
             austausch_varianten = "; ".join(summary.get("austausch_varianten") or [])
             detail.set(
-                f"PZN: {row['pzn']}\n"
-                f"Artikel: {artikel or ''}\n"
-                f"DF: {df_value or ''}\n"
-                f"PCK: {pck_value or ''}\n"
-                f"NMG-PZN: {nmg_value or ''}\n"
-                f"NMG-Artikel: {nmg_artikel or ''}\n"
-                f"Abweichende Felder: {changed_fields or ''}\n"
-                f"NMG-Rabatt: {nmg_rabatt or ''}\n"
-                f"APU: {apu or ''}\n"
-                f"Anzahl Abweichungen: {summary.get('anzahl', 1) or 1}\n\n"
-                f"NMG-PZN-Varianten:\n{nmg_varianten or '-'}\n\n"
-                f"Austausch-Varianten:\n{austausch_varianten or '-'}\n\n"
-                f"Status: {row['status']}"
+                _T('PZN: {p0}\nArtikel: {p1}\nDF: {p2}\nPCK: {p3}\nNMG-PZN: {p4}\nNMG-Artikel: {p5}\nAbweichende Felder: {p6}\nNMG-Rabatt: {p7}\nAPU: {p8}\nAnzahl Abweichungen: {p9}\n\nNMG-PZN-Varianten:\n{p10}\n\nAustausch-Varianten:\n{p11}\n\nStatus: {p12}', p0=row['pzn'], p1=artikel or '', p2=df_value or '', p3=pck_value or '', p4=nmg_value or '', p5=nmg_artikel or '', p6=changed_fields or '', p7=nmg_rabatt or '', p8=apu or '', p9=summary.get('anzahl', 1) or 1, p10=nmg_varianten or '-', p11=austausch_varianten or '-', p12=row['status'])
             )
 
         tree.bind("<<TreeviewSelect>>", update_detail)
@@ -3153,7 +3113,7 @@ LIMIT 500
         except Exception:
             pass
         try:
-            messagebox.showerror("Programmfehler", f"Es ist ein Fehler aufgetreten:\n{val}")
+            messagebox.showerror("Programmfehler", _T('Es ist ein Fehler aufgetreten:\n{p0}', p0=val))
         except Exception:
             pass
 
@@ -3189,7 +3149,7 @@ LIMIT 500
         header.grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 8))
         header.columnconfigure(0, weight=1)
         tk.Label(header, text="Protokolle", font=(theme.FONT, 20, "bold"), fg="#0b4a86", bg="#ffffff").grid(row=0, column=0, sticky="w", padx=14, pady=(12, 2))
-        tk.Label(header, text=f"Protokollverzeichnis: {PROTOCOL_ROOT}", font=(theme.FONT, 10), fg="#333", bg="#ffffff").grid(row=1, column=0, sticky="w", padx=14, pady=(0, 12))
+        tk.Label(header, text=_T('Protokollverzeichnis: {p0}', p0=PROTOCOL_ROOT), font=(theme.FONT, 10), fg="#333", bg="#ffffff").grid(row=1, column=0, sticky="w", padx=14, pady=(0, 12))
         theme.PillButton(header, "Ordner öffnen", lambda: _open_folder(PROTOCOL_ROOT), kind="neutral", padx=12, pady=6).grid(row=0, column=1, rowspan=2, sticky="e", padx=14, pady=12)
 
         body = tk.Frame(win, bg="#ffffff", highlightbackground="#d8e2ee", highlightthickness=1)
@@ -3290,7 +3250,7 @@ LIMIT 500
             try:
                 package = create_support_package()
                 self._log_action("protokolle", "Supportpaket erstellt", str(package))
-                if messagebox.askyesno("Supportpaket", f"Supportpaket erstellt:\n{package}\n\nJetzt per Mail senden?"):
+                if messagebox.askyesno("Supportpaket", _T('Supportpaket erstellt:\n{p0}\n\nJetzt per Mail senden?', p0=package)):
                     open_mail_with_attachment(package, DEFAULT_RECIPIENT, "NMGone Supportpaket")
             except Exception as exc:
                 self._log_error("protokolle", "Supportpaket erstellen", exc)
@@ -3305,7 +3265,7 @@ LIMIT 500
                 messagebox.showwarning("Admin", "Falsches Passwort. Protokoll wurde nicht gelöscht.")
                 self._log_action("admin", "Protokoll löschen abgelehnt", str(path))
                 return
-            if not messagebox.askyesno("Protokoll löschen", f"Dieses Protokoll wirklich löschen?\n\n{path}"):
+            if not messagebox.askyesno("Protokoll löschen", _T('Dieses Protokoll wirklich löschen?\n\n{p0}', p0=path)):
                 return
             try:
                 delete_protocol_file(path)
@@ -3344,8 +3304,8 @@ LIMIT 500
                 subtitle="Daten werden gesichert ...",
             )
             self._log_action("update_backup", "Backup erstellt", str(out))
-            self.status.set(f"Backup erstellt: {out}")
-            messagebox.showinfo("Backup erstellt", f"Backup wurde erstellt:\n{out}")
+            self.status.set(_T('Backup erstellt: {p0}', p0=out))
+            messagebox.showinfo("Backup erstellt", _T('Backup wurde erstellt:\n{p0}', p0=out))
         except Exception as exc:
             self._log_error("update_backup", "Backup erstellen", exc)
             messagebox.showerror("Backup-Fehler", str(exc))
@@ -3367,8 +3327,8 @@ LIMIT 500
             )
             self._log_action("update_backup", "Backup wiederhergestellt", f"Quelle: {file} | Ziel: {db}")
             init_db(DB_PATH)
-            self.status.set(f"Backup wiederhergestellt: {db}")
-            messagebox.showinfo("Wiederherstellung fertig", f"Datenbank wurde wiederhergestellt:\n{db}")
+            self.status.set(_T('Backup wiederhergestellt: {p0}', p0=db))
+            messagebox.showinfo("Wiederherstellung fertig", _T('Datenbank wurde wiederhergestellt:\n{p0}', p0=db))
         except Exception as exc:
             self._log_error("update_backup", "Backup wiederherstellen", exc)
             messagebox.showerror("Restore-Fehler", str(exc))
@@ -3382,12 +3342,7 @@ LIMIT 500
             path, version_str = pending
             if messagebox.askyesno(
                 "Lokales Setup gefunden",
-                f"Im Update-Ordner liegt ein Setup bereit:\n\n"
-                f"Datei: {path.name}\n"
-                f"Version: V{version_str}\n"
-                f"Aktuell installiert: V{APP_VERSION}\n\n"
-                f"Jetzt installieren?"
-                f"{self.SMARTSCREEN_HINT}"
+                _T('Im Update-Ordner liegt ein Setup bereit:\n\nDatei: {p0}\nVersion: V{p1}\nAktuell installiert: V{p2}\n\nJetzt installieren?{p3}', p0=path.name, p1=version_str, p2=APP_VERSION, p3=self.SMARTSCREEN_HINT)
             ):
                 self._launch_setup_and_exit(path)
                 return
@@ -3451,7 +3406,7 @@ LIMIT 500
                 restart_application()
                 self.destroy()
             except Exception as restart_exc:
-                messagebox.showwarning("Neustart", f"Update ist installiert, aber der automatische Neustart ist fehlgeschlagen.\n\n{restart_exc}\n\nBitte Programm manuell neu starten.")
+                messagebox.showwarning("Neustart", _T('Update ist installiert, aber der automatische Neustart ist fehlgeschlagen.\n\n{p0}\n\nBitte Programm manuell neu starten.', p0=restart_exc))
         except Exception as exc:
             messagebox.showerror("Update-Fehler", str(exc))
 
@@ -3486,11 +3441,11 @@ LIMIT 500
                 messagebox.showinfo("Auswahl", "Bitte Rücksprungpunkt auswählen.")
                 return
             snap = snaps[sel[0]]
-            if not messagebox.askyesno("Rollback", f"Diesen Rücksprungpunkt wiederherstellen?\n\n{snap.name}\n\nDanach Programm neu starten."):
+            if not messagebox.askyesno("Rollback", _T('Diesen Rücksprungpunkt wiederherstellen?\n\n{p0}\n\nDanach Programm neu starten.', p0=snap.name)):
                 return
             try:
                 res = restore_rollback_snapshot(snap)
-                messagebox.showinfo("Rollback fertig", f"Vorherige Version wurde wiederhergestellt.\n\nSicherheitskopie aktueller Stand:\n{res.get('safety')}\n\nBitte Programm schließen und neu starten.")
+                messagebox.showinfo("Rollback fertig", _T('Vorherige Version wurde wiederhergestellt.\n\nSicherheitskopie aktueller Stand:\n{p0}\n\nBitte Programm schließen und neu starten.', p0=res.get('safety')))
                 win.destroy()
             except Exception as exc:
                 messagebox.showerror("Rollback-Fehler", str(exc))
@@ -3507,7 +3462,7 @@ LIMIT 500
         self.clear_page()
         self._page_header(
             "Versionsinfo",
-            f"Aktuelle Version: {APP_VERSION_DISPLAY} ({APP_VERSION})  ·  DB-Schema: {DB_SCHEMA_VERSION}  ·  Update-Ordner: {UPDATE_DIR}",
+            _T('Aktuelle Version: {p0} ({p1})  ·  DB-Schema: {p2}  ·  Update-Ordner: {p3}', p0=APP_VERSION_DISPLAY, p1=APP_VERSION, p2=DB_SCHEMA_VERSION, p3=UPDATE_DIR),
         )
 
         body = tk.Frame(self.page, bg="#ffffff")
@@ -3580,7 +3535,7 @@ LIMIT 500
             version_tree.focus(first[0])
             on_select()
 
-        self.status.set(f"Versionsinfo: {len(changelog)} Versionen.")
+        self.status.set(_T('Versionsinfo: {p0} Versionen.', p0=len(changelog)))
 
     def clear_page(self):
         for widget in self.page.winfo_children():
@@ -3922,12 +3877,10 @@ LIMIT 500
 
                 def _finished_ui():
                     self._log_action("neue_auswertung", "Auswertung gespeichert", str(copied_out))
-                    self.status.set(f"Auswertung gespeichert: {copied_out}")
+                    self.status.set(_T('Auswertung gespeichert: {p0}', p0=copied_out))
                     messagebox.showinfo(
                         "Auswertung fertig",
-                        f"Auswertung wurde erstellt und gespeichert:\n{copied_out}\n\n"
-                        "Der Kurzbericht (Excel + PDF) wird noch erstellt und liegt gleich im selben Ordner.\n\n"
-                        "Der Ordner wird jetzt geöffnet."
+                        _T('Auswertung wurde erstellt und gespeichert:\n{p0}\n\nDer Kurzbericht (Excel + PDF) wird noch erstellt und liegt gleich im selben Ordner.\n\nDer Ordner wird jetzt geöffnet.', p0=copied_out)
                     )
                     _open_folder(analyse_dir)
                     if on_done:
@@ -3963,7 +3916,7 @@ LIMIT 500
             if isinstance(exc, UnknownInputFormatError):
                 self.status.set(str(exc))
                 if messagebox.askyesno("Format nicht erkannt",
-                                        f"{exc}\n\nSoll der Rohdaten-Formatassistent geöffnet werden?"):
+                                        _T('{p0}\n\nSoll der Rohdaten-Formatassistent geöffnet werden?', p0=exc)):
                     mapping = self._open_rohdaten_format_assistent(file, str(exc))
                     if mapping:
                         try:
@@ -3973,7 +3926,7 @@ LIMIT 500
                                 vorlage_slot=vorlage_slot,
                             )
                         except Exception as mapped_exc:
-                            self.status.set(f"Auswertung nach Mapping fehlgeschlagen: {mapped_exc}")
+                            self.status.set(_T('Auswertung nach Mapping fehlgeschlagen: {p0}', p0=mapped_exc))
                             messagebox.showerror("Auswertungsfehler nach Mapping", str(mapped_exc))
                 else:
                     messagebox.showwarning("Format nicht erkannt", str(exc))
@@ -4010,7 +3963,7 @@ LIMIT 500
         self._run_background(
             lambda: create_vorlage_export(file, analyse_name, on_duplicate_prompt=on_duplicate_prompt),
             title="Auswertung wird erstellt",
-            subtitle=f"NMGone wertet {Path(file).name} aus ...",
+            subtitle=_T('NMGone wertet {p0} aus ...', p0=Path(file).name),
             progress=False,
             on_done=post_export,
             on_error=on_export_error,
@@ -4090,7 +4043,7 @@ LIMIT 500
     def _run_auswertung_after_mapping(self, original_file, mapping, analyse_name, kundentyp=None, kundennummer="", kundenname="", vorlage_slot=None):
         """Speichert Mapping, baut Standarddatei und startet die Auswertung direkt danach."""
         mapped_file = self._create_standard_rohdaten_from_mapping(original_file, mapping)
-        self.status.set(f"Mapping angewendet. Starte Auswertung mit Standarddatei: {mapped_file.name}")
+        self.status.set(_T('Mapping angewendet. Starte Auswertung mit Standarddatei: {p0}', p0=mapped_file.name))
         return self._run_neue_auswertung_export(str(mapped_file), analyse_name, kundentyp, kundennummer, kundenname, mapping.get("zeitraum_monate"))
 
     def _ensure_rohdaten_mapping_table(self):
@@ -4125,7 +4078,7 @@ LIMIT 500
                 label = str(value).strip() if value not in (None, "") else f"Spalte {col}"
                 headers.append(f"{col}: {label}")
         except Exception as exc:
-            messagebox.showerror("Formatassistent", f"Datei konnte nicht gelesen werden:\n{exc}")
+            messagebox.showerror("Formatassistent", _T('Datei konnte nicht gelesen werden:\n{p0}', p0=exc))
             return False
 
         if not headers:
@@ -4216,7 +4169,7 @@ LIMIT 500
                 "header_zeile": 1,
             }
             result["mapping"] = mapping
-            self.status.set(f"Rohdaten-Mapping gespeichert: {path.name}")
+            self.status.set(_T('Rohdaten-Mapping gespeichert: {p0}', p0=path.name))
             try:
                 add_roadmap_item(
                     bereich="Import",
@@ -4347,7 +4300,7 @@ LIMIT 500
                         icon = "🔴" if "hoch" in prio.lower() else "🟡"
                         tk.Label(todo_box, text=f"{icon} {(t['titel'] or '')[:38]}", font=(theme.FONT, 8), fg="#145c2e", bg="#f0faf4").pack(anchor="w", padx=8)
                     if gesamt > 4:
-                        tk.Label(todo_box, text=f"… +{gesamt-4} weitere", font=(theme.FONT, 7), fg="#666", bg="#f0faf4").pack(anchor="w", padx=8)
+                        tk.Label(todo_box, text=_T('… +{p0} weitere', p0=gesamt-4), font=(theme.FONT, 7), fg="#666", bg="#f0faf4").pack(anchor="w", padx=8)
                 else:
                     tk.Label(todo_box, text="Keine offenen ToDos ✔", font=(theme.FONT, 8), fg="#11823b", bg="#f0faf4").pack(anchor="w", padx=8)
             except Exception:
@@ -4444,7 +4397,7 @@ LIMIT 500
             # V1.1 SP11: leeres Set ist OK - Dashboard wird auf der Startseite
             # einfach kleiner dargestellt (kein leerer Platzhalter).
             if len(new_tiles) > 8:
-                messagebox.showinfo("Dashboard", f"Maximal 8 Schnellzugriff-Kacheln erlaubt. Aktuell gewählt: {len(new_tiles)}.\nBitte {len(new_tiles)-8} Kachel(n) abwählen.")
+                messagebox.showinfo("Dashboard", _T('Maximal 8 Schnellzugriff-Kacheln erlaubt. Aktuell gewählt: {p0}.\nBitte {p1} Kachel(n) abwählen.', p0=len(new_tiles), p1=len(new_tiles)-8))
                 return
             self._dashboard_set_active_tiles(new_tiles)
             self._dashboard_set_active_info(new_info)
@@ -4607,9 +4560,9 @@ LIMIT 500
             except Exception: pass
 
             # Tab-Labels aktualisieren
-            nb.tab(0, text=f"👥 Kunden ({len(k_tree.get_children())})")
-            nb.tab(1, text=f"📊 Auswertungen ({len(a_tree.get_children())})")
-            nb.tab(2, text=f"✅ ToDos ({len(t_tree.get_children())})")
+            nb.tab(0, text=_T('👥 Kunden ({p0})', p0=len(k_tree.get_children())))
+            nb.tab(1, text=_T('📊 Auswertungen ({p0})', p0=len(a_tree.get_children())))
+            nb.tab(2, text=_T('✅ ToDos ({p0})', p0=len(t_tree.get_children())))
 
         search_var.trace_add("write", do_search)
         do_search()
@@ -4645,7 +4598,7 @@ LIMIT 500
             win.transient(self)
             win.grab_set()
 
-            tk.Label(win, text=f'Notiz: "{text[:50]}"', font=(theme.FONT, 10), fg="#333", bg="#f5f7fb",
+            tk.Label(win, text=_T('Notiz: "{p0}"', p0=text[:50]), font=(theme.FONT, 10), fg="#333", bg="#f5f7fb",
                      wraplength=360).pack(anchor="w", padx=20, pady=(14,8))
             tk.Label(win, text="Wohin soll die Notiz?", font=(theme.FONT, 11, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=20)
 
@@ -4906,11 +4859,11 @@ LIMIT 500
             if hide_when_empty and not tree_frame.winfo_ismapped():
                 tree_frame.pack(fill="x", padx=10, pady=(0, 4))
             if shown < total:
-                status_lbl.configure(text=f"{shown} von {total} Treffern")
-                more_btn.configure(text=f"Mehr anzeigen ({total - shown})")
+                status_lbl.configure(text=_T('{p0} von {p1} Treffern', p0=shown, p1=total))
+                more_btn.configure(text=_T('Mehr anzeigen ({p0})', p0=total - shown))
                 more_row.pack(fill="x", padx=10, pady=(0, 6))
             else:
-                status_lbl.configure(text=f"{total} Treffer")
+                status_lbl.configure(text=_T('{p0} Treffer', p0=total))
                 more_row.pack_forget()
 
         def render(rows: list[dict]):
@@ -4947,7 +4900,7 @@ LIMIT 500
                     if my_id != seq["current"]:
                         return
                     if isinstance(result, Exception):
-                        status_lbl.configure(text=f"Fehler: {result}")
+                        status_lbl.configure(text=_T('Fehler: {p0}', p0=result))
                         return
                     render(result)
 
@@ -5181,7 +5134,7 @@ LIMIT 500
         else:
             tk.Label(inner, text="Keine Kacheln aktiv. Bitte '⚙️ Dashboard anpassen' nutzen.", fg="#888", bg="#ffffff", font=(theme.FONT, 10)).pack(pady=20)
 
-        self.status.set(f"Analysen bereit.  {len(active_tiles)} Schnellzugriff-Kacheln  |  {len(active_info)} Info-Bereiche aktiv.")
+        self.status.set(_T('Analysen bereit.  {p0} Schnellzugriff-Kacheln  |  {p1} Info-Bereiche aktiv.', p0=len(active_tiles), p1=len(active_info)))
 
     # ── SHAREPOINT / ONEDRIVE VORBEREITUNG ──────────────────────────────────────
     def show_datenbankpfad_page(self):
@@ -5328,8 +5281,8 @@ LIMIT 500
                     ))
                     a_row_map[iid] = dict(k)
             except Exception as exc:
-                tk.Label(ampel_frame, text=f"Fehler: {exc}", fg="#c00", bg="#ffffff").grid(row=2, column=0)
-            nb.tab(0, text=f"🚦 Kunden-Ampel ({len(a_tree.get_children())})")
+                tk.Label(ampel_frame, text=_T('Fehler: {p0}', p0=exc), fg="#c00", bg="#ffffff").grid(row=2, column=0)
+            nb.tab(0, text=_T('🚦 Kunden-Ampel ({p0})', p0=len(a_tree.get_children())))
 
         reload_ampel()
         filter_var.trace_add("write", lambda *_: reload_ampel(filter_var.get()))
@@ -5392,7 +5345,7 @@ LIMIT 500
                             d_row_map[iid] = (k1, k2)
             except Exception as exc:
                 pass
-            nb.tab(1, text=f"🔍 Duplikate ({len(d_tree.get_children())})")
+            nb.tab(1, text=_T('🔍 Duplikate ({p0})', p0=len(d_tree.get_children())))
 
         reload_duplikate()
 
@@ -5438,8 +5391,8 @@ LIMIT 500
         form.columnconfigure(2, weight=1)
 
         tk.Label(form, text="Feld", bg="#e8edf5", font=(theme.FONT,9,"bold")).grid(row=0,column=0,sticky="ew",padx=6,pady=4)
-        tk.Label(form, text=f"Eintrag 1 (ID {k1['id']})", bg="#e8edf5", font=(theme.FONT,9,"bold")).grid(row=0,column=1,sticky="ew",padx=6,pady=4)
-        tk.Label(form, text=f"Eintrag 2 (ID {k2['id']})", bg="#e8edf5", font=(theme.FONT,9,"bold")).grid(row=0,column=2,sticky="ew",padx=6,pady=4)
+        tk.Label(form, text=_T('Eintrag 1 (ID {p0})', p0=k1['id']), bg="#e8edf5", font=(theme.FONT,9,"bold")).grid(row=0,column=1,sticky="ew",padx=6,pady=4)
+        tk.Label(form, text=_T('Eintrag 2 (ID {p0})', p0=k2['id']), bg="#e8edf5", font=(theme.FONT,9,"bold")).grid(row=0,column=2,sticky="ew",padx=6,pady=4)
 
         choices = {}
         for r, f in enumerate(felder, start=1):
@@ -5481,7 +5434,7 @@ LIMIT 500
                     # Duplikat löschen
                     con.execute("DELETE FROM tbl_kunden_center WHERE id=?", (del_id,))
                     con.commit()
-                messagebox.showinfo("Zusammenführen", f"Zusammenführung abgeschlossen. Eintrag {del_id} gelöscht, Eintrag {keep_id} behalten.")
+                messagebox.showinfo("Zusammenführen", _T('Zusammenführung abgeschlossen. Eintrag {p0} gelöscht, Eintrag {p1} behalten.', p0=del_id, p1=keep_id))
                 win.destroy()
                 if callback: callback()
             except Exception as exc:
@@ -5498,8 +5451,7 @@ LIMIT 500
         tk.Label(
             body,
             text=(
-                f"{title} ist als Startseitenbereich angelegt.\n\n"
-                "Die Fachlogik wird später separat umgesetzt, damit die aktuelle Auswertungs-, Schulbank- und Vorlagenlogik nicht verändert wird."
+                _T('{p0} ist als Startseitenbereich angelegt.\n\nDie Fachlogik wird später separat umgesetzt, damit die aktuelle Auswertungs-, Schulbank- und Vorlagenlogik nicht verändert wird.', p0=title)
             ),
             bg="#ffffff",
             fg="#333",
@@ -5695,7 +5647,7 @@ LIMIT 500
                 vals = [row[c] if c in row.keys() else "" for c in columns]
                 iid = tree.insert("", "end", values=vals)
                 row_map[iid] = dict(row)
-            self.status.set(f"{title}: {len(rows)} Datensätze angezeigt.")
+            self.status.set(_T('{p0}: {p1} Datensätze angezeigt.', p0=title, p1=len(rows)))
         def selected_row():
             sel = tree.selection()
             if not sel:
@@ -5868,7 +5820,7 @@ LIMIT 500
                     vals = [row[c] if c in row.keys() else "" for c in columns]
                     iid = tree.insert("", "end", values=vals)
                     row_map[iid] = dict(row)
-                self.status.set(f"Mitarbeiter-Center: {len(rows)} Datensätze angezeigt.")
+                self.status.set(_T('Mitarbeiter-Center: {p0} Datensätze angezeigt.', p0=len(rows)))
             def selected_row():
                 sel = tree.selection()
                 if not sel:
@@ -6040,7 +5992,7 @@ LIMIT 500
 
             for idx, row in enumerate(rows):
                 make_card(row, idx)
-            self.status.set(f"Mitarbeiter-Board: {len(rows)} Karten angezeigt.")
+            self.status.set(_T('Mitarbeiter-Board: {p0} Karten angezeigt.', p0=len(rows)))
 
         theme.PillButton(modebar, "Tabelle", show_table, color="#0b4a86", padx=16, pady=8).pack(side="left", padx=(0,8))
         theme.PillButton(modebar, "Board / Post-it", show_board, color="#6b4fb3", padx=16, pady=8).pack(side="left", padx=8)
@@ -6312,7 +6264,7 @@ LIMIT 500
                 messagebox.showinfo("Zusatzfeld", "Bitte zuerst ein Feld auswählen.")
                 return
             row = row_map.get(sel[0])
-            if not messagebox.askyesno("Zusatzfeld", f"Feld '{row.get('feld_name')}' löschen?\n(Bereits erfasste Werte bleiben in der Datenbank, werden aber nicht mehr angezeigt.)"):
+            if not messagebox.askyesno("Zusatzfeld", _T("Feld '{p0}' löschen?\n(Bereits erfasste Werte bleiben in der Datenbank, werden aber nicht mehr angezeigt.)", p0=row.get('feld_name'))):
                 return
             with sqlite3.connect(DB_PATH) as con:
                 con.execute("UPDATE tbl_mitarbeiter_feld SET aktiv=0 WHERE id=?", (row["id"],))
@@ -6956,7 +6908,7 @@ LIMIT 500
                 else:
                     messagebox.showinfo(title, "Outlook-Integration nur unter Windows verfügbar.")
             except Exception as exc:
-                messagebox.showerror(title, f"Outlook konnte nicht geöffnet werden:\n{exc}")
+                messagebox.showerror(title, _T('Outlook konnte nicht geöffnet werden:\n{p0}', p0=exc))
 
         ana_btns = tk.Frame(tab_ana, bg="#ffffff")
         ana_btns.grid(row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8))
@@ -7011,7 +6963,7 @@ LIMIT 500
                 vk_info.config(text=(f"{len(rows)} Positionen · Gesamtmenge {gesamt}"
                                      if rows else "Für diesen Kunden sind keine Verkäufe erfasst."))
             except Exception as exc:
-                vk_info.config(text=f"Fehler beim Laden: {exc}")
+                vk_info.config(text=_T('Fehler beim Laden: {p0}', p0=exc))
         load_verkaufte()
 
         # ---- Reiter: Notizen ----
@@ -7050,7 +7002,7 @@ LIMIT 500
             try:
                 from .plz_lookup import is_valid_plz
                 if not is_valid_plz(plz) and not messagebox.askyesno(
-                        title, f"Die PLZ {plz} wurde nicht gefunden.\nTrotzdem speichern?"):
+                        title, _T('Die PLZ {p0} wurde nicht gefunden.\nTrotzdem speichern?', p0=plz)):
                     return
             except Exception:
                 pass
@@ -7196,7 +7148,7 @@ LIMIT 500
                 pct = f"{float(r[2]) * 100:.1f} %" if r[2] is not None else ""
                 tv.insert("", "end", values=(r[0], r[1] or "", pct, r[3] or "", r[4] or ""))
                 shown += 1
-            info_var.set(f"{shown} von {len(rows)} Eintraegen")
+            info_var.set(_T('{p0} von {p1} Eintraegen', p0=shown, p1=len(rows)))
 
         filter_var.trace_add("write", lambda *a: reload_table())
         reload_table()
@@ -7226,7 +7178,7 @@ LIMIT 500
             row("Durchschnitt:", f"{(stats['avg'] or 0) * 100:.1f} %" if stats["avg"] is not None else "-")
             row("Letzte Aktualisierung:", str(stats["letzte_aktualisierung"] or "-"))
 
-            tk.Label(stats_inner, text=f"Snapshots ({len(snaps)})", font=(theme.FONT, 13, "bold"), bg="#f8fbff", fg="#0b4a86").pack(anchor="w", padx=18, pady=(24, 6))
+            tk.Label(stats_inner, text=_T('Snapshots ({p0})', p0=len(snaps)), font=(theme.FONT, 13, "bold"), bg="#f8fbff", fg="#0b4a86").pack(anchor="w", padx=18, pady=(24, 6))
             if not snaps:
                 tk.Label(stats_inner, text="Noch keine Snapshots vorhanden. Der erste entsteht beim naechsten PK-Rabatte-Import.", bg="#f8fbff", fg="#666", justify="left", wraplength=600).pack(anchor="w", padx=18, pady=4)
             else:
@@ -7289,9 +7241,7 @@ LIMIT 500
                 pct = f"{(d['rabatt'] or 0) * 100:.1f} %" if d.get("rabatt") is not None else "-"
                 diff_ent_tv.insert("", "end", values=(d["nmg_pzn"], d.get("artikel") or "", pct))
             diff_info.set(
-                f"Snapshot #{diff['snapshot_id']}: "
-                f"{len(diff['neu'])} neu, {len(diff['geaendert'])} geaendert, "
-                f"{len(diff['entfernt'])} entfernt, {diff['unveraendert_count']} unveraendert."
+                _T('Snapshot #{p0}: {p1} neu, {p2} geaendert, {p3} entfernt, {p4} unveraendert.', p0=diff['snapshot_id'], p1=len(diff['neu']), p2=len(diff['geaendert']), p3=len(diff['entfernt']), p4=diff['unveraendert_count'])
             )
         render_diff()
 
@@ -7327,13 +7277,13 @@ LIMIT 500
             with sqlite3.connect(DB_PATH) as con:
                 verlauf = history_for_pzn(con, pzn_norm)
             if not verlauf:
-                hist_info.set(f"Kein Verlauf fuer PZN {pzn_norm} gefunden.")
+                hist_info.set(_T('Kein Verlauf fuer PZN {p0} gefunden.', p0=pzn_norm))
                 return
             for h in verlauf:
                 snap_label = f"#{h['snapshot_id']}" if h["snapshot_id"] else "aktuell"
                 pct = f"{(h['rabatt'] or 0) * 100:.1f} %" if h.get("rabatt") is not None else "-"
                 hist_tv.insert("", "end", values=(snap_label, h["erstellt_am"], h.get("artikel") or "", pct, h.get("snapshot_quelle") or ""))
-            hist_info.set(f"{len(verlauf)} Eintraege fuer PZN {pzn_norm}.")
+            hist_info.set(_T('{p0} Eintraege fuer PZN {p1}.', p0=len(verlauf), p1=pzn_norm))
         hist_entry.bind("<Return>", render_history)
         theme.PillButton(hist_top, "Anzeigen", render_history, kind="neutral", padx=12, pady=7).pack(side="left", padx=(8, 0))
 
@@ -7583,7 +7533,7 @@ LIMIT 500
             """Laedt die Details im Worker-Thread, damit Klicks die UI nicht einfrieren."""
             detail_seq["current"] += 1
             my_id = detail_seq["current"]
-            detail_head.configure(text=f"PZN {pzn}  ·  {_T('Lade ...')}")
+            detail_head.configure(text=_T('PZN {p0}  ·  {p1}', p0=pzn, p1=_T('Lade ...')))
 
             def worker():
                 try:
@@ -7610,7 +7560,7 @@ LIMIT 500
         def _apply_details(d):
             info = d.get("info") or {}
             detail_head.configure(
-                text=f"PZN {d['pzn']}  ·  {info.get('artikel') or _T('Kein Artikelname bekannt')}"
+                text=_T('PZN {p0}  ·  {p1}', p0=d['pzn'], p1=info.get('artikel') or _T('Kein Artikelname bekannt'))
             )
 
             info_labels["artikel"].configure(text=_fmt(info.get("artikel")))
@@ -7856,7 +7806,7 @@ LIMIT 500
             row = row_map.get(sel[0])
             if not row:
                 return
-            if not messagebox.askyesno("Kunden", f"Kunde '{row.get('kundenname','')}' wirklich löschen?"):
+            if not messagebox.askyesno("Kunden", _T("Kunde '{p0}' wirklich löschen?", p0=row.get('kundenname',''))):
                 return
             with sqlite3.connect(DB_PATH) as con:
                 con.execute("DELETE FROM tbl_kunden_center WHERE id=?", (row["id"],))
@@ -7897,7 +7847,7 @@ LIMIT 500
                 cmd = [sys.executable, str(start_py), "--kasse"]
             self._kasse_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
         except Exception as exc:
-            messagebox.showerror("NMG Kasse", f"Kasse konnte nicht gestartet werden:\n{exc}",
+            messagebox.showerror("NMG Kasse", _T('Kasse konnte nicht gestartet werden:\n{p0}', p0=exc),
                                  parent=self)
 
     def open_personal_app(self):
@@ -7924,7 +7874,7 @@ LIMIT 500
             self._personal_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
         except Exception as exc:
             messagebox.showerror("Mitarbeiter & Personal",
-                                 f"App konnte nicht gestartet werden:\n{exc}", parent=self)
+                                 _T('App konnte nicht gestartet werden:\n{p0}', p0=exc), parent=self)
 
     def open_faktura_app(self):
         """Faktura-App (Rechnungen & Gutschriften) als EIGENEN Prozess starten.
@@ -7950,7 +7900,7 @@ LIMIT 500
             self._faktura_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
         except Exception as exc:
             messagebox.showerror("NMG Faktura",
-                                 f"Faktura konnte nicht gestartet werden:\n{exc}", parent=self)
+                                 _T('Faktura konnte nicht gestartet werden:\n{p0}', p0=exc), parent=self)
 
     def open_gdp_app(self):
         """GDP-App (Wareneingang, Chargen-Rückverfolgung, Kühlkette & Retouren)
@@ -7977,7 +7927,7 @@ LIMIT 500
             self._gdp_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
         except Exception as exc:
             messagebox.showerror("Wareneingang & Retouren",
-                                 f"Die App konnte nicht gestartet werden:\n{exc}", parent=self)
+                                 _T('Die App konnte nicht gestartet werden:\n{p0}', p0=exc), parent=self)
 
     def open_meldungen_app(self):
         """Meldungen-App (GDP-Meldewesen, Kühlsachenkontrolle & Selbstinspektion)
@@ -8004,7 +7954,7 @@ LIMIT 500
             self._meldungen_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
         except Exception as exc:
             messagebox.showerror("Meldungen",
-                                 f"Die App konnte nicht gestartet werden:\n{exc}", parent=self)
+                                 _T('Die App konnte nicht gestartet werden:\n{p0}', p0=exc), parent=self)
 
     def open_einkauf_app(self):
         """Einkauf-App (Beschaffung EU-Ausland, §129-Margen, Aufgaben/Meldungen)
@@ -8031,7 +7981,7 @@ LIMIT 500
             self._einkauf_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
         except Exception as exc:
             messagebox.showerror("NMG Einkauf",
-                                 f"Die Einkauf-App konnte nicht gestartet werden:\n{exc}", parent=self)
+                                 _T('Die Einkauf-App konnte nicht gestartet werden:\n{p0}', p0=exc), parent=self)
 
     def open_buchhaltung_app(self):
         """Buchhaltungs-App (Vorerfassung & Export ans Steuerbüro, eRechnung-Belege,
@@ -8058,7 +8008,7 @@ LIMIT 500
             self._buchhaltung_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
         except Exception as exc:
             messagebox.showerror("Buchhaltung",
-                                 f"Die Buchhaltungs-App konnte nicht gestartet werden:\n{exc}", parent=self)
+                                 _T('Die Buchhaltungs-App konnte nicht gestartet werden:\n{p0}', p0=exc), parent=self)
 
     def open_parameter_app(self):
         """Parameter- & Berechtigungs-App (wer darf was) als EIGENEN Prozess
@@ -8084,7 +8034,7 @@ LIMIT 500
             self._parameter_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
         except Exception as exc:
             messagebox.showerror("Parameter & Berechtigungen",
-                                 f"Die App konnte nicht gestartet werden:\n{exc}", parent=self)
+                                 _T('Die App konnte nicht gestartet werden:\n{p0}', p0=exc), parent=self)
 
     def open_auswertungen_app(self):
         """Auswertungs-/Report-Modul als EIGENEN Prozess starten (NMGone.exe
@@ -8110,7 +8060,7 @@ LIMIT 500
             self._report_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
         except Exception as exc:
             messagebox.showerror("NMG Auswertungen",
-                                 f"Auswertungsmodul konnte nicht gestartet werden:\n{exc}",
+                                 _T('Auswertungsmodul konnte nicht gestartet werden:\n{p0}', p0=exc),
                                  parent=self)
 
     def open_hilfe_app(self):
@@ -8137,7 +8087,7 @@ LIMIT 500
             self._hilfe_proc = subprocess.Popen(cmd, close_fds=True, creationflags=flags)
         except Exception as exc:
             messagebox.showerror("NMGone Hilfe",
-                                 f"Hilfe konnte nicht gestartet werden:\n{exc}",
+                                 _T('Hilfe konnte nicht gestartet werden:\n{p0}', p0=exc),
                                  parent=self)
 
     def show_todo_center(self):
@@ -8302,7 +8252,7 @@ LIMIT 500
         win.grab_set()
         tk.Label(win, text="Auswertung einem Kunden zuordnen", font=(theme.FONT, 14, "bold"),
                  fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(16, 4))
-        tk.Label(win, text=f"Auswertung: {apotheke_name}", font=(theme.FONT, 10), fg="#555",
+        tk.Label(win, text=_T('Auswertung: {p0}', p0=apotheke_name), font=(theme.FONT, 10), fg="#555",
                  bg="#f5f7fb").pack(anchor="w", padx=20, pady=(0, 8))
         tk.Label(win, text="Kunden suchen und zuordnen – oder Abbrechen für keine Zuordnung.",
                  font=(theme.FONT, 9), fg="#888", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(0, 10))
@@ -8426,17 +8376,16 @@ LIMIT 500
                 erlaubt = ", ".join(sorted(SUPPORTED_DATA_EXTENSIONS))
                 messagebox.showwarning(
                     "Format nicht unterstützt",
-                    f"Die Datei „{Path(file).name}“ hat das Format „{suffix or '(kein)'}“, "
-                    f"das nicht eingelesen werden kann.\n\nErlaubte Formate: {erlaubt}."
+                    _T('Die Datei „{p0}“ hat das Format „{p1}“, das nicht eingelesen werden kann.\n\nErlaubte Formate: {p2}.', p0=Path(file).name, p1=suffix or '(kein)', p2=erlaubt)
                 )
-                self.status.set(f"Format nicht unterstützt: {suffix or Path(file).name}")
+                self.status.set(_T('Format nicht unterstützt: {p0}', p0=suffix or Path(file).name))
                 return
             rohdatei_var.set(file)
             if not apotheke_var.get().strip():
                 apotheke_var.set(Path(file).stem.replace("_", " "))
             if not kundenname_var.get().strip():
                 kundenname_var.set(Path(file).stem.replace("_", " "))
-            self.status.set(f"Rohdaten ausgewählt: {Path(file).name}")
+            self.status.set(_T('Rohdaten ausgewählt: {p0}', p0=Path(file).name))
 
         tk.Label(form, text="5. Rohdaten", bg="#f8fbff", fg="#0b4a86", font=(theme.FONT, 12, "bold")).grid(row=4, column=0, sticky="w", padx=14, pady=7)
         file_frame = tk.Frame(form, bg="#f8fbff")
@@ -8534,8 +8483,8 @@ LIMIT 500
             if not file:
                 return
             programm_auswertung_var.set(file)
-            selected_programm_info.set(f"Datei: {Path(file).name}")
-            self.status.set(f"Programm-Auswertung ausgewählt: {Path(file).name}")
+            selected_programm_info.set(_T('Datei: {p0}', p0=Path(file).name))
+            self.status.set(_T('Programm-Auswertung ausgewählt: {p0}', p0=Path(file).name))
 
         def choose_saved_programm():
             rows = self._get_saved_analysis_rows()
@@ -8585,8 +8534,8 @@ LIMIT 500
                     )
                     return
                 programm_auswertung_var.set(str(f))
-                selected_programm_info.set(f"Gespeichert: ID {row['id']} | {row['apotheke']} | {f.name}")
-                self.status.set(f"Gespeicherte Programm-Auswertung ausgewählt: {f.name}")
+                selected_programm_info.set(_T('Gespeichert: ID {p0} | {p1} | {p2}', p0=row['id'], p1=row['apotheke'], p2=f.name))
+                self.status.set(_T('Gespeicherte Programm-Auswertung ausgewählt: {p0}', p0=f.name))
                 win.destroy()
 
             btns = tk.Frame(win, bg="#f5f7fb")
@@ -8600,7 +8549,7 @@ LIMIT 500
             if not file:
                 return
             manuelle_anpassung_var.set(file)
-            self.status.set(f"Manuelle Anpassung ausgewählt: {Path(file).name}")
+            self.status.set(_T('Manuelle Anpassung ausgewählt: {p0}', p0=Path(file).name))
 
         def start_deviation_from_page():
             programm = programm_auswertung_var.get().strip()
@@ -8614,7 +8563,7 @@ LIMIT 500
             try:
                 out = export_abweichungsanalyse(manuell, programm)
                 self._roadmap_mark_abweichung_in_neue_auswertung_erledigt()
-                self.status.set(f"Abweichungsanalyse erzeugt: {out}")
+                self.status.set(_T('Abweichungsanalyse erzeugt: {p0}', p0=out))
                 self._roadmap_mark_abweichung_schulbank_v9_erledigt()
                 self.show_abweichungs_editor(out)
             except Exception as exc:
@@ -8883,10 +8832,10 @@ LIMIT 500
                 messagebox.showinfo("Schulbank", "Keine Einträge ausgewählt.")
                 return
             if confirm_all:
-                if not messagebox.askyesno("Schulbank Sammelaktion", f"{len(targets)} sichtbare Vorschläge werden jetzt {label}.\n\nFortfahren?"):
+                if not messagebox.askyesno("Schulbank Sammelaktion", _T('{p0} sichtbare Vorschläge werden jetzt {p1}.\n\nFortfahren?', p0=len(targets), p1=label)):
                     return
             elif len(targets) > 1:
-                if not messagebox.askyesno("Schulbank Sammelaktion", f"{len(targets)} markierte Vorschläge werden jetzt {label}.\n\nFortfahren?"):
+                if not messagebox.askyesno("Schulbank Sammelaktion", _T('{p0} markierte Vorschläge werden jetzt {p1}.\n\nFortfahren?', p0=len(targets), p1=label)):
                     return
 
             done = 0
@@ -8901,7 +8850,7 @@ LIMIT 500
             if errors:
                 messagebox.showwarning("Schulbank", f"{done} Einträge verarbeitet.\n\nFehler:\n" + "\n".join(errors[:8]))
             else:
-                self.status.set(f"Schulbank: {done} Einträge {label}.")
+                self.status.set(_T('Schulbank: {p0} Einträge {p1}.', p0=done, p1=label))
             self.show_schulbank_page(section)
 
         def set_status(status):
@@ -8941,7 +8890,7 @@ LIMIT 500
                     )
                     if not messagebox.askyesno(
                         "Schulbank: bereits als Biosimilar erfasst",
-                        f"{len(bereits_biosimilar)} der markierten PZN ist/sind bereits in der Biosimilar-Datenbank vorhanden:\n\n{summary}\n\nTrotzdem zusaetzlich als manuell uebernommen speichern?"
+                        _T('{p0} der markierten PZN ist/sind bereits in der Biosimilar-Datenbank vorhanden:\n\n{p1}\n\nTrotzdem zusaetzlich als manuell uebernommen speichern?', p0=len(bereits_biosimilar), p1=summary)
                     ):
                         return
             label = "gelernt" if status == "uebernommen" else ("abgelehnt" if status == "abgelehnt" else "zurückgesetzt")
@@ -9003,7 +8952,7 @@ LIMIT 500
         theme.PillButton(actionbar, "↩ Rückgängig", lambda: set_status("neu"), color="#8b5a00", padx=14, pady=8).pack(side="left", padx=8)
         theme.PillButton(actionbar, "Löschen", delete_selected, kind="neutral", padx=14, pady=8).pack(side="left", padx=8)
 
-        self.status.set(f"Schulbank aktiv: {len(rows)} Einträge angezeigt. Mehrfachauswahl ist möglich.")
+        self.status.set(_T('Schulbank aktiv: {p0} Einträge angezeigt. Mehrfachauswahl ist möglich.', p0=len(rows)))
 
 
     def show_schulbank_biosimilar_page(self):
@@ -9103,13 +9052,13 @@ LIMIT 500
                                 continue
                         data.append(d)
             except Exception as exc:
-                info_var.set(f"Biosimilar-Eintraege konnten nicht geladen werden: {exc}")
+                info_var.set(_T('Biosimilar-Eintraege konnten nicht geladen werden: {p0}', p0=exc))
                 return
             for d in data:
                 iid = tree.insert("", "end", values=tuple(d.get(c, "") for c in columns))
                 row_map[iid] = d
-            info_var.set(f"{len(data)} Biosimilar-Eintraege angezeigt.")
-            self.status.set(f"Biosimilar: {len(data)} Eintraege.")
+            info_var.set(_T('{p0} Biosimilar-Eintraege angezeigt.', p0=len(data)))
+            self.status.set(_T('Biosimilar: {p0} Eintraege.', p0=len(data)))
 
         def on_search(*_):
             load_rows(search_var.get().strip())
@@ -9180,7 +9129,7 @@ LIMIT 500
                     dlg.destroy()
                     load_rows(search_var.get().strip())
                 except Exception as exc:
-                    messagebox.showerror("Biosimilar", f"Speichern fehlgeschlagen:\n{exc}")
+                    messagebox.showerror("Biosimilar", _T('Speichern fehlgeschlagen:\n{p0}', p0=exc))
 
             btns = tk.Frame(frm)
             btns.grid(row=len(fields), column=0, columnspan=2, pady=(12, 0), sticky="e")
@@ -9201,7 +9150,7 @@ LIMIT 500
             ids = [int(row_map[iid]["id"]) for iid in sel if iid in row_map]
             if not ids:
                 return
-            if not messagebox.askyesno("Biosimilar loeschen", f"{len(ids)} Eintrag/Eintraege wirklich loeschen?\n\nDas entfernt sie aus der Austauschdatenbank."):
+            if not messagebox.askyesno("Biosimilar loeschen", _T('{p0} Eintrag/Eintraege wirklich loeschen?\n\nDas entfernt sie aus der Austauschdatenbank.', p0=len(ids))):
                 return
             try:
                 with sqlite3.connect(DB_PATH) as con:
@@ -9210,7 +9159,7 @@ LIMIT 500
                     con.commit()
                 load_rows(search_var.get().strip())
             except Exception as exc:
-                messagebox.showerror("Biosimilar", f"Loeschen fehlgeschlagen:\n{exc}")
+                messagebox.showerror("Biosimilar", _T('Loeschen fehlgeschlagen:\n{p0}', p0=exc))
 
         actionbar = tk.Frame(body, bg="#ffffff")
         actionbar.grid(row=3, column=0, sticky="ew", pady=(12, 0))
@@ -9335,7 +9284,7 @@ LIMIT 500
                     except Exception:
                         pass
             except Exception as exc:
-                messagebox.showerror("Manuelle Prüfung", f"Mehrdeutige Austausche konnten nicht geladen werden:\n{exc}")
+                messagebox.showerror("Manuelle Prüfung", _T('Mehrdeutige Austausche konnten nicht geladen werden:\n{p0}', p0=exc))
             return rows
 
         row_map = {}
@@ -9348,8 +9297,8 @@ LIMIT 500
                 iid = tree.insert("", "end", values=tuple(row[col] if col in row.keys() else "" for col in columns))
                 row_map[iid] = dict(row)
             pzn_count = len({str(r["pzn_alt"]) for r in rows})
-            info_var.set(f"{len(rows)} gelernte Austausch-Einträge zu {pzn_count} PZN alt mit mehreren Varianten gefunden.")
-            self.status.set(f"Manuelle Prüfung: {len(rows)} Einträge angezeigt.")
+            info_var.set(_T('{p0} gelernte Austausch-Einträge zu {p1} PZN alt mit mehreren Varianten gefunden.', p0=len(rows), p1=pzn_count))
+            self.status.set(_T('Manuelle Prüfung: {p0} Einträge angezeigt.', p0=len(rows)))
 
         def selected_rows():
             selected = []
@@ -9381,8 +9330,7 @@ LIMIT 500
             keep_id = int(keep.get("id"))
             if not messagebox.askyesno(
                 "Austausch bereinigen",
-                f"Für PZN alt {pzn_alt} bleibt Eintrag {keep_id} aktiv.\n"
-                "Alle anderen aktiven Varianten zu dieser PZN werden auf inaktiv gesetzt.\n\nFortfahren?"
+                _T('Für PZN alt {p0} bleibt Eintrag {p1} aktiv.\nAlle anderen aktiven Varianten zu dieser PZN werden auf inaktiv gesetzt.\n\nFortfahren?', p0=pzn_alt, p1=keep_id)
             ):
                 return
             try:
@@ -9404,10 +9352,10 @@ LIMIT 500
                         params,
                     )
                     con.commit()
-                self.status.set(f"Manuelle Prüfung: PZN {pzn_alt} bereinigt.")
+                self.status.set(_T('Manuelle Prüfung: PZN {p0} bereinigt.', p0=pzn_alt))
                 reload()
             except Exception as exc:
-                messagebox.showerror("Manuelle Prüfung", f"Bereinigung fehlgeschlagen:\n{exc}")
+                messagebox.showerror("Manuelle Prüfung", _T('Bereinigung fehlgeschlagen:\n{p0}', p0=exc))
 
         def open_schulbank_uebernommen():
             self.show_schulbank_page("Übernommen")
@@ -9429,7 +9377,7 @@ LIMIT 500
             if not austausch_ids and not editor_ids:
                 messagebox.showinfo("Manuelle Prüfung", "Keine gültigen Einträge ausgewählt.")
                 return
-            if not messagebox.askyesno("Manuelle Prüfung", f"{len(austausch_ids) + len(editor_ids)} Eintrag/Einträge wirklich {label}?"):
+            if not messagebox.askyesno("Manuelle Prüfung", _T('{p0} Eintrag/Einträge wirklich {p1}?', p0=len(austausch_ids) + len(editor_ids), p1=label)):
                 return
             try:
                 with sqlite3.connect(DB_PATH) as con:
@@ -9448,10 +9396,10 @@ LIMIT 500
                         placeholders = ",".join("?" for _ in editor_ids)
                         con.execute(f"UPDATE tbl_abweichungs_editor SET status='ignoriert', bearbeitet_am=CURRENT_TIMESTAMP, bearbeiter=? WHERE id IN ({placeholders})", [self.bearbeiter] + editor_ids)
                     con.commit()
-                self.status.set(f"Manuelle Prüfung: {len(austausch_ids) + len(editor_ids)} Einträge {label}.")
+                self.status.set(_T('Manuelle Prüfung: {p0} Einträge {p1}.', p0=len(austausch_ids) + len(editor_ids), p1=label))
                 reload()
             except Exception as exc:
-                messagebox.showerror("Manuelle Prüfung", f"Aktion fehlgeschlagen:\n{exc}")
+                messagebox.showerror("Manuelle Prüfung", _T('Aktion fehlgeschlagen:\n{p0}', p0=exc))
 
         def reject_selected_variants():
             set_rows_inactive(selected_rows(), "abgelehnt/inaktiv gesetzt")
@@ -10054,17 +10002,14 @@ LIMIT 500
         if not analyse_typ:
             return
         files = filedialog.askopenfilenames(
-            title=f"Manuelle {analyse_typ}-Analysen auswählen",
+            title=_T('Manuelle {p0}-Analysen auswählen', p0=analyse_typ),
             filetypes=SUPPORTED_DATA_FILETYPES
         )
         if not files:
             return
         if not messagebox.askyesno(
             "Manuelle Analysen importieren",
-            f"{len(files)} Datei(en) als {analyse_typ}-Analysen importieren?\n\n"
-            "Die Dateien werden nicht neu ausgewertet. Sie werden als bereits geprüfte manuelle Analysen übernommen, "
-            "für Produkt-/Marktanalyse nutzbar gemacht und vorhandene NMG-/Austauschentscheidungen werden als Schulbank-Lernvorschläge angelegt.\n\n"
-            "Leere Lernfälle ohne PZN NMG und ohne Austauschtext werden nicht übernommen."
+            _T('{p0} Datei(en) als {p1}-Analysen importieren?\n\nDie Dateien werden nicht neu ausgewertet. Sie werden als bereits geprüfte manuelle Analysen übernommen, für Produkt-/Marktanalyse nutzbar gemacht und vorhandene NMG-/Austauschentscheidungen werden als Schulbank-Lernvorschläge angelegt.\n\nLeere Lernfälle ohne PZN NMG und ohne Austauschtext werden nicht übernommen.', p0=len(files), p1=analyse_typ)
         ):
             return
 
@@ -10082,8 +10027,8 @@ LIMIT 500
             lambda update: import_manual_analysis_files(
                 files, analyse_typ=analyse_typ, bearbeiter=self.bearbeiter,
                 progress_callback=update),
-            title=f"Manuelle {analyse_typ}-Analysen ({len(files)} Dateien)",
-            subtitle=f"Datei 1 von {len(files)} ...",
+            title=_T('Manuelle {p0}-Analysen ({p1} Dateien)', p0=analyse_typ, p1=len(files)),
+            subtitle=_T('Datei 1 von {p0} ...', p0=len(files)),
             progress=True,
             on_done=on_main_done,
             on_error=on_main_error,
@@ -10112,10 +10057,7 @@ LIMIT 500
             return
         if not messagebox.askyesno(
             "Nicht erkannte Dateien",
-            f"{stats.get('failed', 0)} Datei(en) wurden nicht automatisch erkannt.\n\n"
-            f"Eine Liste wurde gespeichert unter:\n{nicht_erkannt_pfad or '(konnte nicht geschrieben werden)'}\n\n"
-            "Sollen die nicht-erkannten Dateien jetzt nacheinander\n"
-            "mit dem Format-Assistenten manuell zugeordnet werden?"
+            _T('{p0} Datei(en) wurden nicht automatisch erkannt.\n\nEine Liste wurde gespeichert unter:\n{p1}\n\nSollen die nicht-erkannten Dateien jetzt nacheinander\nmit dem Format-Assistenten manuell zugeordnet werden?', p0=stats.get('failed', 0), p1=nicht_erkannt_pfad or '(konnte nicht geschrieben werden)')
         ):
             return
 
@@ -10142,8 +10084,8 @@ LIMIT 500
                 lambda update: import_manual_analysis_files(
                     mapped_temp_files, analyse_typ=analyse_typ,
                     bearbeiter=self.bearbeiter, progress_callback=update),
-                title=f"Manuelle {analyse_typ}-Analysen (Retry, {len(mapped_temp_files)} Dateien)",
-                subtitle=f"Datei 1 von {len(mapped_temp_files)} ...",
+                title=_T('Manuelle {p0}-Analysen (Retry, {p1} Dateien)', p0=analyse_typ, p1=len(mapped_temp_files)),
+                subtitle=_T('Datei 1 von {p0} ...', p0=len(mapped_temp_files)),
                 progress=True,
                 on_done=on_retry_done,
             )
@@ -10211,7 +10153,7 @@ LIMIT 500
             f"Manuelle {analyse_typ}-Analysen: {stats.get('imported',0)} neu, "
             f"{stats.get('duplicates',0)} doppelt, {stats.get('failed',0)} nicht erkannt."
         )
-        messagebox.showinfo(f"Manuelle {analyse_typ}-Analysen", msg)
+        messagebox.showinfo(_T('Manuelle {p0}-Analysen', p0=analyse_typ), msg)
 
 
     def open_admin_auswertungen_loeschen(self):
@@ -10238,7 +10180,7 @@ LIMIT 500
                     ORDER BY datetime(datum) DESC, id DESC
                 """).fetchall()
         except Exception as exc:
-            messagebox.showerror("Admin", f"Auswertungen konnten nicht gelesen werden:\n{exc}")
+            messagebox.showerror("Admin", _T('Auswertungen konnten nicht gelesen werden:\n{p0}', p0=exc))
             return
 
         if not rows:
@@ -10300,8 +10242,7 @@ LIMIT 500
                 return
             ok = messagebox.askyesno(
                 "Auswertungen löschen?",
-                f"{len(ids)} Auswertung(en) werden aus der Datenbank gelöscht.\n\n"
-                "Vorher wird automatisch ein Backup erstellt. Ausgabedateien bleiben erhalten. Fortfahren?"
+                _T('{p0} Auswertung(en) werden aus der Datenbank gelöscht.\n\nVorher wird automatisch ein Backup erstellt. Ausgabedateien bleiben erhalten. Fortfahren?', p0=len(ids))
             )
             if not ok:
                 return
@@ -10327,8 +10268,8 @@ LIMIT 500
                         tree.delete(iid)
                     except Exception:
                         pass
-                self.status.set(f"Admin: {len(ids)} Auswertung(en) und {pos_count} Positionen gelöscht. Backup: {backup_path}")
-                messagebox.showinfo("Admin", f"Gelöscht: {len(ids)} Auswertung(en)\nPositionen: {pos_count}\nBackup:\n{backup_path}")
+                self.status.set(_T('Admin: {p0} Auswertung(en) und {p1} Positionen gelöscht. Backup: {p2}', p0=len(ids), p1=pos_count, p2=backup_path))
+                messagebox.showinfo("Admin", _T('Gelöscht: {p0} Auswertung(en)\nPositionen: {p1}\nBackup:\n{p2}', p0=len(ids), p1=pos_count, p2=backup_path))
                 # V1.1 SP12 Bug-Fix: dahinterliegende Seite refreshen, sonst
                 # zeigt 'Gespeicherte Analysen' weiter die geloeschten Items.
                 try:
@@ -10337,7 +10278,7 @@ LIMIT 500
                 except Exception:
                     pass
             except Exception as exc:
-                messagebox.showerror("Admin", f"Auswertungen konnten nicht gelöscht werden:\n{exc}")
+                messagebox.showerror("Admin", _T('Auswertungen konnten nicht gelöscht werden:\n{p0}', p0=exc))
 
         theme.PillButton(buttons, "Alle markieren", select_all, kind="neutral", padx=12, pady=7).pack(side="left")
         theme.PillButton(buttons, "Auswahl aufheben", clear_selection, kind="neutral", padx=12, pady=7).pack(side="left", padx=(8, 0))
@@ -10386,7 +10327,7 @@ LIMIT 500
         except Exception as exc:
             tk.Label(
                 body,
-                text=f"Datenbankübersicht konnte nicht geladen werden:\n{exc}",
+                text=_T('Datenbankübersicht konnte nicht geladen werden:\n{p0}', p0=exc),
                 bg="#ffffff",
                 fg="#a00000",
                 justify="left"
@@ -10467,8 +10408,7 @@ LIMIT 500
             item = item_to_table.get(sel[0], {})
             cols = item.get("columns", [])
             detail.set(
-                f"{item.get('display_name', item.get('table', ''))}\n"
-                f"Spalten: {', '.join(cols) if cols else 'keine Spalten erkannt'}"
+                _T('{p0}\nSpalten: {p1}', p0=item.get('display_name', item.get('table', '')), p1=', '.join(cols) if cols else 'keine Spalten erkannt')
             )
 
         tree.bind("<<TreeviewSelect>>", on_select)
@@ -10511,7 +10451,7 @@ LIMIT 500
             )
         except Exception as exc:
             self._log_error("datenaktualisierung", "Wirkstoff/Staerke-Import", exc)
-            messagebox.showerror("Wirkstoff/Staerke-Import", f"Fehler:\n{exc}")
+            messagebox.showerror("Wirkstoff/Staerke-Import", _T('Fehler:\n{p0}', p0=exc))
             return
 
         total = wirkstoff_count()
@@ -10525,7 +10465,7 @@ LIMIT 500
             f"Tabelle tbl_wirkstoff_staerke enthaelt jetzt {total:,} Eintraege."
         ).replace(",", ".")
         self._log_action("datenaktualisierung", "Wirkstoff/Staerke importiert", msg.replace("\n", " | "))
-        self.status.set(f"Wirkstoff/Staerke-Import: {stats['importiert']} neu, {stats['aktualisiert']} aktualisiert.")
+        self.status.set(_T('Wirkstoff/Staerke-Import: {p0} neu, {p1} aktualisiert.', p0=stats['importiert'], p1=stats['aktualisiert']))
         messagebox.showinfo("Wirkstoff/Staerke-Import", msg)
         # Tabellen-Ansicht neu laden, damit die neue Zeilenzahl sichtbar ist.
         self.show_datenbankuebersicht_page()
@@ -10552,7 +10492,7 @@ LIMIT 500
             )
         except Exception as exc:
             self._log_error("datenaktualisierung", "Gelbe-Liste-Import", exc)
-            messagebox.showerror("Gelbe-Liste-Import", f"Fehler:\n{exc}")
+            messagebox.showerror("Gelbe-Liste-Import", _T('Fehler:\n{p0}', p0=exc))
             return
 
         counts = biosimilar_counts()
@@ -10570,8 +10510,7 @@ LIMIT 500
         )
         self._log_action("datenaktualisierung", "Gelbe Liste importiert", msg.replace("\n", " | "))
         self.status.set(
-            f"Gelbe-Liste-Import: {stats.get('gruppen', 0)} Gruppen, "
-            f"{stats.get('produkte_neu', 0)} neue Produkte."
+            _T('Gelbe-Liste-Import: {p0} Gruppen, {p1} neue Produkte.', p0=stats.get('gruppen', 0), p1=stats.get('produkte_neu', 0))
         )
         messagebox.showinfo("Gelbe-Liste-Import", msg)
 
@@ -10620,17 +10559,17 @@ LIMIT 500
         def vorschau():
             try:
                 c = zaehle_zeitraum(von_var.get(), bis_var.get())
-                vorschau_lbl.configure(text=f"{c} Auswertungen im Zeitraum.",
+                vorschau_lbl.configure(text=_T('{p0} Auswertungen im Zeitraum.', p0=c),
                                         fg="#0b4a86")
             except Exception as exc:
-                vorschau_lbl.configure(text=f"Fehler: {exc}", fg="#9b1c1c")
+                vorschau_lbl.configure(text=_T('Fehler: {p0}', p0=exc), fg="#9b1c1c")
 
         def do_delete():
             try:
                 anzahl = zaehle_zeitraum(von_var.get(), bis_var.get())
                 von_iso, bis_iso = _normalize_zeitraum(von_var.get(), bis_var.get())
             except Exception as exc:
-                messagebox.showerror("Loeschen", f"Datumsformat unklar:\n{exc}")
+                messagebox.showerror("Loeschen", _T('Datumsformat unklar:\n{p0}', p0=exc))
                 return
             if anzahl == 0:
                 messagebox.showinfo("Loeschen", "Keine Auswertungen im Zeitraum.")
@@ -10645,15 +10584,14 @@ LIMIT 500
                 return
             confirm = simpledialog.askstring(
                 "Sicherheitsabfrage",
-                f"{anzahl} Auswertungen werden ENDGUELTIG geloescht. "
-                "Zum Bestaetigen bitte LOESCHEN eingeben:")
+                _T('{p0} Auswertungen werden ENDGUELTIG geloescht. Zum Bestaetigen bitte LOESCHEN eingeben:', p0=anzahl))
             if confirm != "LOESCHEN":
                 messagebox.showinfo("Loeschen", "Vorgang abgebrochen.")
                 return
             try:
                 backup_path = backup_erstellen()
             except Exception as exc:
-                messagebox.showerror("Backup", f"Backup fehlgeschlagen, Loeschvorgang abgebrochen:\n{exc}")
+                messagebox.showerror("Backup", _T('Backup fehlgeschlagen, Loeschvorgang abgebrochen:\n{p0}', p0=exc))
                 return
             try:
                 with sqlite3.connect(DB_PATH) as con:
@@ -10687,12 +10625,12 @@ LIMIT 500
                     )
                     con.commit()
             except Exception as exc:
-                messagebox.showerror("Loeschen", f"Loeschvorgang fehlgeschlagen:\n{exc}")
+                messagebox.showerror("Loeschen", _T('Loeschvorgang fehlgeschlagen:\n{p0}', p0=exc))
                 return
             msg = (f"Geloescht: {len(aw_ids)} Auswertungen, {pos_count} Positionen.\n"
                    f"Backup vorher: {backup_path}")
             self._log_action("auswertungen", "Zeitraum geloescht", msg.replace("\n", " | "))
-            self.status.set(f"{len(aw_ids)} Auswertungen geloescht.")
+            self.status.set(_T('{p0} Auswertungen geloescht.', p0=len(aw_ids)))
             messagebox.showinfo("Loeschen abgeschlossen", msg)
             win.destroy()
             self.open_saved_analyses()
@@ -10744,31 +10682,30 @@ LIMIT 500
         def vorschau():
             try:
                 c = zaehle_zeitraum(von_var.get(), bis_var.get())
-                vorschau_lbl.configure(text=f"{c} Auswertungen im Zeitraum.",
+                vorschau_lbl.configure(text=_T('{p0} Auswertungen im Zeitraum.', p0=c),
                                         fg="#0b4a86")
             except Exception as exc:
-                vorschau_lbl.configure(text=f"Fehler: {exc}", fg="#9b1c1c")
+                vorschau_lbl.configure(text=_T('Fehler: {p0}', p0=exc), fg="#9b1c1c")
 
         def do_archive():
             try:
                 anzahl = zaehle_zeitraum(von_var.get(), bis_var.get())
             except Exception as exc:
-                messagebox.showerror("Archivieren", f"Datumsformat unklar:\n{exc}")
+                messagebox.showerror("Archivieren", _T('Datumsformat unklar:\n{p0}', p0=exc))
                 return
             if anzahl == 0:
                 messagebox.showinfo("Archivieren", "Keine Auswertungen im Zeitraum.")
                 return
             ok = messagebox.askyesno(
                 "Archivieren bestaetigen",
-                f"{anzahl} Auswertungen werden ins Archiv verschoben und "
-                "danach aus der aktiven DB geloescht.\n\nFortfahren?")
+                _T('{p0} Auswertungen werden ins Archiv verschoben und danach aus der aktiven DB geloescht.\n\nFortfahren?', p0=anzahl))
             if not ok:
                 return
             try:
                 stats = self._run_busy(
                     lambda: archiviere_zeitraum(von_var.get(), bis_var.get()),
                     title="Auswertungen archivieren",
-                    subtitle=f"Schreibe ZIP mit {anzahl} Auswertungen ...",
+                    subtitle=_T('Schreibe ZIP mit {p0} Auswertungen ...', p0=anzahl),
                 )
             except Exception as exc:
                 messagebox.showerror("Archivieren", str(exc))
@@ -10780,7 +10717,7 @@ LIMIT 500
                 f"Groesse: {stats['groesse_bytes']:,} Bytes".replace(",", ".")
             )
             self._log_action("archiv", "Zeitraum archiviert", msg.replace("\n", " | "))
-            self.status.set(f"{stats['archiviert']} Auswertungen archiviert.")
+            self.status.set(_T('{p0} Auswertungen archiviert.', p0=stats['archiviert']))
             messagebox.showinfo("Archivieren fertig", msg)
             win.destroy()
             self.open_saved_analyses()
@@ -10931,8 +10868,7 @@ LIMIT 500
                 messagebox.showerror("Admin-Bereich", "Passwort falsch.")
                 return
             ok = messagebox.askyesno("Archiv loeschen",
-                                      f"Archiv endgueltig loeschen?\n\n{a['name']}\n\n"
-                                      "Die enthaltenen Auswertungen sind danach unwiderruflich weg.")
+                                      _T('Archiv endgueltig loeschen?\n\n{p0}\n\nDie enthaltenen Auswertungen sind danach unwiderruflich weg.', p0=a['name']))
             if not ok:
                 return
             try:
@@ -10942,7 +10878,7 @@ LIMIT 500
                 return
             self._log_action("archiv", "Archiv geloescht", a["name"])
             reload_zips()
-            messagebox.showinfo("Loeschen", f"Archiv {a['name']} geloescht.")
+            messagebox.showinfo("Loeschen", _T('Archiv {p0} geloescht.', p0=a['name']))
 
         zip_tree.bind("<<TreeviewSelect>>", on_zip_select)
         inh_tree.bind("<Double-1>", on_inh_dbl)
@@ -11122,9 +11058,7 @@ LIMIT 500
             names = "\n".join(f"- {table}" for table in chosen)
             ok = messagebox.askyesno(
                 "Inhalte wirklich löschen?",
-                "Folgende Tabelleninhalte werden geleert:\n\n"
-                f"{names}\n\n"
-                "Die Tabellen bleiben bestehen. Vorher wird automatisch ein Backup erstellt. Fortfahren?"
+                _T('Folgende Tabelleninhalte werden geleert:\n\n{p0}\n\nDie Tabellen bleiben bestehen. Vorher wird automatisch ein Backup erstellt. Fortfahren?', p0=names)
             )
             if not ok:
                 return
@@ -11154,15 +11088,15 @@ LIMIT 500
                     "Admin-Schaltfläche in der Datenbankübersicht ergänzt. "
                     "Ausgewählte Tabelleninhalte können nach Passwortprüfung und automatischem Backup geleert werden."
                 )
-                self.status.set(f"Admin-Bereinigung abgeschlossen. Backup: {backup_path}")
+                self.status.set(_T('Admin-Bereinigung abgeschlossen. Backup: {p0}', p0=backup_path))
                 messagebox.showinfo(
                     "Admin-Bereinigung abgeschlossen",
-                    f"Backup erstellt:\n{backup_path}\n\nGelöschte Inhalte:\n{details}"
+                    _T('Backup erstellt:\n{p0}\n\nGelöschte Inhalte:\n{p1}', p0=backup_path, p1=details)
                 )
                 win.destroy()
                 self.show_datenbankuebersicht_page()
             except Exception as exc:
-                messagebox.showerror("Admin-Bereich", f"Daten konnten nicht geleert werden:\n{exc}")
+                messagebox.showerror("Admin-Bereich", _T('Daten konnten nicht geleert werden:\n{p0}', p0=exc))
 
         def _select_all():
             for v in selections.values():
@@ -11274,7 +11208,7 @@ LIMIT 500
                 return
             path = self._get_auswertungsvorlage_path(slot)
             if not path:
-                preview.set(f"Slot {slot} ist frei.")
+                preview.set(_T('Slot {p0} ist frei.', p0=slot))
                 return
             preview.set(self._preview_auswertungsvorlage_text(path))
 
@@ -11288,7 +11222,7 @@ LIMIT 500
             if not slot:
                 return
             file = filedialog.askopenfilename(
-                title=f"Auswertungsvorlage für Slot {slot} auswählen",
+                title=_T('Auswertungsvorlage für Slot {p0} auswählen', p0=slot),
                 filetypes=[("Excel-Vorlagen", "*.xlsx *.xlsm"), ("Excel", "*.xlsx"), ("Excel mit Makros", "*.xlsm"), ("Alle Dateien", "*.*")]
             )
             if not file:
@@ -11330,8 +11264,8 @@ LIMIT 500
                 con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('auswertungsvorlage_selected_slot', ?)", (str(slot),))
                 con.commit()
             self._roadmap_mark_auswertungsvorlage_erledigt()
-            self.status.set(f"Auswertungsvorlage Slot {slot} gespeichert: {name}")
-            messagebox.showinfo("Auswertungsvorlage", f"Vorlage gespeichert und als Standard gesetzt:\n{name}")
+            self.status.set(_T('Auswertungsvorlage Slot {p0} gespeichert: {p1}', p0=slot, p1=name))
+            messagebox.showinfo("Auswertungsvorlage", _T('Vorlage gespeichert und als Standard gesetzt:\n{p0}', p0=name))
             self.show_auswertungsvorlage_page()
 
         def set_default():
@@ -11342,7 +11276,7 @@ LIMIT 500
                 messagebox.showinfo("Auswertungsvorlage", "Dieser Slot ist leer und kann nicht als Standard gesetzt werden.")
                 return
             self._set_selected_auswertungsvorlage_slot(slot)
-            self.status.set(f"Auswertungsvorlage Slot {slot} als Standard gespeichert.")
+            self.status.set(_T('Auswertungsvorlage Slot {p0} als Standard gespeichert.', p0=slot))
             self.show_auswertungsvorlage_page()
 
         def delete_template():
@@ -11353,7 +11287,7 @@ LIMIT 500
             if not path:
                 messagebox.showinfo("Auswertungsvorlage", "Dieser Slot ist bereits frei.")
                 return
-            if not messagebox.askyesno("Auswertungsvorlage löschen", f"Vorlage in Slot {slot} entfernen?\n\nDie Datei wird aus der Vorlagenverwaltung entfernt, Auswertungen bleiben unverändert."):
+            if not messagebox.askyesno("Auswertungsvorlage löschen", _T('Vorlage in Slot {p0} entfernen?\n\nDie Datei wird aus der Vorlagenverwaltung entfernt, Auswertungen bleiben unverändert.', p0=slot)):
                 return
             try:
                 path.unlink()
@@ -11365,7 +11299,7 @@ LIMIT 500
                 if self._get_selected_auswertungsvorlage_slot() == slot:
                     con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('auswertungsvorlage_selected_slot','')")
                 con.commit()
-            self.status.set(f"Auswertungsvorlage Slot {slot} entfernt.")
+            self.status.set(_T('Auswertungsvorlage Slot {p0} entfernt.', p0=slot))
             self.show_auswertungsvorlage_page()
 
         theme.PillButton(actions, "Vorlage hochladen/ersetzen", upload_template, color="#0b4a86", font_size=11, padx=16, pady=8).pack(side="left", padx=(0, 8))
@@ -11459,7 +11393,7 @@ LIMIT 500
                 error_text = str(exc)
                 def failed():
                     self._close_busy_modal(busy)
-                    self.status.set(f"Artikelstamm-Import abgebrochen: {error_text}")
+                    self.status.set(_T('Artikelstamm-Import abgebrochen: {p0}', p0=error_text))
                     messagebox.showerror("Artikelstamm", error_text)
                 self.after(0, failed)
 
@@ -11513,7 +11447,7 @@ LIMIT 500
             result = self._run_busy(
                 lambda: import_austausch_excel(file, quelle="GUI-Import"),
                 title="Austauschdatenbank importieren",
-                subtitle=f"Lese {Path(file).name} ...",
+                subtitle=_T('Lese {p0} ...', p0=Path(file).name),
             )
             msg = (
                 "Austauschdatenbank importiert.\n\n"
@@ -11606,7 +11540,7 @@ LIMIT 500
         from tkinter import filedialog
 
         files = filedialog.askopenfilenames(
-            title=f"{title} – Datei(en) auswählen",
+            title=_T('{p0} – Datei(en) auswählen', p0=title),
             filetypes=SUPPORTED_DATA_FILETYPES + [("PDF", "*.pdf"), ("Alle Dateien", "*.*")]
         )
         if not files:
@@ -11687,7 +11621,7 @@ LIMIT 500
                 if missing:
                     self._close_busy_modal(busy)
                     mapping = self._mapping_dialog(
-                        title=f"{title} – Spalten zuordnen",
+                        title=_T('{p0} – Spalten zuordnen', p0=title),
                         filepath=filepath,
                         headers=headers,
                         pflicht=pflicht_spalten,
@@ -11880,7 +11814,7 @@ LIMIT 500
 
         msg = "\n".join(msg_lines)
         messagebox.showinfo(title, msg)
-        self.status.set(f"{title}: {gesamt_neu} neu, {gesamt_aktualisiert} aktualisiert.")
+        self.status.set(_T('{p0}: {p1} neu, {p2} aktualisiert.', p0=title, p1=gesamt_neu, p2=gesamt_aktualisiert))
         try:
             log_event("import", title, msg, user=self.bearbeiter)
         except Exception:
@@ -11902,7 +11836,7 @@ LIMIT 500
         win.grab_set()
 
         tk.Label(win, text=title, font=(theme.FONT, 14, "bold"), fg="#0b4a86", bg="#f5f7fb").pack(anchor="w", padx=20, pady=(16, 4))
-        tk.Label(win, text=f"Datei: {Path(filepath).name}", font=(theme.FONT, 9), fg="#555", bg="#f5f7fb").pack(anchor="w", padx=20)
+        tk.Label(win, text=_T('Datei: {p0}', p0=Path(filepath).name), font=(theme.FONT, 9), fg="#555", bg="#f5f7fb").pack(anchor="w", padx=20)
         if beschreibung:
             tk.Label(win, text=beschreibung, font=(theme.FONT, 9), fg="#888", bg="#f5f7fb", justify="left", wraplength=640).pack(anchor="w", padx=20, pady=(2, 0))
         tk.Label(win, text="Spalten aus der Datei den Feldern zuordnen. Pflichtfelder (*) müssen belegt sein.",
@@ -11948,7 +11882,7 @@ LIMIT 500
             # Pflichtfelder prüfen
             missing = [col for col, *_ in pflicht if col not in mapping]
             if missing:
-                messagebox.showinfo(title, f"Pflichtfelder nicht belegt: {', '.join(missing)}")
+                messagebox.showinfo(title, _T('Pflichtfelder nicht belegt: {p0}', p0=', '.join(missing)))
                 return
             result["mapping"] = mapping
             win.destroy()
@@ -12173,9 +12107,7 @@ LIMIT 500
                     else:
                         messagebox.showinfo(
                             "Update suchen",
-                            f"Du hast bereits die aktuellste Version installiert.\n\n"
-                            f"Installiert: V{APP_VERSION}\n"
-                            f"Neueste auf GitHub: {tag}"
+                            _T('Du hast bereits die aktuellste Version installiert.\n\nInstalliert: V{p0}\nNeueste auf GitHub: {p1}', p0=APP_VERSION, p1=tag)
                         )
                 self.after(0, on_main)
             except Exception as exc:
@@ -12184,8 +12116,7 @@ LIMIT 500
                     self._close_busy_modal(busy)
                     messagebox.showerror(
                         "Update suchen",
-                        f"Konnte GitHub nicht erreichen:\n\n{error_text}\n\n"
-                        f"Pruefe deine Internetverbindung."
+                        _T('Konnte GitHub nicht erreichen:\n\n{p0}\n\nPruefe deine Internetverbindung.', p0=error_text)
                     )
                 self.after(0, failed)
 
@@ -12309,7 +12240,7 @@ LIMIT 500
         theme.PillButton(actionbar, "🔄 Begonnen", lambda: set_status("Begonnen"), kind="neutral", padx=12, pady=7).pack(side="left", padx=6)
         theme.PillButton(actionbar, "✅ Erledigt", lambda: set_status("Erledigt"), kind="neutral", padx=12, pady=7).pack(side="left", padx=6)
 
-        self.status.set(f"Roadmap: {len(rows)} Einträge angezeigt.")
+        self.status.set(_T('Roadmap: {p0} Einträge angezeigt.', p0=len(rows)))
 
 
     def add_roadmap_wunsch(self):
@@ -12484,7 +12415,7 @@ def _show_splash_screen():
     start_btn.pack(pady=(0, 10))
 
     from .backup import APP_VERSION_DISPLAY
-    tk.Label(splash_root, text=f"NMGone {APP_VERSION_DISPLAY}",
+    tk.Label(splash_root, text=_T('NMGone {p0}', p0=APP_VERSION_DISPLAY),
              font=(theme.FONT, 8), fg="#aaa", bg="#ffffff").pack(side="bottom", pady=(0, 6))
 
     splash_root.bind("<Return>", lambda e: _on_start())

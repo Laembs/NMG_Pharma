@@ -17,6 +17,7 @@ Datenmodell siehe migrations.py (tbl_einkauf_*). Optik aus app/theme.py
 from __future__ import annotations
 
 import getpass
+from .i18n import T as _T
 import json
 import math
 import os
@@ -1190,7 +1191,7 @@ class EinkaufPanel(tk.Frame):
     # ── Seite: Dashboard ─────────────────────────────────────────────────────
     def _page_start(self):
         theme.page_header(self.content, "Einkauf",
-                          f"Angemeldet: {bearbeiter()} · {_datum_de(_heute())}",
+                          _T('Angemeldet: {p0} · {p1}', p0=bearbeiter(), p1=_datum_de(_heute())),
                           bg=SHELL_BG).pack(fill="x", padx=24, pady=(20, 12))
 
         with _con() as con:
@@ -1495,7 +1496,7 @@ class EinkaufPanel(tk.Frame):
         try:
             webbrowser.open(f"mailto:{r['email'].strip()}")
         except Exception:
-            messagebox.showinfo("E-Mail", f"E-Mail-Adresse: {r['email']}", parent=self)
+            messagebox.showinfo("E-Mail", _T('E-Mail-Adresse: {p0}', p0=r['email']), parent=self)
 
     def _lief_wiedervorlage(self):
         i = self._lief_selected_id()
@@ -1526,9 +1527,9 @@ class EinkaufPanel(tk.Frame):
         try:
             pfad = _export_xlsx(headers, data, blatt, basis)
         except Exception as exc:
-            messagebox.showerror("Export", f"Export fehlgeschlagen:\n{exc}", parent=self)
+            messagebox.showerror("Export", _T('Export fehlgeschlagen:\n{p0}', p0=exc), parent=self)
             return
-        if messagebox.askyesno("Export", f"Excel erstellt:\n{pfad}\n\nJetzt öffnen?", parent=self):
+        if messagebox.askyesno("Export", _T('Excel erstellt:\n{p0}\n\nJetzt öffnen?', p0=pfad), parent=self):
             _datei_oeffnen(pfad)
 
     def _lief_loeschen_selected(self):
@@ -1770,7 +1771,7 @@ class EinkaufPanel(tk.Frame):
             gezeigt += 1
         self._vor_tree.tag_configure("warn", foreground=theme.DANGER)
         self._vor_hinweis.config(
-            text=f"{gezeigt} Artikel · sortiert nach Marge. Doppelklick = im Rechner prüfen.")
+            text=_T('{p0} Artikel · sortiert nach Marge. Doppelklick = im Rechner prüfen.', p0=gezeigt))
 
     def _vorschlag_sel(self):
         sel = self._vor_tree.selection()
@@ -2068,8 +2069,7 @@ class EinkaufPanel(tk.Frame):
         mehr = (f" · Anzeige auf {IK_MAX_ROWS} begrenzt – Filter verfeinern"
                 if len(daten) > IK_MAX_ROWS else "")
         self._ik_hinweis.config(
-            text=f"{len(daten)} Treffer · sortiert nach Jahres-Potenzial{mehr} · "
-                 f"Doppelklick = Details.")
+            text=_T('{p0} Treffer · sortiert nach Jahres-Potenzial{p1} · Doppelklick = Details.', p0=len(daten), p1=mehr))
 
     def _ik_selected(self) -> dict | None:
         sel = self._ik_tree.selection()
@@ -2405,7 +2405,7 @@ class EinkaufPanel(tk.Frame):
         banner = tk.Frame(self._marge_ergebnis, bg=(OK_GREEN if ok else theme.DANGER))
         banner.pack(fill="x", pady=(8, 12))
         status = "✓ §129 erfüllt" if ok else "✗ §129 NICHT erfüllt"
-        tk.Label(banner, text=f"{status}   ·   erf. Preisabstand {r['regel']}",
+        tk.Label(banner, text=_T('{p0}   ·   erf. Preisabstand {p1}', p0=status, p1=r['regel']),
                  bg=(OK_GREEN if ok else theme.DANGER), fg="#FFFFFF",
                  font=(theme.FONT, 13, "bold")).pack(anchor="w", padx=16, pady=10)
 
@@ -2436,11 +2436,10 @@ class EinkaufPanel(tk.Frame):
         marge_farbe = OK_GREEN if r["marge"] > 0 else theme.DANGER
         tk.Label(zeile, text=_eur(r["marge"]), bg=BG, fg=marge_farbe,
                  font=(theme.FONT, 26, "bold")).pack(side="left")
-        tk.Label(zeile, text=f"  ({r['marge_proz']:.1f} % vom VK)", bg=BG, fg=MUTED,
+        tk.Label(zeile, text=_T('  ({p0:.1f} % vom VK)', p0=r['marge_proz']), bg=BG, fg=MUTED,
                  font=theme.BODY).pack(side="left", anchor="s", pady=(0, 6))
         tk.Label(marge_card.inner,
-                 text=("Garantierter Preisabstand zum Original: "
-                       f"{_eur(r['kassen_ersparnis'])} – das ist Ihr Verkaufsargument nach §129 SGB V."),
+                 text=(_T('Garantierter Preisabstand zum Original: {p0} – das ist Ihr Verkaufsargument nach §129 SGB V.', p0=_eur(r['kassen_ersparnis']))),
                  bg=BG, fg=MUTED, font=theme.SMALL, wraplength=820, justify="left"
                  ).pack(anchor="w", pady=(8, 0))
 
@@ -2502,7 +2501,7 @@ class EinkaufPanel(tk.Frame):
             waehrung = w.strip().upper()
         aktuell = kurs_eur(waehrung) if waehrung != "EUR" else 1.0
         wert = simpledialog.askstring(
-            "Wechselkurs", f"Wie viel EUR ist 1 {waehrung} wert?",
+            "Wechselkurs", _T('Wie viel EUR ist 1 {p0} wert?', p0=waehrung),
             initialvalue=f"{aktuell:.4f}".replace(".", ","), parent=self)
         if wert is None:
             return
@@ -2627,12 +2626,11 @@ class EinkaufPanel(tk.Frame):
         try:
             res = demo_daten_anlegen()
         except Exception as exc:
-            messagebox.showerror("Beispieldaten", f"Konnte nicht angelegt werden:\n{exc}", parent=self)
+            messagebox.showerror("Beispieldaten", _T('Konnte nicht angelegt werden:\n{p0}', p0=exc), parent=self)
             return
         messagebox.showinfo(
             "Beispieldaten",
-            f"Angelegt: {res['lieferanten']} Lieferanten, {res['quellen']} Quellen, "
-            f"{res['aufgaben']} Aufgaben.", parent=self)
+            _T('Angelegt: {p0} Lieferanten, {p1} Quellen, {p2} Aufgaben.', p0=res['lieferanten'], p1=res['quellen'], p2=res['aufgaben']), parent=self)
         self.show("start")
 
     def _einstellungen_speichern(self):
@@ -3007,7 +3005,7 @@ class QuelleDialog(_BaseDialog):
         ek = _parse_num(self.v_ek.get())
         w = self.v_waehrung.get()
         eur = ek * kurs_eur(w)
-        self._ek_hinweis.config(text=f"≈ {_eur(eur)}  (Kurs 1 {w} = {kurs_eur(w):.4f} EUR)")
+        self._ek_hinweis.config(text=_T('≈ {p0}  (Kurs 1 {p1} = {p2:.4f} EUR)', p0=_eur(eur), p1=w, p2=kurs_eur(w)))
 
     def _pzn_laden(self):
         art = artikel_by_pzn(self.v_pzn.get().strip())
@@ -3077,7 +3075,7 @@ class KandidatDialog(_BaseDialog):
 
         tk.Label(body, text=d["artikel"] or "—", bg=SHELL_BG, fg=TEXT, font=theme.H2,
                  wraplength=580, justify="left").pack(anchor="w")
-        tk.Label(body, text=f"PZN {d['pzn']}", bg=SHELL_BG, fg=MUTED, font=theme.SMALL).pack(anchor="w", pady=(0, 8))
+        tk.Label(body, text=_T('PZN {p0}', p0=d['pzn']), bg=SHELL_BG, fg=MUTED, font=theme.SMALL).pack(anchor="w", pady=(0, 8))
 
         # Bewertung (Potenzial & §129-Machbarkeit)
         bew = theme.Card(body)
@@ -3098,8 +3096,7 @@ class KandidatDialog(_BaseDialog):
             self._row(bew.inner, "max. zul. Import-AVP (§129)", _eur(d["max_import_avp"]))
             self._row(bew.inner, "Umsatz-Potenzial / Jahr", _eur(d["umsatz_jahr"]))
             tk.Label(bew.inner,
-                     text=f"Annahme EU-EK {get_setting('kandidat_eu_ek_proz')} % vom DE-Preis · "
-                          f"in den Einstellungen anpassbar.",
+                     text=_T('Annahme EU-EK {p0} % vom DE-Preis · in den Einstellungen anpassbar.', p0=get_setting('kandidat_eu_ek_proz')),
                      bg=BG, fg=MUTED, font=theme.SMALL, wraplength=560, justify="left").pack(anchor="w", pady=(4, 0))
         else:
             tk.Label(bew.inner, text="Ohne hinterlegten Preis ist keine Margen-/Potenzialschätzung möglich.",
@@ -3247,8 +3244,7 @@ class KandidatDialog(_BaseDialog):
         fix = _parse_num(self._be_fix.get())
         if marge <= 0:
             self._be_result.config(
-                text=f"EK {_eur(ek_eur)}/Stk · max. Import-AVP {_eur(max_avp)} → "
-                     f"keine positive Marge bei diesem Einkaufspreis.", fg=theme.DANGER)
+                text=_T('EK {p0}/Stk · max. Import-AVP {p1} → keine positive Marge bei diesem Einkaufspreis.', p0=_eur(ek_eur), p1=_eur(max_avp)), fg=theme.DANGER)
             return
         be_menge = math.ceil(fix / marge) if fix > 0 else 0
         db_moq = marge * moq - fix

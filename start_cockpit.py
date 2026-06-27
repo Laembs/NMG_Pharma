@@ -166,31 +166,13 @@ class CockpitApi:
         except Exception as exc:  # pragma: no cover - Prototyp
             return {"ok": False, "msg": str(exc)}
 
-    # -- Aufgaben (geteilte Team-Todos) -------------------------------------
-    # Eine gemeinsame Liste fuer alle: jeder Mitarbeiter kann Aufgaben
-    # eintragen, abhaken und loeschen. Gespeichert neben den Cockpit-Daten
-    # (in der Ziel-Multiuser-Architektur liegt das spaeter zentral).
-    def _todos_path(self):
-        return os.path.join(_userdata_base(), "cockpit_todos.json")
-
-    def get_todos(self):
-        try:
-            p = self._todos_path()
-            if os.path.exists(p):
-                with open(p, encoding="utf-8") as fh:
-                    data = json.load(fh)
-                    if isinstance(data, list):
-                        return data
-        except Exception:
-            pass
-        return []
-
-    def _save_todos(self, todos):
-        p = self._todos_path()
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        with open(p, "w", encoding="utf-8") as fh:
-            json.dump(todos, fh, ensure_ascii=False)
-
+    # -- Aufgaben/Meldungen (geteilte Liste) --------------------------------
+    # Eine gemeinsame Liste fuer alle: manuelle Aufgaben UND System-Meldungen
+    # der Fach-Apps (z.B. "Warenausgang gemeldet"). Liegt jetzt in der geteilten
+    # DB (tbl_cockpit_meldungen, app/userdata.py) statt in einer lokalen JSON-
+    # Datei -> an allen Arbeitsplaetzen sichtbar, sobald die DB gemeinsam liegt,
+    # und mehrbenutzer-sicher (WAL + busy_timeout). Vorhandene JSON-Aufgaben
+    # werden beim ersten Zugriff einmalig in die DB uebernommen.
     def _who(self):
         if self.user and self.user.get("name"):
             return self.user["name"].split()[0]
@@ -199,42 +181,26 @@ class CockpitApi:
         except Exception:
             return ""
 
+    def get_todos(self):
+        from app import userdata
+        return userdata.list_todos()
+
     def add_todo(self, text):
-        text = (text or "").strip()
-        if not text:
-            return {"ok": False, "todos": self.get_todos()}
-        todos = self.get_todos()
-        todos.insert(0, {
-            "id": int(datetime.now().timestamp() * 1000),
-            "text": text[:200], "done": False,
-            "by": self._who(),
-            "ts": datetime.now().strftime("%d.%m. %H:%M"),
-        })
-        try:
-            self._save_todos(todos)
-        except Exception as exc:  # pragma: no cover - Prototyp
-            return {"ok": False, "msg": str(exc), "todos": self.get_todos()}
-        return {"ok": True, "todos": todos}
+        from app import userdata
+        if not (text or "").strip():
+            return {"ok": False, "todos": userdata.list_todos()}
+        ok = userdata.add_todo(text, self._who())
+        return {"ok": ok, "todos": userdata.list_todos()}
 
     def toggle_todo(self, todo_id):
-        todos = self.get_todos()
-        for t in todos:
-            if t.get("id") == todo_id:
-                t["done"] = not t.get("done")
-                break
-        try:
-            self._save_todos(todos)
-        except Exception:  # pragma: no cover - Prototyp
-            pass
-        return {"ok": True, "todos": todos}
+        from app import userdata
+        userdata.toggle_todo(todo_id, self._who())
+        return {"ok": True, "todos": userdata.list_todos()}
 
     def delete_todo(self, todo_id):
-        todos = [t for t in self.get_todos() if t.get("id") != todo_id]
-        try:
-            self._save_todos(todos)
-        except Exception:  # pragma: no cover - Prototyp
-            pass
-        return {"ok": True, "todos": todos}
+        from app import userdata
+        userdata.delete_todo(todo_id)
+        return {"ok": True, "todos": userdata.list_todos()}
 
     # -- Hinweise: Verfall aus dem Lager ------------------------------------
     # Spiegelt die Verfall-Logik der Kasse (kasse_reports.verfall_rows):
@@ -425,12 +391,6 @@ RAW = r"""<!DOCTYPE html>
   .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
   .card h3 { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase;
              letter-spacing: .04em; margin: 0 0 10px; }
-  .team { display: flex; flex-direction: column; gap: 9px; font-size: 13px; }
-  .team .row { display: flex; align-items: center; gap: 8px; }
-  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-  .team .role { color: var(--faint); font-size: 11px; }
-  .team .state { margin-left: auto; color: var(--faint); font-size: 11px; }
-
   .side-card { margin-top: 16px; }
   .empty { font-size: 12px; color: var(--faint); padding: 4px 2px; }
 
@@ -607,10 +567,6 @@ RAW = r"""<!DOCTYPE html>
 
       <div>
         <div class="card">
-          <h3>Team</h3>
-          <div class="team" id="team"></div>
-        </div>
-        <div class="card side-card">
           <h3>Aufgaben &middot; Team</h3>
           <div class="todo-in">
             <input id="todo-in" type="text" placeholder="Neue Aufgabe&hellip;" maxlength="200">
@@ -721,19 +677,6 @@ RAW = r"""<!DOCTYPE html>
     });
   }
 
-  var team = [
-    ["Sandra", "du",          PALETTE.success, "frei"],
-    ["Markus", "Lager",       PALETTE.success, "frei"],
-    ["Jana",   "Einkauf",     PALETTE.warning, "beschäftigt"],
-    ["Tom",    "Vertrieb",    PALETTE.faint,   "weg"],
-    ["Lisa",   "Buchhaltung", PALETTE.danger,  "nicht stören"]
-  ];
-  document.getElementById("team").innerHTML = team.map(function(p){
-    return '<div class="row"><span class="dot" style="background:' + p[2] + '"></span>'
-      + '<span>' + p[0] + '</span><span class="role">&middot; ' + p[1] + '</span>'
-      + '<span class="state">' + p[3] + '</span></div>';
-  }).join("");
-
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"]/g, function(c){
       return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];
@@ -820,6 +763,12 @@ RAW = r"""<!DOCTYPE html>
     if (api && api.get_languages) api.get_languages().then(buildLang);
     if (api && api.get_todos) api.get_todos().then(renderTodos);
     if (api && api.get_hinweise) api.get_hinweise().then(renderHinweise);
+    // Aufgaben/Meldungen automatisch nachladen, damit Eintraege anderer
+    // Arbeitsplaetze (z.B. ein gemeldeter Warenausgang) ohne Neuladen erscheinen.
+    if (window._todoPoll) clearInterval(window._todoPoll);
+    window._todoPoll = setInterval(function(){
+      if (api && api.get_todos) api.get_todos().then(renderTodos);
+    }, 20000);
     if (api && api.get_layout) {
       api.get_layout().then(function(saved){
         if (saved && saved.order) {
@@ -959,7 +908,6 @@ COCKPIT_SK = {
     "Kacheln ziehen zum Sortieren &middot; &bdquo;Ausblenden&ldquo; blendet aus. Wird automatisch gespeichert.":
         "Presúvajte dlaždice na zoradenie &middot; &bdquo;Skryť&ldquo; skryje. Ukladá sa automaticky.",
     "Meine Apps": "Moje aplikácie",
-    "Team": "Tím",
     "Aufgaben &middot; Team": "Úlohy &middot; Tím",
     "Neue Aufgabe&hellip;": "Nová úloha&hellip;",
     "Aufgabe hinzufügen": "Pridať úlohu",
@@ -992,13 +940,6 @@ COCKPIT_SK = {
     "Öffnen &#8594;": "Otvoriť &#8594;",
     "Sprache gesetzt – gilt für neu gestartete Apps.":
         "Jazyk nastavený – platí pre novo spustené aplikácie.",
-    # Team-Demo
-    "Lager": "Sklad",
-    "Vertrieb": "Obchod",
-    "frei": "voľný",
-    "beschäftigt": "zaneprázdnený",
-    "weg": "preč",
-    "nicht stören": "nerušiť",
 }
 i18n.register_translations(COCKPIT_SK, "SK")
 

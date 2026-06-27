@@ -16,6 +16,7 @@ Start:  python start_testoberflaeche.py
 from __future__ import annotations
 
 import threading
+from .i18n import T as _T
 import time
 import sqlite3
 from pathlib import Path
@@ -743,14 +744,14 @@ class TestOberflaeche(tk.Tk):
             return
         p = Path(path)
         if p.suffix.lower() not in SUPPORTED:
-            messagebox.showwarning("Format", f"'{p.suffix}' wird nicht unterstützt.\nErlaubt: xlsx, xls, xlsm, csv, txt.")
+            messagebox.showwarning("Format", _T("'{p0}' wird nicht unterstützt.\nErlaubt: xlsx, xls, xlsm, csv, txt.", p0=p.suffix))
             return
         self._selected_file = p
         self._file_var.set(p.name)
         n = zeilen_schaetzen(p)
         self._erwartete_zeilen = n
         tag = "alte Excel – wird konvertiert" if p.suffix.lower() == ".xls" else p.suffix.lower().lstrip(".").upper()
-        self._file_meta.config(text=f"{n} Zeilen · {tag}")
+        self._file_meta.config(text=_T('{p0} Zeilen · {p1}', p0=n, p1=tag))
         if not self._name_var.get().strip() or self._name_var.get() == "Testauswertung":
             self._name_var.set(p.stem[:40])
 
@@ -769,7 +770,7 @@ class TestOberflaeche(tk.Tk):
         for f in self._result_frame.winfo_children():
             f.destroy()
         self._prog_title.config(text="Auswertung läuft …", fg=INK)
-        self._prog_sub.config(text=f"Verarbeite {self._selected_file.name}")
+        self._prog_sub.config(text=_T('Verarbeite {p0}', p0=self._selected_file.name))
         self._pbar.config(mode="indeterminate")
         self._pbar.start(12)
         self._start_ts = time.time()
@@ -820,9 +821,9 @@ class TestOberflaeche(tk.Tk):
             self._set_stage(2, "active")
             if self._erwartete_zeilen:
                 pct = min(99, int(cnt / max(1, self._erwartete_zeilen) * 100))
-                self._prog_sub.config(text=f"{cnt} von ~{self._erwartete_zeilen} Positionen abgeglichen ({pct}%)")
+                self._prog_sub.config(text=_T('{p0} von ~{p1} Positionen abgeglichen ({p2}%)', p0=cnt, p1=self._erwartete_zeilen, p2=pct))
             else:
-                self._prog_sub.config(text=f"{cnt} Positionen abgeglichen …")
+                self._prog_sub.config(text=_T('{p0} Positionen abgeglichen …', p0=cnt))
         self.after(400, self._poll_positions)
 
     def _finish_ok(self, out: Path):
@@ -863,14 +864,14 @@ class TestOberflaeche(tk.Tk):
             import os
             os.startfile(str(path))  # type: ignore[attr-defined]
         except Exception as exc:
-            messagebox.showwarning("Öffnen", f"Datei konnte nicht geöffnet werden:\n{exc}")
+            messagebox.showwarning("Öffnen", _T('Datei konnte nicht geöffnet werden:\n{p0}', p0=exc))
 
     def _open_folder(self, path: Path):
         try:
             import os
             os.startfile(str(path))  # type: ignore[attr-defined]
         except Exception as exc:
-            messagebox.showwarning("Öffnen", f"Ordner konnte nicht geöffnet werden:\n{exc}")
+            messagebox.showwarning("Öffnen", _T('Ordner konnte nicht geöffnet werden:\n{p0}', p0=exc))
 
     def _scroll_page(self, title, subtitle):
         """Baut eine scrollbare Seite und liefert das innere Frame zurueck."""
@@ -926,7 +927,7 @@ class TestOberflaeche(tk.Tk):
         try:
             return kunden_master()
         except Exception as exc:
-            tk.Label(self._kunden_body, text=f"Kunden konnten nicht geladen werden:\n{exc}",
+            tk.Label(self._kunden_body, text=_T('Kunden konnten nicht geladen werden:\n{p0}', p0=exc),
                      bg=BG, fg=DANGER, font=(FONT, 12)).pack(anchor="w", pady=20)
             return None
 
@@ -1043,9 +1044,9 @@ class TestOberflaeche(tk.Tk):
                 tk.Frame(card.inner, bg=BORDER, height=1).pack(fill="x", pady=(10, 8))
                 ums = tk.Frame(card.inner, bg="#EFF5FB")
                 ums.pack(fill="x")
-                tk.Label(ums, text=f"Umsatz gesamt: {self._eur(u['umsatz'])}", bg="#EFF5FB",
+                tk.Label(ums, text=_T('Umsatz gesamt: {p0}', p0=self._eur(u['umsatz'])), bg="#EFF5FB",
                          fg=PRIMARY, font=(FONT, 12, "bold")).pack(anchor="w", padx=12, pady=(8, 0))
-                tk.Label(ums, text=f"{u['bestellungen']} Bestellungen · {u['von']} bis {u['bis']}",
+                tk.Label(ums, text=_T('{p0} Bestellungen · {p1} bis {p2}', p0=u['bestellungen'], p1=u['von'], p2=u['bis']),
                          bg="#EFF5FB", fg=MUTED, font=(FONT, 10)).pack(anchor="w", padx=12, pady=(0, 8))
                 PillButton(card.inner, "📊  Umsatz & Artikel ansehen",
                            lambda kk=k: self._open_umsatz_dialog(kk), kind="accent").pack(anchor="w", pady=(8, 0))
@@ -1067,7 +1068,7 @@ class TestOberflaeche(tk.Tk):
         head.pack(fill="x")
         tk.Label(head, text=kunde.get("kundenname") or "—", bg=PRIMARY, fg="#FFFFFF",
                  font=(FONT, 17, "bold")).pack(anchor="w", padx=20, pady=(14, 2))
-        tk.Label(head, text=f"Kundennr. {knr or '—'} · {kunde.get('ort') or ''}", bg=PRIMARY,
+        tk.Label(head, text=_T('Kundennr. {p0} · {p1}', p0=knr or '—', p1=kunde.get('ort') or ''), bg=PRIMARY,
                  fg="#CFE2F3", font=(FONT, 10)).pack(anchor="w", padx=20, pady=(0, 14))
 
         # Zeitraum-Umschalter
@@ -1161,7 +1162,7 @@ class TestOberflaeche(tk.Tk):
         vb = kunde_vorbestellungen(knr)
         vcard = tk.Frame(self._um_body, bg=BG)
         vcard.pack(fill="x", pady=(14, 0))
-        tk.Label(vcard, text=f"🕓  Offene Vorbestellungen ({len(vb)})", bg=BG, fg=WARNING,
+        tk.Label(vcard, text=_T('🕓  Offene Vorbestellungen ({p0})', p0=len(vb)), bg=BG, fg=WARNING,
                  font=(FONT, 13, "bold")).pack(anchor="w", pady=(0, 4))
         if not vb:
             tk.Label(vcard, text="Keine offenen Vorbestellungen.", bg=BG, fg=MUTED,
@@ -1178,7 +1179,7 @@ class TestOberflaeche(tk.Tk):
         try:
             ranking = abc_ranking()
         except Exception as exc:
-            tk.Label(self._kunden_body, text=f"ABC-Analyse fehlgeschlagen:\n{exc}",
+            tk.Label(self._kunden_body, text=_T('ABC-Analyse fehlgeschlagen:\n{p0}', p0=exc),
                      bg=BG, fg=DANGER, font=(FONT, 12)).pack(anchor="w", pady=20)
             return
         if not ranking:
@@ -1199,11 +1200,11 @@ class TestOberflaeche(tk.Tk):
         for kl in ("A", "B", "C"):
             t = tk.Frame(sumrow, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
             t.pack(side="left", padx=(0 if kl == "A" else 10, 0))
-            tk.Label(t, text=f"  Klasse {kl}  ", bg=self.ABC_COLORS[kl], fg="#FFFFFF",
+            tk.Label(t, text=_T('  Klasse {p0}  ', p0=kl), bg=self.ABC_COLORS[kl], fg="#FFFFFF",
                      font=(FONT, 11, "bold")).pack(anchor="w")
-            tk.Label(t, text=f"{zaehler[kl]} Apotheken", bg=CARD, fg=INK,
+            tk.Label(t, text=_T('{p0} Apotheken', p0=zaehler[kl]), bg=CARD, fg=INK,
                      font=(FONT, 13, "bold")).pack(anchor="w", padx=14, pady=(6, 10))
-        tk.Label(self._kunden_body, text=f"Gesamtpotenzial: {self._eur(summe)}",
+        tk.Label(self._kunden_body, text=_T('Gesamtpotenzial: {p0}', p0=self._eur(summe)),
                  bg=BG, fg=PRIMARY, font=(FONT, 12, "bold")).pack(anchor="w", pady=(0, 10))
 
         head = tk.Frame(self._kunden_body, bg=BG)
@@ -1271,7 +1272,7 @@ class TestOberflaeche(tk.Tk):
         # Legende
         for i, kl in enumerate(("A", "B", "C")):
             cv.create_oval(16, 16 + i * 22, 28, 28 + i * 22, fill=self.ABC_COLORS[kl], outline="")
-            cv.create_text(36, 22 + i * 22, text=f"Klasse {kl}", anchor="w",
+            cv.create_text(36, 22 + i * 22, text=_T('Klasse {p0}', p0=kl), anchor="w",
                            fill=INK, font=(FONT, 9))
         # Kollisionsschutz fuer Labels: leichte Verschiebung bei Ueberlappung
         belegt = []
@@ -1310,7 +1311,7 @@ class TestOberflaeche(tk.Tk):
         try:
             self.clipboard_clear()
             self.clipboard_append(str(value))
-            messagebox.showinfo("Kopiert", f"{was} in die Zwischenablage kopiert.")
+            messagebox.showinfo("Kopiert", _T('{p0} in die Zwischenablage kopiert.', p0=was))
         except Exception:
             pass
 
@@ -1319,7 +1320,7 @@ class TestOberflaeche(tk.Tk):
         try:
             webbrowser.open(f"mailto:{email}")
         except Exception as exc:
-            messagebox.showwarning("E-Mail", f"Konnte E-Mail-Programm nicht öffnen:\n{exc}")
+            messagebox.showwarning("E-Mail", _T('Konnte E-Mail-Programm nicht öffnen:\n{p0}', p0=exc))
 
     def _open_maps(self, adresse):
         import webbrowser
@@ -1327,7 +1328,7 @@ class TestOberflaeche(tk.Tk):
         try:
             webbrowser.open(f"https://www.google.com/maps/search/?api=1&query={quote_plus(adresse)}")
         except Exception as exc:
-            messagebox.showwarning("Karte", f"Konnte Karte nicht öffnen:\n{exc}")
+            messagebox.showwarning("Karte", _T('Konnte Karte nicht öffnen:\n{p0}', p0=exc))
 
     # ----- Seite: PZN-Schnellauskunft ---------------------------------------
     def _page_auskunft(self):
@@ -1365,13 +1366,13 @@ class TestOberflaeche(tk.Tk):
                 return
         treffer = suche_artikel(begriff)
         if not treffer:
-            tk.Label(self._auskunft_body, text=f"Keine Treffer für „{begriff}“.",
+            tk.Label(self._auskunft_body, text=_T('Keine Treffer für „{p0}“.', p0=begriff),
                      bg=BG, fg=DANGER, font=(FONT, 12)).pack(anchor="w", pady=14)
             return
         if len(treffer) == 1:
             self._render_artikel(artikel_360(treffer[0]["pzn"]))
             return
-        tk.Label(self._auskunft_body, text=f"{len(treffer)} Treffer – bitte auswählen:",
+        tk.Label(self._auskunft_body, text=_T('{p0} Treffer – bitte auswählen:', p0=len(treffer)),
                  bg=BG, fg=MUTED, font=(FONT, 11)).pack(anchor="w", pady=(0, 8))
         lst = tk.Frame(self._auskunft_body, bg=BG)
         lst.pack(fill="both", expand=True)
@@ -1441,7 +1442,7 @@ class TestOberflaeche(tk.Tk):
             pct = diff / taxe_ek * 100 if taxe_ek else 0
             box = tk.Frame(body, bg="#EAF6EF", highlightbackground="#BfE3CD", highlightthickness=1)
             box.pack(fill="x", pady=(0, 14))
-            tk.Label(box, text=f"💡  Einkaufsvorteil ggü. Taxe-EK: {self._eur(diff)} pro Packung ({pct:.1f} %)",
+            tk.Label(box, text=_T('💡  Einkaufsvorteil ggü. Taxe-EK: {p0} pro Packung ({p1:.1f} %)', p0=self._eur(diff), p1=pct),
                      bg="#EAF6EF", fg=SUCCESS if diff > 0 else DANGER, font=(FONT, 12, "bold")).pack(anchor="w", padx=16, pady=11)
 
         # Mengen-/Konditionsrechner + Kopier-Funktion
@@ -1521,7 +1522,7 @@ class TestOberflaeche(tk.Tk):
             tk.Label(card.inner, text=f"🧬  Wirkstoff-Gruppe: {bio.get('wirkstoff') or '?'}"
                      + (f"  ·  Referenz: {bio['referenz']}" if bio.get("referenz") else ""),
                      bg=CARD, fg=PRIMARY, font=(FONT, 13, "bold")).pack(anchor="w")
-            tk.Label(card.inner, text=f"Dieses Produkt: {bio.get('name')} ({bio.get('rolle') or 'Produkt'})",
+            tk.Label(card.inner, text=_T('Dieses Produkt: {p0} ({p1})', p0=bio.get('name'), p1=bio.get('rolle') or 'Produkt'),
                      bg=CARD, fg=INK, font=(FONT, 11)).pack(anchor="w", pady=(4, 8))
             if bio.get("alternativen"):
                 tk.Label(card.inner, text="Austauschbare Produkte derselben Gruppe:",
@@ -1535,7 +1536,7 @@ class TestOberflaeche(tk.Tk):
         if aus:
             card = Card(body, padding=18)
             card.pack(fill="x", pady=(14, 0))
-            tk.Label(card.inner, text=f"🔁  In der Austauschdatenbank ({len(aus)} NMG-Vorschläge)",
+            tk.Label(card.inner, text=_T('🔁  In der Austauschdatenbank ({p0} NMG-Vorschläge)', p0=len(aus)),
                      bg=CARD, fg=PRIMARY, font=(FONT, 13, "bold")).pack(anchor="w", pady=(0, 6))
             for a in aus:
                 txt = f"   →  NMG-PZN {a['pzn_nmg']}"
@@ -1563,7 +1564,7 @@ class TestOberflaeche(tk.Tk):
             self.clipboard_append(text)
             messagebox.showinfo("Kopiert", "Die Zusammenfassung wurde in die Zwischenablage kopiert.")
         except Exception as exc:
-            messagebox.showwarning("Kopieren", f"Konnte nicht kopieren:\n{exc}")
+            messagebox.showwarning("Kopieren", _T('Konnte nicht kopieren:\n{p0}', p0=exc))
 
     def _detail_card(self, parent, title, rows):
         card = Card(parent, padding=18)
@@ -1625,7 +1626,7 @@ class TestOberflaeche(tk.Tk):
         try:
             rows = markt_top(modus, limit=30)
         except Exception as exc:
-            tk.Label(self._markt_body, text=f"Konnte Markt-Daten nicht laden:\n{exc}",
+            tk.Label(self._markt_body, text=_T('Konnte Markt-Daten nicht laden:\n{p0}', p0=exc),
                      bg=BG, fg=DANGER, font=(FONT, 12)).pack(anchor="w", pady=20)
             return
         self._markt_rows = rows
@@ -1712,9 +1713,9 @@ class TestOberflaeche(tk.Tk):
                                 f"{r['absatz']:.0f}", (f"{rs*100:.0f}%" if rs else ""),
                                 f"{(r.get('rabatt_pot') or 0):.2f}",
                                 "ja" if r.get("ist_nmg") else ""])
-            messagebox.showinfo("Export", f"Gespeichert:\n{path}")
+            messagebox.showinfo("Export", _T('Gespeichert:\n{p0}', p0=path))
         except Exception as exc:
-            messagebox.showwarning("Export", f"Konnte nicht speichern:\n{exc}")
+            messagebox.showwarning("Export", _T('Konnte nicht speichern:\n{p0}', p0=exc))
 
     # ----- Seite: Datenbank-Dashboard ---------------------------------------
     def _page_dashboard(self):
@@ -1723,7 +1724,7 @@ class TestOberflaeche(tk.Tk):
         try:
             k = db_kennzahlen()
         except Exception as exc:
-            tk.Label(inner, text=f"Datenbank konnte nicht gelesen werden:\n{exc}",
+            tk.Label(inner, text=_T('Datenbank konnte nicht gelesen werden:\n{p0}', p0=exc),
                      bg=BG, fg=DANGER, font=(FONT, 12)).pack(anchor="w", pady=20)
             return
 
@@ -1784,16 +1785,15 @@ class TestOberflaeche(tk.Tk):
         tk.Label(info.inner, text="Weitere Kennzahlen", bg=CARD, fg=PRIMARY,
                  font=(FONT, 14, "bold")).pack(anchor="w", pady=(0, 8))
         if "lieferbar" in k:
-            tk.Label(info.inner, text=f"Als lieferbar markiert: {k['lieferbar']}   ·   "
-                     f"Bevorratung empfohlen: {k['bevorratung']}",
+            tk.Label(info.inner, text=_T('Als lieferbar markiert: {p0}   ·   Bevorratung empfohlen: {p1}', p0=k['lieferbar'], p1=k['bevorratung']),
                      bg=CARD, fg=INK, font=(FONT, 12)).pack(anchor="w", pady=2)
         if k.get("letzte"):
             le = k["letzte"]
             kunde = le.get("kundenname") or le.get("apotheke") or "?"
-            tk.Label(info.inner, text=f"Letzte Auswertung: {le.get('datum') or '?'}  ·  {kunde}",
+            tk.Label(info.inner, text=_T('Letzte Auswertung: {p0}  ·  {p1}', p0=le.get('datum') or '?', p1=kunde),
                      bg=CARD, fg=INK, font=(FONT, 12)).pack(anchor="w", pady=2)
         db_name = Path(DB_PATH).name
-        tk.Label(info.inner, text=f"Datenbank-Datei: {db_name}", bg=CARD, fg=MUTED,
+        tk.Label(info.inner, text=_T('Datenbank-Datei: {p0}', p0=db_name), bg=CARD, fg=MUTED,
                  font=(FONT, 10)).pack(anchor="w", pady=(8, 0))
 
     # ----- Seite: Auswertungs-Verlauf ---------------------------------------
@@ -1803,7 +1803,7 @@ class TestOberflaeche(tk.Tk):
         try:
             rows = auswertungen_liste()
         except Exception as exc:
-            tk.Label(inner, text=f"Konnte Verlauf nicht laden:\n{exc}", bg=BG, fg=DANGER,
+            tk.Label(inner, text=_T('Konnte Verlauf nicht laden:\n{p0}', p0=exc), bg=BG, fg=DANGER,
                      font=(FONT, 12)).pack(anchor="w", pady=20)
             return
         if not rows:
@@ -1813,7 +1813,7 @@ class TestOberflaeche(tk.Tk):
 
         bar = tk.Frame(inner, bg=BG)
         bar.pack(fill="x", pady=(0, 8), padx=(0, 8))
-        tk.Label(bar, text=f"{len(rows)} Auswertungen", bg=BG, fg=MUTED,
+        tk.Label(bar, text=_T('{p0} Auswertungen', p0=len(rows)), bg=BG, fg=MUTED,
                  font=(FONT, 11)).pack(side="left")
         PillButton(bar, "⬇  Als CSV exportieren", lambda: self._export_verlauf_csv(rows),
                    kind="ghost").pack(side="right")
@@ -1865,9 +1865,9 @@ class TestOberflaeche(tk.Tk):
                                 a.get("anzahl_positionen") or 0, a.get("nmg_treffer") or 0,
                                 a.get("nicht_nmg") or 0, a.get("gesamt_absatz") or 0,
                                 a.get("datenquelle") or ""])
-            messagebox.showinfo("Export", f"Verlauf gespeichert:\n{path}")
+            messagebox.showinfo("Export", _T('Verlauf gespeichert:\n{p0}', p0=path))
         except Exception as exc:
-            messagebox.showwarning("Export", f"Konnte nicht speichern:\n{exc}")
+            messagebox.showwarning("Export", _T('Konnte nicht speichern:\n{p0}', p0=exc))
 
     # ----- Seite: Hilfe -----------------------------------------------------
     def _page_hilfe(self):

@@ -22,6 +22,7 @@ Start:  python start_kunden.py     (bzw. NMGone.exe --kunden / Cockpit-Kachel)
 from __future__ import annotations
 
 import calendar
+from .i18n import T as _T
 import getpass
 import os
 import re
@@ -478,7 +479,7 @@ class KundenPanel(tk.Frame):
         try:
             kunden = kunden_master()
         except Exception as exc:
-            self._liste_info.config(text=f"Kunden konnten nicht geladen werden: {exc}")
+            self._liste_info.config(text=_T('Kunden konnten nicht geladen werden: {p0}', p0=exc))
             return
         gezeigt = 0
         for k in kunden:
@@ -495,7 +496,7 @@ class KundenPanel(tk.Frame):
             iid = tree.insert("", "end", values=row_vals)
             self._liste_rows[iid] = k
             gezeigt += 1
-        self._liste_info.config(text=f"{gezeigt} von {len(kunden)} Kunden angezeigt")
+        self._liste_info.config(text=_T('{p0} von {p1} Kunden angezeigt', p0=gezeigt, p1=len(kunden)))
 
     def _selected_kunde(self):
         sel = self._liste_tree.selection()
@@ -517,14 +518,14 @@ class KundenPanel(tk.Frame):
             messagebox.showinfo("Kunden", "Bitte zuerst einen Kunden auswählen.", parent=self)
             return
         if not messagebox.askyesno("Kunden",
-                                   f"Kunde '{k.get('kundenname','')}' wirklich löschen?", parent=self):
+                                   _T("Kunde '{p0}' wirklich löschen?", p0=k.get('kundenname','')), parent=self):
             return
         try:
             with _con() as con:
                 con.execute("DELETE FROM tbl_kunden_center WHERE id=?", (k["id"],))
                 con.commit()
         except Exception as exc:
-            messagebox.showerror("Kunden", f"Löschen fehlgeschlagen:\n{exc}", parent=self)
+            messagebox.showerror("Kunden", _T('Löschen fehlgeschlagen:\n{p0}', p0=exc), parent=self)
         self._liste_reload()
 
     # ══════════════════════════════════════════════════════════════════════
@@ -541,7 +542,7 @@ class KundenPanel(tk.Frame):
         try:
             ranking = abc_ranking()
         except Exception as exc:
-            tk.Label(body, text=f"ABC-Analyse fehlgeschlagen:\n{exc}",
+            tk.Label(body, text=_T('ABC-Analyse fehlgeschlagen:\n{p0}', p0=exc),
                      bg=BG, fg=DANGER, font=(FONT, 12)).pack(anchor="w", pady=20)
             return
         if not ranking:
@@ -561,11 +562,11 @@ class KundenPanel(tk.Frame):
         for kl in ("A", "B", "C"):
             t = tk.Frame(sumrow, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
             t.pack(side="left", padx=(0 if kl == "A" else 10, 0))
-            tk.Label(t, text=f"  Klasse {kl}  ", bg=ABC_COLORS[kl], fg="#FFFFFF",
+            tk.Label(t, text=_T('  Klasse {p0}  ', p0=kl), bg=ABC_COLORS[kl], fg="#FFFFFF",
                      font=(FONT, 11, "bold")).pack(anchor="w")
-            tk.Label(t, text=f"{zaehler[kl]} Apotheken", bg=CARD, fg=INK,
+            tk.Label(t, text=_T('{p0} Apotheken', p0=zaehler[kl]), bg=CARD, fg=INK,
                      font=(FONT, 13, "bold")).pack(anchor="w", padx=14, pady=(6, 10))
-        tk.Label(body, text=f"Gesamtpotenzial: {_eur(summe)}", bg=BG, fg=PRIMARY,
+        tk.Label(body, text=_T('Gesamtpotenzial: {p0}', p0=_eur(summe)), bg=BG, fg=PRIMARY,
                  font=(FONT, 12, "bold")).pack(anchor="w", pady=(0, 10))
 
         head = tk.Frame(body, bg=BG)
@@ -615,7 +616,7 @@ class KundenPanel(tk.Frame):
         try:
             kunden = kunden_master()
         except Exception as exc:
-            tk.Label(body, text=f"Kunden konnten nicht geladen werden:\n{exc}",
+            tk.Label(body, text=_T('Kunden konnten nicht geladen werden:\n{p0}', p0=exc),
                      bg=BG, fg=DANGER, font=(FONT, 12)).pack(anchor="w", pady=20)
             return
         platzierbar = [k for k in kunden if k.get("latlon")]
@@ -639,7 +640,7 @@ class KundenPanel(tk.Frame):
         cv.create_polygon(pts, fill="#FBFCFE", outline="#9DB6CE", width=2)
         for i, kl in enumerate(("A", "B", "C")):
             cv.create_oval(16, 16 + i * 22, 28, 28 + i * 22, fill=ABC_COLORS[kl], outline="")
-            cv.create_text(36, 22 + i * 22, text=f"Klasse {kl}", anchor="w",
+            cv.create_text(36, 22 + i * 22, text=_T('Klasse {p0}', p0=kl), anchor="w",
                            fill=INK, font=(FONT, 9))
         belegt = []
         for k in platzierbar:
@@ -729,9 +730,9 @@ class KundenPanel(tk.Frame):
             if u and u["bestellungen"]:
                 ums = tk.Frame(card.inner, bg=SELECT_BG)
                 ums.pack(fill="x")
-                tk.Label(ums, text=f"Umsatz gesamt: {_eur(u['umsatz'])}", bg=SELECT_BG,
+                tk.Label(ums, text=_T('Umsatz gesamt: {p0}', p0=_eur(u['umsatz'])), bg=SELECT_BG,
                          fg=PRIMARY, font=(FONT, 12, "bold")).pack(anchor="w", padx=12, pady=(8, 0))
-                tk.Label(ums, text=f"{u['bestellungen']} Bestellungen · {u['von']} bis {u['bis']}",
+                tk.Label(ums, text=_T('{p0} Bestellungen · {p1} bis {p2}', p0=u['bestellungen'], p1=u['von'], p2=u['bis']),
                          bg=SELECT_BG, fg=MUTED, font=(FONT, 10)).pack(anchor="w", padx=12, pady=(0, 8))
                 PillButton(card.inner, "📊  Umsatz & Artikel ansehen",
                            lambda kk=k: open_umsatz_dialog(self, kk), kind="accent").pack(anchor="w", pady=(8, 0))
@@ -747,7 +748,7 @@ class KundenPanel(tk.Frame):
         try:
             self.clipboard_clear()
             self.clipboard_append(str(value))
-            messagebox.showinfo("Kopiert", f"{was} in die Zwischenablage kopiert.", parent=self)
+            messagebox.showinfo("Kopiert", _T('{p0} in die Zwischenablage kopiert.', p0=was), parent=self)
         except Exception:
             pass
 
@@ -783,7 +784,7 @@ def open_umsatz_dialog(parent, kunde):
     head.pack(fill="x")
     tk.Label(head, text=kunde.get("kundenname") or "—", bg=PRIMARY, fg="#FFFFFF",
              font=(FONT, 17, "bold")).pack(anchor="w", padx=20, pady=(14, 2))
-    tk.Label(head, text=f"Kundennr. {knr or '—'} · {kunde.get('ort') or ''}", bg=PRIMARY,
+    tk.Label(head, text=_T('Kundennr. {p0} · {p1}', p0=knr or '—', p1=kunde.get('ort') or ''), bg=PRIMARY,
              fg="#CFE2F3", font=(FONT, 10)).pack(anchor="w", padx=20, pady=(0, 14))
 
     state = {"zeitraum": 0, "show_alle": False}
@@ -857,7 +858,7 @@ def open_umsatz_dialog(parent, kunde):
         vb = kunde_vorbestellungen(knr)
         vcard = tk.Frame(body, bg=BG)
         vcard.pack(fill="x", pady=(14, 0))
-        tk.Label(vcard, text=f"🕓  Offene Vorbestellungen ({len(vb)})", bg=BG, fg=WARNING,
+        tk.Label(vcard, text=_T('🕓  Offene Vorbestellungen ({p0})', p0=len(vb)), bg=BG, fg=WARNING,
                  font=(FONT, 13, "bold")).pack(anchor="w", pady=(0, 4))
         if not vb:
             tk.Label(vcard, text="Keine offenen Vorbestellungen.", bg=BG, fg=MUTED,
@@ -1281,7 +1282,7 @@ def open_kunden_dialog(parent, kunden_row=None, bearbeiter=None, on_saved=None):
             else:
                 messagebox.showinfo(title, "Outlook-Integration nur unter Windows verfügbar.", parent=win)
         except Exception as exc:
-            messagebox.showerror(title, f"Outlook konnte nicht geöffnet werden:\n{exc}", parent=win)
+            messagebox.showerror(title, _T('Outlook konnte nicht geöffnet werden:\n{p0}', p0=exc), parent=win)
 
     ana_btns = tk.Frame(tab_ana, bg="#ffffff")
     ana_btns.grid(row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8))
@@ -1336,7 +1337,7 @@ def open_kunden_dialog(parent, kunden_row=None, bearbeiter=None, on_saved=None):
             vk_info.config(text=(f"{len(rows)} Positionen · Gesamtmenge {gesamt}"
                                  if rows else "Für diesen Kunden sind keine Verkäufe erfasst."))
         except Exception as exc:
-            vk_info.config(text=f"Fehler beim Laden: {exc}")
+            vk_info.config(text=_T('Fehler beim Laden: {p0}', p0=exc))
     load_verkaufte()
 
     # ---- Reiter: Notizen ----
@@ -1375,7 +1376,7 @@ def open_kunden_dialog(parent, kunden_row=None, bearbeiter=None, on_saved=None):
         try:
             from .plz_lookup import is_valid_plz
             if not is_valid_plz(plz) and not messagebox.askyesno(
-                    title, f"Die PLZ {plz} wurde nicht gefunden.\nTrotzdem speichern?", parent=win):
+                    title, _T('Die PLZ {p0} wurde nicht gefunden.\nTrotzdem speichern?', p0=plz), parent=win):
                 return
         except Exception:
             pass
@@ -1441,7 +1442,7 @@ def open_kunden_dialog(parent, kunden_row=None, bearbeiter=None, on_saved=None):
                     (data["kundennummer"], data["kundenname"], data["kundenname"], data["kundenname"]))
                 con.commit()
         except Exception as exc:
-            messagebox.showerror(title, f"Speichern fehlgeschlagen:\n{exc}", parent=win)
+            messagebox.showerror(title, _T('Speichern fehlgeschlagen:\n{p0}', p0=exc), parent=win)
             return
         win.destroy()
         if on_saved:

@@ -27,6 +27,7 @@ Teilt sich die Datenbank mit NMGone (app/config.py · DB_PATH).
 """
 from __future__ import annotations
 import os
+from .i18n import T as _T
 import sys
 import getpass
 import hashlib
@@ -771,8 +772,7 @@ class App:
                 self.show_mitarbeiter()
         tree.bind("<Double-Button-1>", on_dbl)
 
-        self.status.set(f"Übersicht · {len(berecht)} Berechtigungen × {len(self.emps)} Mitarbeiter · "
-                        f"Modul: {self.matrix_modul}")
+        self.status.set(_T('Übersicht · {p0} Berechtigungen × {p1} Mitarbeiter · Modul: {p2}', p0=len(berecht), p1=len(self.emps), p2=self.matrix_modul))
 
     # =========================================================================
     #  ANSICHT 2 · MITARBEITER (Rollen + einzelne Punkte)
@@ -1084,8 +1084,7 @@ class App:
             win.destroy()
             self.load()
             self.show_mitarbeiter()
-            self.status.set(f"Rolle '{r['name']}' bei {len(targets)} Mitarbeiter(n) "
-                            f"{'zugewiesen' if add else 'entfernt'}.")
+            self.status.set(_T("Rolle '{p0}' bei {p1} Mitarbeiter(n) {p2}.", p0=r['name'], p1=len(targets), p2='zugewiesen' if add else 'entfernt'))
 
         bar = tk.Frame(win, bg=BG)
         bar.pack(fill="x", padx=16, pady=12)
@@ -1196,8 +1195,7 @@ class App:
             win.destroy()
             self.load()
             self.show_mitarbeiter()
-            self.status.set(f"{' + '.join(was)} von {self._name(src)} auf "
-                            f"{len(targets)} Mitarbeiter übertragen ({mode.get()}).")
+            self.status.set(_T('{p0} von {p1} auf {p2} Mitarbeiter übertragen ({p3}).', p0=' + '.join(was), p1=self._name(src), p2=len(targets), p3=mode.get()))
 
         bar = tk.Frame(win, bg=BG)
         bar.pack(fill="x", padx=16, pady=12)
@@ -1279,7 +1277,7 @@ class App:
             tk.Label(box, text="★  Diese Rolle hat automatisch ALLE Berechtigungen.",
                      bg="#F3EEFA", fg=PURPLE, font=(FONT, 11, "bold")).pack(anchor="w", padx=14, pady=12)
             n_ma = sum(1 for v in self.ma_roles.values() if r["id"] in v)
-            tk.Label(self.rolle_detail, text=f"Zugewiesen an {n_ma} Mitarbeiter.",
+            tk.Label(self.rolle_detail, text=_T('Zugewiesen an {p0} Mitarbeiter.', p0=n_ma),
                      bg=BG, fg=MUTED, font=(FONT, 10)).pack(anchor="w", padx=18)
             return
 
@@ -1318,7 +1316,7 @@ class App:
             cb.pack(anchor="w", padx=6)
 
         n_ma = sum(1 for v in self.ma_roles.values() if r["id"] in v)
-        self.status.set(f"Rolle '{r['name']}' · {len(have)} Berechtigungen · an {n_ma} Mitarbeiter zugewiesen")
+        self.status.set(_T("Rolle '{p0}' · {p1} Berechtigungen · an {p2} Mitarbeiter zugewiesen", p0=r['name'], p1=len(have), p2=n_ma))
 
     def _toggle_rolle_recht(self, rid, bid):
         if not self.admin:
@@ -1381,9 +1379,7 @@ class App:
             return
         n_ma = sum(1 for v in self.ma_roles.values() if r["id"] in v)
         if not messagebox.askyesno("Rolle löschen",
-                f"Rolle '{r['name']}' wirklich löschen?\n\n"
-                f"Sie ist aktuell {n_ma} Mitarbeiter(n) zugewiesen — diese Zuordnungen "
-                f"werden mit entfernt.", parent=self.root):
+                _T("Rolle '{p0}' wirklich löschen?\n\nSie ist aktuell {p1} Mitarbeiter(n) zugewiesen — diese Zuordnungen werden mit entfernt.", p0=r['name'], p1=n_ma), parent=self.root):
             return
         con = sqlite3.connect(DB_PATH)
         con.execute("DELETE FROM tbl_rolle WHERE id=?", (r["id"],))
@@ -1513,8 +1509,7 @@ class App:
 
     def _katalog_loeschen(self, b, win):
         if not messagebox.askyesno("Löschen",
-                f"Berechtigung '{b['titel']}' löschen?\n\n"
-                "Alle Rollen-Zuordnungen und persönlichen Ausnahmen dazu werden mit entfernt.",
+                _T("Berechtigung '{p0}' löschen?\n\nAlle Rollen-Zuordnungen und persönlichen Ausnahmen dazu werden mit entfernt.", p0=b['titel']),
                 parent=win):
             return
         con = sqlite3.connect(DB_PATH)
@@ -1616,7 +1611,7 @@ class App:
         vsb.grid(row=0, column=1, sticky="ns")
         wrap.rowconfigure(0, weight=1)
         wrap.columnconfigure(0, weight=1)
-        self.status.set(f"Protokoll · {len(rows)} jüngste Einträge")
+        self.status.set(_T('Protokoll · {p0} jüngste Einträge', p0=len(rows)))
 
     # ---- gemeinsame Helfer ------------------------------------------------
     def _empty_hint(self, parent, title, text):

@@ -15,6 +15,7 @@ Start:  python start_organigramm_test.py
 """
 from __future__ import annotations
 import os
+from .i18n import T as _T
 import calendar
 import getpass
 import sqlite3
@@ -492,7 +493,7 @@ class App:
         self.canvas.create_text(x + 62, y + 60, text=(e["abteilung"] or "").upper(), anchor="w", fill=col, font=(FONT, 8, "bold"), tags=(tag, "card"))
         boss, art = self.primary_boss(e["id"])
         if boss:
-            self.canvas.create_text(x + 14, y + CARD_H - 13, text=f"▸ Vorgesetzt: {boss}", anchor="w",
+            self.canvas.create_text(x + 14, y + CARD_H - 13, text=_T('▸ Vorgesetzt: {p0}', p0=boss), anchor="w",
                                     fill=FAINT, font=(FONT, 8), tags=(tag, "card"))
         if e.get("personalverantwortlich"):
             self.canvas.create_text(x + CARD_W - 12, y + 14, text="🔑", anchor="e",
@@ -574,15 +575,14 @@ class App:
         if self.connect_source is None:
             self.connect_source = eid
             self.redraw_orga()
-            self.status.set(f"Start: {self._name(eid)} – jetzt Ziel-(Vorgesetzten-)Karte anklicken.")
+            self.status.set(_T('Start: {p0} – jetzt Ziel-(Vorgesetzten-)Karte anklicken.', p0=self._name(eid)))
             return
         if eid == self.connect_source:
             return
         child, parent = self.connect_source, eid
         art = self.art.get()
         primaer = 1 if messagebox.askyesno("Verbindung",
-            f"„{self._name(child)} → {self._name(parent)}“ ({art})\n\n"
-            "Als primäre (organigramm-bildende) Beziehung markieren?") else 0
+            _T('„{p0} → {p1}“ ({p2})\n\nAls primäre (organigramm-bildende) Beziehung markieren?', p0=self._name(child), p1=self._name(parent), p2=art)) else 0
         con = sqlite3.connect(DB_PATH)
         if primaer:
             con.execute("UPDATE tbl_mitarbeiter_vorgesetzter SET ist_primaer=0 WHERE mitarbeiter_id=?", (child,))
@@ -595,11 +595,11 @@ class App:
         self.connect_mode = False
         self.connect_btn.configure(bg="#EDF1F6", fg=PRIMARY, text="🔗  Verbinden")
         self.redraw_orga()
-        self.status.set(f"Verbindung angelegt: {self._name(child)} → {self._name(parent)} ({art}).")
+        self.status.set(_T('Verbindung angelegt: {p0} → {p1} ({p2}).', p0=self._name(child), p1=self._name(parent), p2=art))
 
     def remove_link(self, lk):
         if not messagebox.askyesno("Verbindung entfernen",
-            f"Verbindung „{self._name(lk['child'])} → {self._name(lk['parent'])}“ ({lk['art']}) entfernen?"):
+            _T('Verbindung „{p0} → {p1}“ ({p2}) entfernen?', p0=self._name(lk['child']), p1=self._name(lk['parent']), p2=lk['art'])):
             return
         con = sqlite3.connect(DB_PATH)
         con.execute("DELETE FROM tbl_mitarbeiter_vorgesetzter WHERE id=?", (lk["id"],))
@@ -662,7 +662,7 @@ class App:
         fields = [("vorname", "Vorname"), ("name", "Nachname"), ("abteilung", "Abteilung"),
                   ("position", "Position"), ("urlaubsanspruch", "Urlaubsanspruch (Tage/Jahr)")]
         if not e:
-            tk.Label(win, text=f"Vorbelegt mit angemeldetem Benutzer: {self.current_user or '—'} · bitte prüfen.",
+            tk.Label(win, text=_T('Vorbelegt mit angemeldetem Benutzer: {p0} · bitte prüfen.', p0=self.current_user or '—'),
                      bg=BG, fg=MUTED, font=(FONT, 9), wraplength=420, justify="left").grid(
                 row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 2))
         base = 1 if not e else 0
@@ -880,7 +880,7 @@ class App:
         if mode == "jahr":
             start, end = date(y, 1, 1), date(y, 12, 31)
             DAY_W = 6
-            self.month_lbl.configure(text=f"Jahr {y}")
+            self.month_lbl.configure(text=_T('Jahr {p0}', p0=y))
         else:
             m = self.cal_month
             ndays = calendar.monthrange(y, m)[1]
@@ -960,7 +960,7 @@ class App:
             rest_col = "#C0392B" if rest < 0 else MUTED
             offen_txt = f" · {offen} offen" if offen else ""
             self.cal.create_text(14, ry + 31, anchor="w", fill=rest_col, font=(FONT, 8),
-                                 text=f"Urlaub {gen}/{anspruch} · Rest {rest}{offen_txt} · Krank {kcount} ({y})")
+                                 text=_T('Urlaub {p0}/{p1} · Rest {p2}{p3} · Krank {p4} ({p5})', p0=gen, p1=anspruch, p2=rest, p3=offen_txt, p4=kcount, p5=y))
 
         # Abwesenheits-Balken
         row_of = {e["id"]: i for i, e in enumerate(emps)}
@@ -999,8 +999,7 @@ class App:
             self.cal.tag_bind(tagid, "<Leave>", lambda ev: self.cal.config(cursor=""))
 
         scope = f"Jahr {y}" if mode == "jahr" else f"{MONATE[self.cal_month]} {y}"
-        self.status.set(f"Abwesenheiten · {scope} · {len(emps)} Mitarbeiter · "
-                        f"Klick auf einen Balken zum Bearbeiten/Löschen.")
+        self.status.set(_T('Abwesenheiten · {p0} · {p1} Mitarbeiter · Klick auf einen Balken zum Bearbeiten/Löschen.', p0=scope, p1=len(emps)))
 
     # =========================================================================
     #  ANSICHT 4 · ANTRÄGE (genehmigen / ablehnen)
@@ -1086,7 +1085,7 @@ class App:
         tk.Button(bar, text="✗ Ablehnen", command=lambda: do(False), bg="#C0392B", fg="white",
                   relief="flat", font=(FONT, 10, "bold"), padx=16, pady=8, cursor="hand2").pack(side="right", padx=(0, 8))
 
-        self.status.set(f"{len(offen)} offene Anträge · {stufe_txt}.")
+        self.status.set(_T('{p0} offene Anträge · {p1}.', p0=len(offen), p1=stufe_txt))
 
     def _daterange(self, von, bis):
         v = date.fromisoformat(von)
@@ -1342,14 +1341,12 @@ class App:
                              "unterart": unter, "status": ST_BEANTRAGT, "beantragt_am": now})
             win.destroy()
             self._refresh_after_decision()
-            self.status.set(f"Antrag eingereicht: {mname} ({a_art}) – wartet auf Genehmigung.")
+            self.status.set(_T('Antrag eingereicht: {p0} ({p1}) – wartet auf Genehmigung.', p0=mname, p1=a_art))
             # 31.03.-Hinweis, wenn Urlaub ins neue Jahr übertragen wird
             if a_art == "Urlaub" and b.year > v.year:
                 messagebox.showwarning(
                     "Resturlaub / gesetzliche Frist",
-                    f"Der Urlaub reicht ins Jahr {b.year}.\n\n"
-                    f"Gesetzlicher Hinweis (§ 7 BUrlG): Resturlaub aus {v.year} muss "
-                    f"grundsätzlich bis zum 31.03.{v.year + 1} genommen werden – sonst verfällt er.")
+                    _T('Der Urlaub reicht ins Jahr {p0}.\n\nGesetzlicher Hinweis (§ 7 BUrlG): Resturlaub aus {p1} muss grundsätzlich bis zum 31.03.{p2} genommen werden – sonst verfällt er.', p0=b.year, p1=v.year, p2=v.year + 1))
 
         bar = tk.Frame(win, bg=BG)
         bar.grid(row=6, column=0, columnspan=2, sticky="ew", padx=16, pady=16)
@@ -1425,7 +1422,7 @@ class App:
         win.transient(self.root)
         win.grab_set()
         win.geometry("680x480")
-        tk.Label(win, text=f"Resturlaub {y}", bg=BG, fg=PRIMARY, font=(FONT, 14, "bold")).pack(anchor="w", padx=16, pady=(14, 2))
+        tk.Label(win, text=_T('Resturlaub {p0}', p0=y), bg=BG, fg=PRIMARY, font=(FONT, 14, "bold")).pack(anchor="w", padx=16, pady=(14, 2))
         pv_now = self._personalverantwortliche()
         pv_txt = ("Personalverantwortlich: " + ", ".join(pv_now)) if pv_now else \
                  "Hinweis: Noch niemand als personalverantwortlich eingeteilt (im Organigramm bei einer Karte setzen)."
@@ -1472,7 +1469,7 @@ class App:
             e = self.emp_by_id[eid]
             rest = self._rest_urlaub(e, y)
             if rest <= 0:
-                messagebox.showinfo("Resturlaub", f"{self._name(eid)} hat keinen offenen Resturlaub.")
+                messagebox.showinfo("Resturlaub", _T('{p0} hat keinen offenen Resturlaub.', p0=self._name(eid)))
                 return
             pv = self._personalverantwortliche()
             if not pv:
@@ -1485,12 +1482,7 @@ class App:
             empf = ", ".join(pv)
             ja = messagebox.askyesno(
                 "Nachricht an die personalverantwortliche Person",
-                f"An: {empf}\n\n"
-                f"Der Resturlaub von {self._name(eid)} ({rest} Tage aus {y}) wurde nicht genommen "
-                f"und verfällt gesetzlich zum 31.03.{y + 1}.\n\n"
-                f"Soll der noch offene Urlaub jetzt verfallen (löschen)?\n\n"
-                f"Ja = verfallen lassen     Nein = nichts tun\n"
-                f"(Der bereits genommene Urlaub dieses Jahres bleibt erhalten.)")
+                _T('An: {p0}\n\nDer Resturlaub von {p1} ({p2} Tage aus {p3}) wurde nicht genommen und verfällt gesetzlich zum 31.03.{p4}.\n\nSoll der noch offene Urlaub jetzt verfallen (löschen)?\n\nJa = verfallen lassen     Nein = nichts tun\n(Der bereits genommene Urlaub dieses Jahres bleibt erhalten.)', p0=empf, p1=self._name(eid), p2=rest, p3=y, p4=y + 1))
             if not ja:
                 self.status.set("Verfall abgelehnt – nichts geändert.")
                 return
@@ -1502,7 +1494,7 @@ class App:
             self.verfall.append({"mitarbeiter_id": eid, "jahr": y, "tage": rest, "datum": date.today().isoformat()})
             populate()
             self.draw_calendar()
-            self.status.set(f"Resturlaub von {self._name(eid)} verfallen: {rest} Tage ({y}).")
+            self.status.set(_T('Resturlaub von {p0} verfallen: {p1} Tage ({p2}).', p0=self._name(eid), p1=rest, p2=y))
 
         bar = tk.Frame(win, bg=BG)
         bar.pack(fill="x", padx=16, pady=(2, 6))
@@ -1628,13 +1620,13 @@ class App:
         tk.Label(box, text=f"{e['vorname']} {e['name']}".strip(), bg=BG, fg=INK, font=(FONT, 15, "bold")).pack(anchor="w")
         tk.Label(box, text=" · ".join(filter(None, [e["position"] or "", e["abteilung"] or ""])),
                  bg=BG, fg=MUTED, font=(FONT, 10)).pack(anchor="w")
-        tk.Label(head, text=f"{len(areas)} Arbeitsbereiche", bg=SELECT_BG, fg=PRIMARY,
+        tk.Label(head, text=_T('{p0} Arbeitsbereiche', p0=len(areas)), bg=SELECT_BG, fg=PRIMARY,
                  font=(FONT, 10, "bold"), padx=12, pady=4).pack(side="right")
 
         if not areas:
             tk.Label(self.ab_inner, text="Diesem Mitarbeiter sind noch keine Arbeitsbereiche zugewiesen.\n"
                      "Mit „➕ zuweisen“ hinzufügen.", bg=BG, fg=MUTED, font=(FONT, 11), justify="left").pack(anchor="w", padx=24, pady=24)
-            self.status.set(f"{e['vorname']} {e['name']}: keine Arbeitsbereiche.")
+            self.status.set(_T('{p0} {p1}: keine Arbeitsbereiche.', p0=e['vorname'], p1=e['name']))
             return
 
         cats = {}
@@ -1671,7 +1663,7 @@ class App:
                          font=(FONT, 8, "bold")).pack(side="right", padx=4)
                 tk.Label(body, text="Kette:  " + self._chain_text(b["id"]), bg=CARD, fg=MUTED,
                          font=(FONT, 8), anchor="w", justify="left", wraplength=300).pack(anchor="w", pady=(4, 0))
-        self.status.set(f"{e['vorname']} {e['name']}: {len(areas)} Arbeitsbereiche · Badge = Rolle, Kette = Vertretungsreihenfolge.")
+        self.status.set(_T('{p0} {p1}: {p2} Arbeitsbereiche · Badge = Rolle, Kette = Vertretungsreihenfolge.', p0=e['vorname'], p1=e['name'], p2=len(areas)))
 
     # --- Ansicht nach Bereich: Verantwortlich + Vertretungskette als Leiter ---
     def _render_ab_bereich(self):
@@ -1710,7 +1702,7 @@ class App:
                               bg=CARD, fg=MUTED, relief="flat", font=(FONT, 10, "bold"), cursor="hand2",
                               activeforeground="#C0392B", activebackground=CARD).pack(side="right")
                 tk.Frame(card, bg=CARD, height=4).pack()
-        self.status.set(f"{len(self.bereiche)} Arbeitsbereiche · Kette: ● Verantwortlich, ↳ Vertretungen.")
+        self.status.set(_T('{p0} Arbeitsbereiche · Kette: ● Verantwortlich, ↳ Vertretungen.', p0=len(self.bereiche)))
 
     def _ab_add_to_bereich(self, bid):
         belegt = {z["mitarbeiter_id"] for z in self._ab_chain(bid)}
@@ -1774,7 +1766,7 @@ class App:
         win.grab_set()
         win.geometry("470x390")
         win.columnconfigure(1, weight=1)
-        tk.Label(win, text=f"Für: {self._name(eid)}", bg=BG, fg=PRIMARY, font=(FONT, 12, "bold")).grid(
+        tk.Label(win, text=_T('Für: {p0}', p0=self._name(eid)), bg=BG, fg=PRIMARY, font=(FONT, 12, "bold")).grid(
             row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 8))
 
         assigned = {b["id"] for b in self._ab_for(eid)}
@@ -1885,7 +1877,7 @@ class App:
             if not old:
                 messagebox.showinfo("Kategorie", "Bitte zuerst eine Kategorie wählen.")
                 return
-            new = simpledialog.askstring("Kategorie umbenennen", f"Neuer Name für „{old}“:", initialvalue=old, parent=win)
+            new = simpledialog.askstring("Kategorie umbenennen", _T('Neuer Name für „{p0}“:', p0=old), initialvalue=old, parent=win)
             if not new or not new.strip() or new.strip() == old:
                 return
             new = new.strip()
@@ -1904,8 +1896,7 @@ class App:
             n = used_count(old)
             if n > 0:
                 if not messagebox.askyesno("Kategorie löschen",
-                        f"„{old}“ wird von {n} Arbeitsbereich(en) genutzt.\n\n"
-                        f"Diese auf „Allgemein“ setzen und Kategorie löschen?"):
+                        _T('„{p0}“ wird von {p1} Arbeitsbereich(en) genutzt.\n\nDiese auf „Allgemein“ setzen und Kategorie löschen?', p0=old, p1=n)):
                     return
             con = sqlite3.connect(DB_PATH)
             con.execute("UPDATE tbl_arbeitsbereich SET kategorie='Allgemein' WHERE kategorie=?", (old,))

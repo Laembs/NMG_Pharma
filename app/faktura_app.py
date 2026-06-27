@@ -14,6 +14,7 @@ Datenmodell siehe migrations.py (tbl_faktura_*).
 from __future__ import annotations
 
 import base64
+from .i18n import T as _T
 import getpass
 import json
 import os
@@ -847,7 +848,7 @@ class FakturaPanel(tk.Frame):
                 else:
                     self._kunden_rows = con.execute(sql, params).fetchall()
         except sqlite3.Error as e:
-            messagebox.showerror("Fehler", f"Konnte Umsätze nicht laden:\n{e}")
+            messagebox.showerror("Fehler", _T('Konnte Umsätze nicht laden:\n{p0}', p0=e))
             self._kunden_rows = []
         self._kunden_render()
 
@@ -940,7 +941,7 @@ class FakturaPanel(tk.Frame):
             messagebox.showinfo("Rechnung", "Keine abrechenbaren Positionen im gewählten Zeitraum.")
             return
         if schon and not messagebox.askyesno("Bereits abgerechnet",
-                f"Für diesen Zeitraum existiert schon Rechnung {schon[0]}. Trotzdem neue erstellen?"):
+                _T('Für diesen Zeitraum existiert schon Rechnung {p0}. Trotzdem neue erstellen?', p0=schon[0])):
             return
         adresse = " · ".join(x for x in ((kdaten[0] if kdaten else ""),
                   f"{kdaten[1]} {kdaten[2]}".strip() if kdaten else "") if x)
@@ -1084,7 +1085,7 @@ class FakturaPanel(tk.Frame):
             try:
                 os.startfile(row[0])  # type: ignore[attr-defined]
             except Exception:
-                messagebox.showinfo("PDF", f"Datei liegt unter:\n{row[0]}")
+                messagebox.showinfo("PDF", _T('Datei liegt unter:\n{p0}', p0=row[0]))
         else:
             messagebox.showinfo("Kein PDF", "Für diesen Beleg wurde noch kein PDF erzeugt "
                                             "(nur festgeschriebene Belege haben ein PDF).")
@@ -1124,13 +1125,13 @@ class FakturaPanel(tk.Frame):
                 if ergebnis.lower().endswith(".pdf"):
                     zusatz = f"\nZUGFeRD-PDF: {ergebnis}"
         except Exception as exc:
-            messagebox.showerror("eRechnung", f"Erzeugung fehlgeschlagen:\n{exc}")
+            messagebox.showerror("eRechnung", _T('Erzeugung fehlgeschlagen:\n{p0}', p0=exc))
             return
         _log("erechnung_erzeugt", bid, f"XML: {xml_pfad}")
         hinweis = ("\n\n⚠ Pflichtfeld-Hinweise (vor Versand prüfen):\n"
                    + "\n".join("• " + x for x in fehler)) if fehler else "\n\n✓ Pflichtfelder vollständig."
         messagebox.showinfo("eRechnung erzeugt",
-                            f"eRechnung (EN 16931) erstellt:\n{xml_pfad}{zusatz}{hinweis}")
+                            _T('eRechnung (EN 16931) erstellt:\n{p0}{p1}{p2}', p0=xml_pfad, p1=zusatz, p2=hinweis))
 
     def _ordner_oeffnen(self, unter=""):
         """Öffnet den Ablageordner (Rechnungen/Gutschriften/Quartalsverguetung) im Explorer."""
@@ -1139,7 +1140,7 @@ class FakturaPanel(tk.Frame):
         try:
             os.startfile(str(ziel))  # type: ignore[attr-defined]
         except Exception:
-            messagebox.showinfo("Ordner", f"Ordner:\n{ziel}")
+            messagebox.showinfo("Ordner", _T('Ordner:\n{p0}', p0=ziel))
 
     def _ordner_der_auswahl(self):
         """Öffnet den Ordner, in dem das PDF des ausgewählten Belegs liegt."""
@@ -1153,7 +1154,7 @@ class FakturaPanel(tk.Frame):
             try:
                 os.startfile(os.path.dirname(row[0]))  # type: ignore[attr-defined]
             except Exception:
-                messagebox.showinfo("Ordner", f"Ordner:\n{os.path.dirname(row[0])}")
+                messagebox.showinfo("Ordner", _T('Ordner:\n{p0}', p0=os.path.dirname(row[0])))
         else:
             messagebox.showinfo("Ordner", "Für diesen Beleg gibt es noch kein gespeichertes PDF.")
 
@@ -1197,7 +1198,7 @@ class FakturaPanel(tk.Frame):
             con.execute("UPDATE tbl_faktura_belege SET pdf_pfad=? WHERE id=?", (pdf, gid))
             con.commit()
         _log("gutschrift_erstellt", gid, f"{nr} zu Rechnung {row[0]}: {_eur(betrag)}")
-        messagebox.showinfo("Gutschrift", f"Gutschrift {nr} über {_eur(betrag)} erstellt.")
+        messagebox.showinfo("Gutschrift", _T('Gutschrift {p0} über {p1} erstellt.', p0=nr, p1=_eur(betrag)))
         self._lade_rechnungen()
 
     def _storno_der_auswahl(self):
@@ -1215,8 +1216,7 @@ class FakturaPanel(tk.Frame):
             messagebox.showinfo("Storno", "Nur festgeschriebene Rechnungen können storniert werden.")
             return
         if not messagebox.askyesno("Storno",
-                f"Rechnung {row[0]} stornieren? Es wird eine Storno-Rechnung mit negativen "
-                f"Beträgen erzeugt; die Originalrechnung bleibt erhalten (GoBD)."):
+                _T('Rechnung {p0} stornieren? Es wird eine Storno-Rechnung mit negativen Beträgen erzeugt; die Originalrechnung bleibt erhalten (GoBD).', p0=row[0])):
             return
         orig = self._beleg_dict(bid)
         ma = aktueller_mitarbeiter()
@@ -1680,8 +1680,7 @@ class FakturaPanel(tk.Frame):
     def _page_verguetung(self):
         basis = get_setting("bonus_basis", "netto")
         theme.page_header(self.content, "Quartalsvergütung",
-                          f"Feste Euro-Vergütung je Kunde ab Quartals-Umsatzschwelle "
-                          f"({basis.capitalize()} aus festgeschriebenen Rechnungen, ohne Storno)",
+                          _T('Feste Euro-Vergütung je Kunde ab Quartals-Umsatzschwelle ({p0} aus festgeschriebenen Rechnungen, ohne Storno)', p0=basis.capitalize()),
                           bg=SHELL_BG).pack(fill="x", padx=24, pady=(20, 8))
         bar = tk.Frame(self.content, bg=SHELL_BG)
         bar.pack(fill="x", padx=24, pady=(0, 8))
@@ -1778,7 +1777,7 @@ class FakturaPanel(tk.Frame):
                         bez or "—", _eur(bonus) if bonus else "—", status))
         if not rows:
             messagebox.showinfo("Quartalsvergütung",
-                                f"Keine festgeschriebenen Rechnungen in Q{quartal}/{jahr}.")
+                                _T('Keine festgeschriebenen Rechnungen in Q{p0}/{p1}.', p0=quartal, p1=jahr))
 
     def _verg_erzeugen(self):
         if not self._verg_preview:
@@ -1786,7 +1785,7 @@ class FakturaPanel(tk.Frame):
                                 "neuen Vergütungen offen.")
             return
         if not messagebox.askyesno("Quartalsvergütung",
-                f"{len(self._verg_preview)} Vergütung(en) erzeugen?"):
+                _T('{p0} Vergütung(en) erzeugen?', p0=len(self._verg_preview))):
             return
         satz = _parse_num(get_setting("ust_satz_standard")) or 19.0
         ma = aktueller_mitarbeiter()
@@ -1820,7 +1819,7 @@ class FakturaPanel(tk.Frame):
             _log("quartalsverguetung_erstellt", gid,
                  f"{nr} {e['kunde_name']} Q{e['quartal']}/{e['jahr']}: {_eur(e['bonus'])}")
             anzahl += 1
-        messagebox.showinfo("Quartalsvergütung", f"{anzahl} Vergütung(en) erstellt.")
+        messagebox.showinfo("Quartalsvergütung", _T('{p0} Vergütung(en) erstellt.', p0=anzahl))
         self._verg_berechnen()
 
     # ── Seite: Bonus-Staffel ─────────────────────────────────────────────────
@@ -1980,8 +1979,7 @@ class FakturaPanel(tk.Frame):
         m_outer, m_body = _card(wrap, "Mitarbeiter (Sachbearbeiter)")
         m_outer.pack(fill="x", pady=(0, 24))
         akt = aktueller_mitarbeiter()
-        tk.Label(m_body, text=f"Angemeldet als Windows-Benutzer: {akt['benutzer']} — "
-                              f"wird Rechnungen automatisch zugeordnet.",
+        tk.Label(m_body, text=_T('Angemeldet als Windows-Benutzer: {p0} — wird Rechnungen automatisch zugeordnet.', p0=akt['benutzer']),
                  bg=BG, fg=MUTED, font=theme.SMALL, wraplength=820, justify="left").pack(anchor="w")
         cols = ("benutzer", "name", "email", "telefon")
         tree = ttk.Treeview(m_body, columns=cols, show="headings", height=5)
@@ -2129,8 +2127,7 @@ class FakturaPanel(tk.Frame):
         set_setting("auto_gutschrift_wert", self.ag_wert.get().strip())
         _log("auto_gutschrift_einstellung")
         zustand = "aktiv" if self.ag_aktiv.get() else "aus"
-        messagebox.showinfo("Gespeichert", f"Automatische Gutschrift: {zustand} "
-                            f"({self.ag_typ.get()} {self.ag_wert.get()}).")
+        messagebox.showinfo("Gespeichert", _T('Automatische Gutschrift: {p0} ({p1} {p2}).', p0=zustand, p1=self.ag_typ.get(), p2=self.ag_wert.get()))
 
     def _nummern_speichern(self):
         for key, var in self._nr_vars.items():
@@ -2160,7 +2157,7 @@ class FakturaPanel(tk.Frame):
             try:
                 os.startfile(pfad)  # type: ignore[attr-defined]
             except Exception:
-                messagebox.showinfo("Vorschau", f"Vorschau liegt unter:\n{pfad}")
+                messagebox.showinfo("Vorschau", _T('Vorschau liegt unter:\n{p0}', p0=pfad))
         else:
             messagebox.showinfo("Vorschau", "Konnte keine Vorschau erzeugen (Browser fehlt?).")
 
@@ -2409,7 +2406,7 @@ class LayoutEditor(tk.Toplevel):
             try:
                 os.startfile(pfad)  # type: ignore[attr-defined]
             except Exception:
-                messagebox.showinfo("Vorschau", f"Datei: {pfad}", parent=self)
+                messagebox.showinfo("Vorschau", _T('Datei: {p0}', p0=pfad), parent=self)
 
 
 def run_standalone():

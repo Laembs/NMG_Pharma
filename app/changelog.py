@@ -5,6 +5,14 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V2.2 SP2", "2026-06-27", [
+        "Warenausgang Slowakei->Deutschland jetzt in drei nachvollziehbaren Stufen: 'avisiert' (gemeldet) -> 'geladen' (Bestand wird als Klammer-Bestand vorgemerkt, NUR Anzeige, noch nicht verkaufbar) -> bei Lieferung in MSK bestaetigt = echter Verkaufsbestand. Beim 'Produzieren -> Warenausgang' geht genau EINE gebuendelte Meldung raus (keine Doppelmeldungen).",
+        "Geteilte Cockpit-Aufgaben und System-Meldungen (z.B. ein gemeldeter Warenausgang) liegen jetzt zentral statt in einer lokalen Datei - dadurch an ALLEN Arbeitsplaetzen sichtbar und gleichzeitig mehrbenutzer-sicher. Laeuft (wie die Online-Kasse) ueber den Web-Dienst; ist er nicht erreichbar, wird lokal weitergearbeitet (Fallback). Vorhandene Aufgaben werden einmalig uebernommen.",
+        "Cockpit frischt die Aufgaben-/Meldungsliste automatisch nach (Poll), die Wareneingang-Avisliste ebenso - neue Eintraege erscheinen ohne manuelles Aktualisieren.",
+        "Kasse: reicht der Bestand beim Abverkauf nicht, wird eintreffende (geladene) Ware als Hinweis eingeblendet ('x St. unterwegs, davon decken y die Vorbestellung'); die Artikel-Uebersicht zeigt den Klammer-Bestand als '12 (+30)'. Verkauft wird weiterhin nur echter Bestand - der Rest geht als Vorbestellung.",
+        "Wareneingang (GDP): neuer Schritt 'Laden (vormerken)' vor der MSK-Bestaetigung; die Avisliste zeigt den Status (avisiert/geladen).",
+        "Diverse Detailverbesserungen und Feinschliff in mehreren Modulen aus dem laufenden Arbeitsstand.",
+    ]),
     ("V2.2 SP1", "2026-06-27", [
         "Online-Kasse <-> PC-Kasse verbunden (Bruecke): am Handy/online erfasste Verkaeufe UND Vorbestellungen erscheinen jetzt in der PC-Kasse unter 'Verkaeufe' und 'Vorbestellungen' (blau, mit Zusatz '(online)') und aktualisieren sich automatisch.",
         "Online-Auftrag per Doppelklick oeffnen (Aufteilung Bestellung/Vorbestellung sichtbar) und mit einem Klick in den Verkauf uebernehmen - vorausgefuellt mit Kunde + Artikeln, dann wie ein normaler Verkauf abschliessen; danach wird er online als 'uebernommen' markiert und verschwindet aus der Liste.",

@@ -17,6 +17,7 @@ Umsaetze sind grundsaetzlich NETTO: apu * menge * (1 - rabatt_prozent/100).
 from __future__ import annotations
 
 import calendar
+from .i18n import T as _T
 import json
 import os
 import sqlite3
@@ -402,7 +403,7 @@ class BerichtPanel(tk.Frame):
         self.perspektive = key
         self.sidebar.set_active(key)
         label = dict(PERSPEKTIVEN)[key]
-        self.header.configure(text=f"Auswertung · {label}")
+        self.header.configure(text=_T('Auswertung · {p0}', p0=label))
         self._cfg_btn.configure(text="🧱 Bauen…" if key == "frei" else "🔧 Spalten…")
         self.run_query()
 
@@ -885,9 +886,9 @@ class BerichtPanel(tk.Frame):
                 (self._vorlagen_dir() / f"{safe}.json").write_text(
                     json.dumps(collect(), ensure_ascii=False, indent=2), encoding="utf-8")
                 vcombo.configure(values=self._list_vorlagen()); vcombo.set(safe)
-                messagebox.showinfo("Vorlage", f"Gespeichert: {safe}", parent=win)
+                messagebox.showinfo("Vorlage", _T('Gespeichert: {p0}', p0=safe), parent=win)
             except Exception as exc:
-                messagebox.showerror("Vorlage", f"Speichern fehlgeschlagen:\n{exc}", parent=win)
+                messagebox.showerror("Vorlage", _T('Speichern fehlgeschlagen:\n{p0}', p0=exc), parent=win)
 
         def do_load():
             name = vcombo.get()
@@ -896,7 +897,7 @@ class BerichtPanel(tk.Frame):
             try:
                 data = json.loads((self._vorlagen_dir() / f"{name}.json").read_text(encoding="utf-8"))
             except Exception as exc:
-                messagebox.showerror("Vorlage", f"Laden fehlgeschlagen:\n{exc}", parent=win)
+                messagebox.showerror("Vorlage", _T('Laden fehlgeschlagen:\n{p0}', p0=exc), parent=win)
                 return
             self.builder = {
                 "dims": [k for k in data.get("dims", []) if k in DIM_MAP],
@@ -954,15 +955,12 @@ class BerichtPanel(tk.Frame):
         except ImportError as exc:
             messagebox.showwarning(
                 "Bibliothek fehlt",
-                f"Für diesen Export fehlt eine Bibliothek:\n{exc}\n\n"
-                "Installieren mit:\n"
-                "  pip install python-docx   (Word)\n"
-                "  pip install reportlab      (PDF)", parent=self)
+                _T('Für diesen Export fehlt eine Bibliothek:\n{p0}\n\nInstallieren mit:\n  pip install python-docx   (Word)\n  pip install reportlab      (PDF)', p0=exc), parent=self)
             return
         except Exception as exc:
-            messagebox.showerror("Export", f"Export fehlgeschlagen:\n{exc}", parent=self)
+            messagebox.showerror("Export", _T('Export fehlgeschlagen:\n{p0}', p0=exc), parent=self)
             return
-        if messagebox.askyesno("Export fertig", f"Gespeichert:\n{out}\n\nJetzt öffnen?", parent=self):
+        if messagebox.askyesno("Export fertig", _T('Gespeichert:\n{p0}\n\nJetzt öffnen?', p0=out), parent=self):
             try:
                 os.startfile(out)  # type: ignore[attr-defined]
             except Exception:
@@ -1042,7 +1040,7 @@ class BerichtPanel(tk.Frame):
                 start_py = Path(__file__).resolve().parent.parent / "start.py"
                 subprocess.Popen([sys.executable, str(start_py)])
         except Exception as exc:
-            messagebox.showerror("NMGone", f"NMGone konnte nicht gestartet werden:\n{exc}", parent=self)
+            messagebox.showerror("NMGone", _T('NMGone konnte nicht gestartet werden:\n{p0}', p0=exc), parent=self)
 
 
 def run_standalone():

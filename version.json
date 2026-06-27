@@ -1,8 +1,8 @@
 {
   "app": "NMGone",
-  "version": "2.2.0",
-  "version_display": "V2.2.0",
+  "version": "2.2.2",
+  "version_display": "V2.2 SP2",
   "db_schema_version": "1.1",
-  "build_date": "2026-06-26",
+  "build_date": "2026-06-27",
   "tour_enabled": true
 }

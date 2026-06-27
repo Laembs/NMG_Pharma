@@ -13,6 +13,7 @@ Start:  python start_revision.py   (oder „Revisions-Uebersicht starten.bat“)
 from __future__ import annotations
 
 import os
+from .i18n import T as _T
 import sys
 import subprocess
 from pathlib import Path
@@ -163,7 +164,7 @@ class RevisionUebersicht(tk.Tk):
         tk.Label(c, text=RD.REVISION["claim"], bg=theme.CARD, fg=theme.INK,
                  font=(theme.FONT, 12), justify="left", wraplength=820).pack(
             anchor="w", pady=(6, 2))
-        tk.Label(c, text=f"Stand {RD.REVISION['datum']} · Version {RD.REVISION['version']}",
+        tk.Label(c, text=_T('Stand {p0} · Version {p1}', p0=RD.REVISION['datum'], p1=RD.REVISION['version']),
                  bg=theme.CARD, fg=theme.MUTED, font=(theme.FONT, 10)).pack(anchor="w")
 
         # Kennzahlen-Reihe
@@ -305,9 +306,7 @@ class RevisionUebersicht(tk.Tk):
         if not PDF_PATH.exists():
             messagebox.showinfo(
                 "PDF-Handout",
-                "Das PDF wurde noch nicht erzeugt.\n\n"
-                "Bitte einmal ausführen:\n    python scripts/build_handout_revision.py\n\n"
-                f"Es entsteht unter:\n{PDF_PATH}", parent=self)
+                _T('Das PDF wurde noch nicht erzeugt.\n\nBitte einmal ausführen:\n    python scripts/build_handout_revision.py\n\nEs entsteht unter:\n{p0}', p0=PDF_PATH), parent=self)
             return
         try:
             if os.name == "nt":
@@ -317,7 +316,7 @@ class RevisionUebersicht(tk.Tk):
             else:
                 subprocess.Popen(["xdg-open", str(PDF_PATH)])
         except Exception as exc:
-            messagebox.showerror("PDF-Handout", f"Konnte das PDF nicht öffnen:\n{exc}",
+            messagebox.showerror("PDF-Handout", _T('Konnte das PDF nicht öffnen:\n{p0}', p0=exc),
                                  parent=self)
 
 

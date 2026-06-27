@@ -18,6 +18,7 @@ run_standalone() wird von start_gdp.py und NMGone.exe --gdp genutzt.
 from __future__ import annotations
 
 import csv
+from .i18n import T as _T
 import getpass
 import os
 import sqlite3
@@ -616,7 +617,7 @@ class ErechnungPruefDialog(tk.Toplevel):
                             "VALUES(?,?,?,?,?,?,?)", (pzn, name, charge, verfall, menge, ek, jetzt))
                 con.commit()
         except Exception as exc:
-            messagebox.showerror("Wareneingang", f"Buchung fehlgeschlagen:\n{exc}", parent=self)
+            messagebox.showerror("Wareneingang", _T('Buchung fehlgeschlagen:\n{p0}', p0=exc), parent=self)
             return
         self.panel._log("Wareneingang", "eRechnung übernommen (Produktion)", we_id,
                         f"{lieferant} · Rg {lieferschein or '–'} · {len(pos)} Pos.")
@@ -626,8 +627,7 @@ class ErechnungPruefDialog(tk.Toplevel):
             pass
         self.destroy()
         messagebox.showinfo("Übernommen",
-                            f"Wareneingang (Produktion) gebucht: {len(pos)} Position(en).\n"
-                            "Die GDP-Prüfung dieses Wareneingangs steht noch aus.",
+                            _T('Wareneingang (Produktion) gebucht: {p0} Position(en).\nDie GDP-Prüfung dieses Wareneingangs steht noch aus.', p0=len(pos)),
                             parent=self.panel)
 
 
@@ -672,6 +672,10 @@ class GDPPanel(tk.Frame):
         self._nmgone_action = nmgone_action
         ensure_gdp_tables(db_path)
         self._build()
+        # Avisierte/geladene Lieferungen automatisch nachladen, damit ein
+        # "Laden" an einem anderen Arbeitsplatz hier (bei geteilter DB) von
+        # selbst erscheint - ohne manuelles Aktualisieren.
+        self._we_avis_autopoll()
 
     # ---------------------------------------------------------------- Datenbank
     def _conn(self):
@@ -758,7 +762,7 @@ class GDPPanel(tk.Frame):
         tk.Button(foot, text="Schliessen", command=self._on_close, relief="flat",
                   bg="#0E3454", fg=SIDEBAR_TEXT, activebackground="#15466E",
                   activeforeground="#FFFFFF", padx=10, pady=5, cursor="hand2").pack(fill="x", padx=10)
-        self.sidebar.add_footer_note(f"Datenbank:\n{Path(self.db_path).name}")
+        self.sidebar.add_footer_note(_T('Datenbank:\n{p0}', p0=Path(self.db_path).name))
 
         # ---- Hauptbereich ----
         main = tk.Frame(self, bg=SHELL_BG)
@@ -838,7 +842,7 @@ class GDPPanel(tk.Frame):
         if getattr(self, "_modus_badge", None) is not None:
             m = self._modus()
             self._modus_badge.config(
-                text=f"Modus: {self.MODUS_INFO[m][0].strip()}",
+                text=_T('Modus: {p0}', p0=self.MODUS_INFO[m][0].strip()),
                 bg=(OK_GREEN if m == "verkauf" else "#7A4E12"))
         cur = getattr(self, "_current", None)
         if cur is not None and cur not in visible:
@@ -867,7 +871,7 @@ class GDPPanel(tk.Frame):
                 start_py = Path(__file__).resolve().parent.parent / "start.py"
                 subprocess.Popen([sys.executable, str(start_py)], close_fds=True, creationflags=flags)
         except Exception as exc:
-            messagebox.showerror("NMGone", f"NMGone konnte nicht gestartet werden:\n{exc}", parent=self)
+            messagebox.showerror("NMGone", _T('NMGone konnte nicht gestartet werden:\n{p0}', p0=exc), parent=self)
 
     # =============================================================== ÜBERSICHT
     def _build_uebersicht(self, parent):
@@ -935,7 +939,8 @@ class GDPPanel(tk.Frame):
             avis_offen = 0
             if _table_exists(con, "tbl_gdp_warenausgang"):
                 avis_offen = con.execute(
-                    "SELECT COUNT(*) FROM tbl_gdp_warenausgang WHERE status='avisiert'").fetchone()[0]
+                    "SELECT COUNT(*) FROM tbl_gdp_warenausgang "
+                    "WHERE status IN ('avisiert','geladen')").fetchone()[0]
             pb_chargen = pb_stueck = 0
             if _table_exists(con, "tbl_gdp_produktionsbestand"):
                 pb_chargen, pb_stueck = con.execute(
@@ -1030,9 +1035,7 @@ class GDPPanel(tk.Frame):
         try:
             daten = erech.lies_erechnung(pfad)
         except Exception as exc:
-            messagebox.showerror("eRechnung", f"Konnte nicht gelesen werden:\n{exc}\n\n"
-                                 "Hinweis: Aus komprimierten ZUGFeRD-PDFs gelingt das Auslesen "
-                                 "nur mit installierter Bibliothek 'facturx'.")
+            messagebox.showerror("eRechnung", _T("Konnte nicht gelesen werden:\n{p0}\n\nHinweis: Aus komprimierten ZUGFeRD-PDFs gelingt das Auslesen nur mit installierter Bibliothek 'facturx'.", p0=exc))
             return
         if not daten.get("positionen"):
             messagebox.showwarning("eRechnung", "Die eRechnung enthält keine Positionen.")
@@ -1123,16 +1126,20 @@ class GDPPanel(tk.Frame):
         self._we_avis_outer.grid(row=2, column=0, sticky="ew", pady=(0, 8))
         avhead = tk.Frame(self._we_avis_outer, bg="#FBE9C7")
         avhead.pack(fill="x", padx=12, pady=(8, 4))
-        tk.Label(avhead, text="🕓  Avisierte Lieferungen (zu bestaetigen)", bg="#FBE9C7",
+        tk.Label(avhead, text="🕓  Avisierte / geladene Lieferungen", bg="#FBE9C7",
                  fg="#8A5A00", font=(theme.FONT, 11, "bold")).pack(side="left")
-        theme.PillButton(avhead, "✅  Bestaetigen", self._we_avis_confirm,
+        # MSK-Bestaetigung = echter Bestand. Davor "Laden" = Bestand nur
+        # vormerken (in Klammern, noch nicht verkaufbar).
+        theme.PillButton(avhead, "✅  Lieferung bei MSK bestätigen", self._we_avis_confirm,
                          kind="success", font_size=9, padx=12, pady=4).pack(side="right")
-        theme.PillButton(avhead, "📥  Per Liste bestaetigen", self._we_avis_confirm_liste,
+        theme.PillButton(avhead, "📋  Per Liste (MSK) bestätigen", self._we_avis_confirm_liste,
+                         kind="neutral", font_size=9, padx=12, pady=4).pack(side="right", padx=6)
+        theme.PillButton(avhead, "📥  Laden (vormerken)", self._we_avis_laden,
                          kind="neutral", font_size=9, padx=12, pady=4).pack(side="right", padx=6)
         avbody = tk.Frame(self._we_avis_outer, bg="#FBE9C7")
         avbody.pack(fill="x", padx=12, pady=(0, 10))
-        self._we_avis_tree = _make_tree(avbody, ("Nummer", "Datum", "Quelle", "Rechnung", "Positionen", "Stueck"),
-                                        (115, 85, 130, 120, 85, 65), height=4,
+        self._we_avis_tree = _make_tree(avbody, ("Nummer", "Datum", "Quelle", "Rechnung", "Positionen", "Stueck", "Status"),
+                                        (110, 80, 120, 110, 80, 60, 95), height=4,
                                         anchors={"Positionen": "center", "Stueck": "center"})
         self._we_avis_tree.bind("<Double-1>",
                                 lambda _e: self._wa_show_positions(self._we_avis_selected()))
@@ -1151,10 +1158,40 @@ class GDPPanel(tk.Frame):
         sel = self._we_avis_tree.selection()
         return int(sel[0]) if sel else None
 
+    def _we_avis_laden(self):
+        """Schritt vor der MSK-Bestaetigung: den avisierten Warenausgang 'laden'
+        = Bestand nur vormerken (Status 'geladen'). Die Menge erscheint danach
+        als Klammer-Bestand (z.B. in der Kasse '12 (+30)'), ist aber noch NICHT
+        verkaufbar. Echter Bestand entsteht erst mit der MSK-Bestaetigung."""
+        wa_id = self._we_avis_selected()
+        if not wa_id:
+            messagebox.showinfo("Laden", "Bitte eine avisierte Lieferung waehlen.", parent=self)
+            return
+        with self._conn() as con:
+            hdr = con.execute("SELECT nummer, status FROM tbl_gdp_warenausgang WHERE id=?",
+                              (wa_id,)).fetchone()
+            if not hdr:
+                return
+            if hdr[1] != "avisiert":
+                messagebox.showinfo("Laden",
+                                    _T("Warenausgang {p0} ist bereits '{p1}'.", p0=hdr[0], p1=hdr[1]),
+                                    parent=self)
+                return
+            con.execute("UPDATE tbl_gdp_warenausgang SET status='geladen' WHERE id=?", (wa_id,))
+            con.commit()
+        self._log("Warenausgang", "Geladen / vorgemerkt", wa_id,
+                  f"{hdr[0]}: Bestand in Klammern vorgemerkt (noch nicht bei MSK bestaetigt)")
+        self._refresh_we_avis()
+        self._refresh_warenausgang()
+        messagebox.showinfo("Geladen",
+                            _T("Warenausgang {p0} geladen: Menge ist als Klammer-Bestand "
+                               "vorgemerkt (noch nicht verkaufbar). Mit der MSK-Bestaetigung "
+                               "wird daraus echter Bestand.", p0=hdr[0]), parent=self)
+
     def _we_avis_confirm(self):
         wa_id = self._we_avis_selected()
         if not wa_id:
-            messagebox.showinfo("Bestaetigen", "Bitte eine avisierte Lieferung waehlen.", parent=self)
+            messagebox.showinfo("Bestaetigen", "Bitte eine Lieferung waehlen.", parent=self)
             return
         self._wa_confirm(wa_id)
 
@@ -1172,7 +1209,7 @@ class GDPPanel(tk.Frame):
         try:
             positions, rechnung = self._parse_lieferliste(path)
         except Exception as e:
-            messagebox.showerror("Import", f"Datei konnte nicht gelesen werden:\n{e}", parent=self)
+            messagebox.showerror("Import", _T('Datei konnte nicht gelesen werden:\n{p0}', p0=e), parent=self)
             return
         if not positions:
             messagebox.showinfo("Per Liste bestaetigen",
@@ -1195,8 +1232,7 @@ class GDPPanel(tk.Frame):
                 return
         else:
             if not messagebox.askyesno("Per Liste bestaetigen",
-                    f"Anlieferliste stimmt mit dem Avis ueberein.\n\n{len(positions)} Position(en) "
-                    "in den Verkaufsbestand buchen und den Avis bestaetigen?", parent=self):
+                    _T('Anlieferliste stimmt mit dem Avis ueberein.\n\n{p0} Position(en) in den Verkaufsbestand buchen und den Avis bestaetigen?', p0=len(positions)), parent=self):
                 return
         # Rechnungsnummer aus der Anlieferliste am Avis nachtragen (falls vorhanden)
         if rechnung:
@@ -1274,7 +1310,7 @@ class GDPPanel(tk.Frame):
     def _we_pick_artikel(self, payload):
         pzn, name = payload
         self._we_pzn = pzn
-        self._we_artikel_label.config(text=f"Gewaehlt: {pzn} · {name}", fg=ACCENT)
+        self._we_artikel_label.config(text=_T('Gewaehlt: {p0} · {p1}', p0=pzn, p1=name), fg=ACCENT)
         # EK mit dem APU vorbelegen (Standard); kann ueberschrieben werden.
         with self._conn() as con:
             row = con.execute("SELECT apu FROM tbl_nmg_stamm WHERE pzn=? LIMIT 1", (pzn,)).fetchone()
@@ -1311,7 +1347,7 @@ class GDPPanel(tk.Frame):
             row = con.execute("SELECT artikelname, apu FROM tbl_nmg_stamm WHERE pzn=? LIMIT 1",
                               (pzn,)).fetchone()
             if not row:
-                messagebox.showwarning("Wareneingang", f"PZN {pzn} ist kein NMG-Artikel.", parent=self)
+                messagebox.showwarning("Wareneingang", _T('PZN {p0} ist kein NMG-Artikel.', p0=pzn), parent=self)
                 return
             artikelname, apu = row
             ek_text = self._we_ek_var.get().strip().replace(",", ".")
@@ -1353,7 +1389,7 @@ class GDPPanel(tk.Frame):
         if art == "produktion" and self._current != "produktionsbestand":
             self._refreshers.get("produktionsbestand", lambda: None)()
         messagebox.showinfo("Wareneingang",
-                            f"{menge} × {artikelname} in den {ziel_lbl} eingebucht.", parent=self)
+                            _T('{p0} × {p1} in den {p2} eingebucht.', p0=menge, p1=artikelname, p2=ziel_lbl), parent=self)
 
     def _we_import(self):
         from . import kasse_import
@@ -1366,7 +1402,7 @@ class GDPPanel(tk.Frame):
         try:
             r = kasse_import.import_wareneingang(self.db_path, path)
         except Exception as e:
-            messagebox.showerror("Wareneingang-Import", f"Import fehlgeschlagen:\n{e}", parent=self)
+            messagebox.showerror("Wareneingang-Import", _T('Import fehlgeschlagen:\n{p0}', p0=e), parent=self)
             return
         self._refresh_wareneingang()
         self._log("Wareneingang", "Import", None,
@@ -1374,9 +1410,7 @@ class GDPPanel(tk.Frame):
                   f"{r.get('erhoehte_chargen',0)} erhoeht")
         messagebox.showinfo(
             "Wareneingang-Import",
-            f"Quelle: {r.get('quelle','')} · {r.get('gelesen',0)} Zeilen gelesen.\n\n"
-            f"Neue Chargen: {r.get('neu_chargen',0)} · Bestand erhoeht: {r.get('erhoehte_chargen',0)}\n"
-            f"Kein NMG-Artikel: {r.get('kein_nmg',0)} · Uebersprungen: {r.get('uebersprungen',0)}",
+            _T('Quelle: {p0} · {p1} Zeilen gelesen.\n\nNeue Chargen: {p2} · Bestand erhoeht: {p3}\nKein NMG-Artikel: {p4} · Uebersprungen: {p5}', p0=r.get('quelle',''), p1=r.get('gelesen',0), p2=r.get('neu_chargen',0), p3=r.get('erhoehte_chargen',0), p4=r.get('kein_nmg',0), p5=r.get('uebersprungen',0)),
             parent=self)
 
     def _refresh_wareneingang(self):
@@ -1427,8 +1461,24 @@ class GDPPanel(tk.Frame):
             gezeigt += 1
         if hasattr(self, "_we_count"):
             self._we_count.config(
-                text=f"{gezeigt} angezeigt · {offen_n} offen · {erledigt_n} erledigt")
+                text=_T('{p0} angezeigt · {p1} offen · {p2} erledigt', p0=gezeigt, p1=offen_n, p2=erledigt_n))
         self._refresh_we_avis()
+
+    def _we_avis_autopoll(self):
+        """Frischt die Avis-/Lade-Liste regelmaessig (alle 30 s) aus der DB auf,
+        damit Aenderungen anderer Arbeitsplaetze (bei geteilter DB) ankommen.
+        Laeuft nur, solange das Panel existiert."""
+        if not self.winfo_exists():
+            return
+        try:
+            if getattr(self, "_we_avis_tree", None) is not None:
+                self._refresh_we_avis()
+        except Exception:
+            pass
+        try:
+            self.after(30000, self._we_avis_autopoll)
+        except Exception:
+            pass
 
     def _refresh_we_avis(self):
         """Avisierte Warenausgaenge (Ziel Verkaufsbestand) im Wareneingang zeigen.
@@ -1444,14 +1494,17 @@ class GDPPanel(tk.Frame):
                     rows = con.execute(
                         """SELECT w.id, w.nummer, w.datum, w.quelle, COALESCE(w.rechnungsnummer,''),
                                   (SELECT COUNT(*) FROM tbl_gdp_warenausgang_pos p WHERE p.wa_id=w.id),
-                                  (SELECT COALESCE(SUM(menge),0) FROM tbl_gdp_warenausgang_pos p WHERE p.wa_id=w.id)
+                                  (SELECT COALESCE(SUM(menge),0) FROM tbl_gdp_warenausgang_pos p WHERE p.wa_id=w.id),
+                                  w.status
                            FROM tbl_gdp_warenausgang w
-                           WHERE w.status='avisiert' AND w.ziel='Verkaufsbestand'
+                           WHERE w.status IN ('avisiert','geladen') AND w.ziel='Verkaufsbestand'
                            ORDER BY w.id DESC""").fetchall()
-        for wid, nummer, datum, quelle, rnr, npos, stk in rows:
+        status_disp = {"avisiert": "avisiert", "geladen": "geladen (in Klammern)"}
+        for wid, nummer, datum, quelle, rnr, npos, stk, status in rows:
             t.insert("", "end", iid=str(wid),
-                     values=(nummer or "", (datum or "")[:10], quelle or "", rnr, npos, stk),
-                     tags=("warn",))
+                     values=(nummer or "", (datum or "")[:10], quelle or "", rnr, npos, stk,
+                             status_disp.get(status, status or "")),
+                     tags=("ok" if status == "geladen" else "warn",))
         if rows:
             self._we_avis_outer.grid()
         else:
@@ -1481,7 +1534,7 @@ class GDPPanel(tk.Frame):
         win.configure(bg=SHELL_BG)
         win.geometry("680x420")
         tk.Label(win, bg=ACCENT, fg="#FFFFFF", font=(theme.FONT, 12, "bold"),
-                 text=f"  {head[1] or ''}  ·  {head[0] or ''}  ·  LS {head[2] or ''}",
+                 text=_T('  {p0}  ·  {p1}  ·  LS {p2}', p0=head[1] or '', p1=head[0] or '', p2=head[2] or ''),
                  anchor="w").pack(fill="x", ipady=8)
         wrap = tk.Frame(win, bg=SHELL_BG)
         wrap.pack(fill="both", expand=True, padx=12, pady=12)
@@ -1572,7 +1625,7 @@ class GDPPanel(tk.Frame):
                      values=(pzn or "", name or "", charge or "", verf or "", menge,
                              f"{ek:.2f}" if ek else ""), tags=(tag,))
         self._pb_summary.config(
-            text=f"Produktionsbestand: {len(rows)} Charge(n) · {ges} Stueck · EK-Wert ~ {wert:.2f} EUR")
+            text=_T('Produktionsbestand: {p0} Charge(n) · {p1} Stueck · EK-Wert ~ {p2:.2f} EUR', p0=len(rows), p1=ges, p2=wert))
 
     def _pb_selected(self):
         sel = self._pb_tree.selection()
@@ -1622,12 +1675,21 @@ class GDPPanel(tk.Frame):
                 con.commit()
             self._log("Warenausgang", "Produziert / avisiert", wa_id,
                       f"{nummer}: {q} St {d['artikelname']} Charge {charge} -> Verkaufs-Wareneingang")
+            # Genau EINE gebuendelte Meldung pro Warenausgang ins Cockpit (Ware
+            # ist raus). key=wa:<id> verhindert Dubletten bei Mehrfachaufruf.
+            try:
+                from app.userdata import push_cockpit_todo
+                push_cockpit_todo(
+                    f"Warenausgang {nummer} gemeldet: {q} St {d['artikelname']} unterwegs "
+                    f"→ im Wareneingang laden (vormerken) und bei MSK-Lieferung bestätigen.",
+                    kind="warenausgang", key=f"wa:{wa_id}")
+            except Exception:
+                pass
             self._refresh_produktionsbestand()
             self._refreshers.get("warenausgang", lambda: None)()
             self._refresh_wareneingang()
             messagebox.showinfo("Warenausgang erstellt",
-                                f"Warenausgang {nummer} ({q} St) angelegt und an den "
-                                "Verkaufs-Wareneingang avisiert. Dort bei Anlieferung bestaetigen.",
+                                _T('Warenausgang {p0} ({p1} St) angelegt und an den Verkaufs-Wareneingang avisiert. Dort bei Anlieferung bestaetigen.', p0=nummer, p1=q),
                                 parent=self)
 
         rnr_label = "Rechnungsnummer *" if self._rechnung_pflicht() else "Rechnungsnummer"
@@ -1665,7 +1727,7 @@ class GDPPanel(tk.Frame):
                       f"{q} St {d['artikelname']} Charge {d['charge']}, EK ~ {wert} EUR: {v['grund']}")
             self._refresh_produktionsbestand()
             messagebox.showinfo("Abgeschrieben",
-                                f"{q} St abgeschrieben (EK-Wert ~ {wert} EUR).", parent=self)
+                                _T('{p0} St abgeschrieben (EK-Wert ~ {p1} EUR).', p0=q, p1=wert), parent=self)
 
         FormDialog(self, f"Abschreiben: {d['artikelname']} (Ch {d['charge']})", [
             ("menge", "Menge abschreiben", "int", str(maxq)),
@@ -1675,7 +1737,8 @@ class GDPPanel(tk.Frame):
         ], save)
 
     # ===================================================== WARENAUSGANG / AVIS
-    WA_STATUS_TAG = {"avisiert": "warn", "bestaetigt": "ok", "storniert": "alert"}
+    WA_STATUS_TAG = {"avisiert": "warn", "geladen": "warn", "bestaetigt": "ok",
+                     "storniert": "alert"}
 
     def _build_warenausgang(self, parent):
         parent.columnconfigure(0, weight=1)
@@ -1691,9 +1754,10 @@ class GDPPanel(tk.Frame):
         theme.PillButton(bar, "↻  Aktualisieren", self._refresh_warenausgang,
                          kind="neutral", font_size=10).pack(side="left", padx=6)
 
-        tk.Label(parent, text="Hier wird der Warenausgang nur angelegt/avisiert. Die Bestaetigung "
-                              "erfolgt ausschliesslich im VERKAUF (Wareneingang), wenn die Ware "
-                              "im Verteilerzentrum eintrifft. Doppelklick = Positionen.",
+        tk.Label(parent, text="Hier wird der Warenausgang nur angelegt/avisiert (Meldung ins Cockpit). "
+                              "Im VERKAUF (Wareneingang) wird er erst geladen (Bestand vorgemerkt, in "
+                              "Klammern) und mit der MSK-Lieferung bestaetigt = echter Bestand. "
+                              "Doppelklick = Positionen.",
                  bg=SHELL_BG, fg=MUTED, font=(theme.FONT, 9), justify="left",
                  wraplength=900).grid(row=1, column=0, sticky="w", pady=(0, 6))
 
@@ -1763,7 +1827,7 @@ class GDPPanel(tk.Frame):
             messagebox.showinfo("Storno", "Nur avisierte (noch nicht bestaetigte) Warenausgaenge "
                                 "koennen storniert werden.", parent=self)
             return
-        if not messagebox.askyesno("Storno", f"Warenausgang #{wa_id} stornieren?", parent=self):
+        if not messagebox.askyesno("Storno", _T('Warenausgang #{p0} stornieren?', p0=wa_id), parent=self):
             return
         with self._conn() as con:
             con.execute("UPDATE tbl_gdp_warenausgang SET status='storniert' WHERE id=?", (wa_id,))
@@ -1901,8 +1965,7 @@ class GDPPanel(tk.Frame):
         self._refresh_warenausgang()
         self._refresh_wareneingang()
         messagebox.showinfo("Warenausgang",
-                            f"Warenausgang {nummer} avisiert. Erscheint im Verkaufs-Wareneingang "
-                            "zur Bestaetigung.", parent=self)
+                            _T('Warenausgang {p0} avisiert. Erscheint im Verkaufs-Wareneingang zur Bestaetigung.', p0=nummer), parent=self)
         return wa_id
 
     def _wa_import(self):
@@ -1914,7 +1977,7 @@ class GDPPanel(tk.Frame):
         try:
             positions, rechnung = self._parse_lieferliste(path)
         except Exception as e:
-            messagebox.showerror("Import", f"Datei konnte nicht gelesen werden:\n{e}", parent=self)
+            messagebox.showerror("Import", _T('Datei konnte nicht gelesen werden:\n{p0}', p0=e), parent=self)
             return
         if not positions:
             messagebox.showinfo("Import", "Keine gueltigen Positionen (PZN + Menge) gefunden.", parent=self)
@@ -1976,8 +2039,8 @@ class GDPPanel(tk.Frame):
                               (wa_id,)).fetchone()
             if not hdr:
                 return False
-            if hdr[2] != "avisiert":
-                messagebox.showinfo("Bestaetigen", f"Warenausgang {hdr[0]} ist bereits '{hdr[2]}'.", parent=self)
+            if hdr[2] not in ("avisiert", "geladen"):
+                messagebox.showinfo("Bestaetigen", _T("Warenausgang {p0} ist bereits '{p1}'.", p0=hdr[0], p1=hdr[2]), parent=self)
                 return False
             positions = override_positions if override_positions is not None else con.execute(
                 "SELECT pzn, artikelname, charge, verfall, menge, ek FROM tbl_gdp_warenausgang_pos "
@@ -2025,8 +2088,7 @@ class GDPPanel(tk.Frame):
         self._refresh_wareneingang()
         self._refresh_warenausgang()
         messagebox.showinfo("Bestaetigt",
-                            f"Warenausgang {hdr[0]} bestaetigt: {total} St im Verkaufsbestand. "
-                            "Damit verkaufbar (Kasse).", parent=self)
+                            _T('Warenausgang {p0} bestaetigt: {p1} St im Verkaufsbestand. Damit verkaufbar (Kasse).', p0=hdr[0], p1=total), parent=self)
         return True
 
     # =================================================== CHARGEN-RÜCKVERFOLGUNG
@@ -2155,12 +2217,9 @@ class GDPPanel(tk.Frame):
             self._rv_out_map[iid] = (r[1], r[2])
         if term:
             self._rv_info.config(
-                text=f"Charge/PZN '{term}': {len(ein)} Eingangs- und {len(aus)} Ausgangsbewegung(en) "
-                     f"aus Kasse-Verkaeufen + GDP-Auslieferungen. "
-                     f"{len(kunden_set)} Apotheke(n) bei Rueckruf betroffen.")
+                text=_T("Charge/PZN '{p0}': {p1} Eingangs- und {p2} Ausgangsbewegung(en) aus Kasse-Verkaeufen + GDP-Auslieferungen. {p3} Apotheke(n) bei Rueckruf betroffen.", p0=term, p1=len(ein), p2=len(aus), p3=len(kunden_set)))
         else:
-            self._rv_info.config(text=f"{len(ein)} Charge(n) im Lager mit Verfall < 90 Tage. "
-                                      "Charge/PZN eingeben fuer die Kunden-Rueckverfolgung.")
+            self._rv_info.config(text=_T('{p0} Charge(n) im Lager mit Verfall < 90 Tage. Charge/PZN eingeben fuer die Kunden-Rueckverfolgung.', p0=len(ein)))
 
     def _rv_rueckruf(self):
         term = self._rv_var.get().strip()
@@ -2171,7 +2230,7 @@ class GDPPanel(tk.Frame):
             rows = self._outbound_rows(con, term=term)
         if not rows:
             messagebox.showinfo("Rueckruf",
-                                f"Zu '{term}' sind keine Auslieferungen/Verkaeufe erfasst - kein Verteiler.",
+                                _T("Zu '{p0}' sind keine Auslieferungen/Verkaeufe erfasst - kein Verteiler.", p0=term),
                                 parent=self)
             return
         n_kunden = len({r[1] for r in rows})
@@ -2180,9 +2239,7 @@ class GDPPanel(tk.Frame):
         pzn = next((r[3] for r in rows if r[3]), "")
         if not messagebox.askyesno(
                 "Rueckruf ausloesen",
-                f"Charge/PZN '{term}'\nArtikel: {artikel}\n\n"
-                f"{n_kunden} Apotheke(n), {summe} Stueck betroffen.\n\n"
-                "Rueckruf anlegen und Verteiler vormerken?", parent=self):
+                _T("Charge/PZN '{p0}'\nArtikel: {p1}\n\n{p2} Apotheke(n), {p3} Stueck betroffen.\n\nRueckruf anlegen und Verteiler vormerken?", p0=term, p1=artikel, p2=n_kunden, p3=summe), parent=self):
             return
 
         def save(v):
@@ -2198,8 +2255,7 @@ class GDPPanel(tk.Frame):
             self._log("Rueckruf", "Rueckruf ausgeloest", None,
                       f"Charge {term}: {n_kunden} Apotheken, {summe} Stueck")
             messagebox.showinfo("Rueckruf",
-                                f"Rueckruf dokumentiert. {n_kunden} Apotheke(n) im Verteiler.\n"
-                                "Verteiler ueber 'Verteiler exportieren' als Liste sichern.", parent=self)
+                                _T("Rueckruf dokumentiert. {p0} Apotheke(n) im Verteiler.\nVerteiler ueber 'Verteiler exportieren' als Liste sichern.", p0=n_kunden), parent=self)
 
         FormDialog(self, f"Rueckruf Charge {term}", [
             ("grund", "Rueckruf-Grund", "combo",
@@ -2235,7 +2291,7 @@ class GDPPanel(tk.Frame):
                 w.writerow([r[0], r[1], r[2], r[4], r[5], r[6], r[7],
                             r[8], r[9], email, tel, ort])
         self._log("Rueckruf", "Verteiler exportiert", None, f"Charge {term}: {len(rows)} Zeilen")
-        messagebox.showinfo("Export", f"Verteiler mit {len(rows)} Zeile(n) gespeichert:\n{path}", parent=self)
+        messagebox.showinfo("Export", _T('Verteiler mit {p0} Zeile(n) gespeichert:\n{p1}', p0=len(rows), p1=path), parent=self)
 
     def _kontakt_map(self, con):
         """kundennummer -> (email, telefon, ort) aus dem Kundenstamm (Best-Effort)."""
@@ -2268,9 +2324,8 @@ class GDPPanel(tk.Frame):
             if quali[1]:
                 lz += f" (Lizenz gueltig bis {quali[1]})"
         messagebox.showinfo(
-            f"Apotheke {name}",
-            f"Kundennr: {knr}\nOrt: {ort or '-'}\nE-Mail: {email or '-'}\n"
-            f"Telefon: {tel or '-'}{lz}", parent=self)
+            _T('Apotheke {p0}', p0=name),
+            _T('Kundennr: {p0}\nOrt: {p1}\nE-Mail: {p2}\nTelefon: {p3}{p4}', p0=knr, p1=ort or '-', p2=email or '-', p3=tel or '-', p4=lz), parent=self)
 
     def _rv_dossier(self):
         """Vollstaendiges Chargendossier (Lebenslauf einer Charge) als CSV:
@@ -2305,7 +2360,7 @@ class GDPPanel(tk.Frame):
                 "FROM tbl_gdp_rueckruf WHERE charge=? ORDER BY id", (term,)).fetchall()
         if not (eingang or ausgang or retouren):
             messagebox.showinfo("Chargendossier",
-                                f"Zur Charge '{term}' sind keine Bewegungen erfasst.", parent=self)
+                                _T("Zur Charge '{p0}' sind keine Bewegungen erfasst.", p0=term), parent=self)
             return
         path = filedialog.asksaveasfilename(
             parent=self, title="Chargendossier speichern", defaultextension=".csv",
@@ -2343,9 +2398,7 @@ class GDPPanel(tk.Frame):
         self._log("Rueckruf", "Chargendossier exportiert", None,
                   f"Charge {term}: {len(eingang)} Eingang, {len(ausgang)} Ausgang, {len(retouren)} Retouren")
         messagebox.showinfo("Chargendossier",
-                            f"Dossier zur Charge {term} gespeichert:\n{path}\n\n"
-                            f"Eingang: {len(eingang)} · Ausgang: {len(ausgang)} Apotheke(n) · "
-                            f"Retouren: {len(retouren)}", parent=self)
+                            _T('Dossier zur Charge {p0} gespeichert:\n{p1}\n\nEingang: {p2} · Ausgang: {p3} Apotheke(n) · Retouren: {p4}', p0=term, p1=path, p2=len(eingang), p3=len(ausgang), p4=len(retouren)), parent=self)
 
     # ===================================================== RETOUREN / REKLAMAT.
     def _build_retouren(self, parent):
@@ -2417,7 +2470,7 @@ class GDPPanel(tk.Frame):
                              charge or "", menge, grund_disp, status or "", gut or ""),
                      tags=(tag,))
         if hasattr(self, "_ret_count"):
-            self._ret_count.config(text=f"{len(rows)} angezeigt · {offen} offen · {ges} gesamt")
+            self._ret_count.config(text=_T('{p0} angezeigt · {p1} offen · {p2} gesamt', p0=len(rows), p1=offen, p2=ges))
 
     def _ret_selected(self):
         sel = self._ret_tree.selection()
@@ -2550,15 +2603,12 @@ class GDPPanel(tk.Frame):
                     "Retourenlager genommen werden.", parent=self)
                 return
             if not messagebox.askyesno("In Retourenbestand nehmen",
-                    f"Charge {d['charge']} ({d['menge']} St) in den Retourenbestand "
-                    "(Quarantaene) buchen?\n\nDie Ware ist dort GESPERRT und noch nicht "
-                    "verkaufbar. Die Freigabe oder Abschreibung erfolgt anschliessend "
-                    "im Bereich 'Retourenbestand'.", parent=self):
+                    _T("Charge {p0} ({p1} St) in den Retourenbestand (Quarantaene) buchen?\n\nDie Ware ist dort GESPERRT und noch nicht verkaufbar. Die Freigabe oder Abschreibung erfolgt anschliessend im Bereich 'Retourenbestand'.", p0=d['charge'], p1=d['menge']), parent=self):
                 return
             self._ret_restock(d)
         elif action == "vernichten":
             if not messagebox.askyesno("Vernichten",
-                    f"Charge {d['charge']} ({d['menge']} St) als vernichtet dokumentieren?", parent=self):
+                    _T('Charge {p0} ({p1} St) als vernichtet dokumentieren?', p0=d['charge'], p1=d['menge']), parent=self):
                 return
             self._ret_set(rid, status="Vernichtet", entscheidung="Vernichtung",
                           abgeschlossen_am=_heute_iso())
@@ -2574,8 +2624,7 @@ class GDPPanel(tk.Frame):
                     "geloescht werden (sonst Buchungen/Gutschrift vorhanden).", parent=self)
                 return
             if not messagebox.askyesno("Storno",
-                    f"Retoure #{rid} ({d['kunde_name']}, {d['artikelname']}) "
-                    "endgueltig loeschen?", parent=self):
+                    _T('Retoure #{p0} ({p1}, {p2}) endgueltig loeschen?', p0=rid, p1=d['kunde_name'], p2=d['artikelname']), parent=self):
                 return
             with self._conn() as con:
                 con.execute("DELETE FROM tbl_gdp_retoure WHERE id=?", (rid,))
@@ -2672,8 +2721,7 @@ class GDPPanel(tk.Frame):
         except Exception as exc:
             beleg_nr = beleg_nr or None
             messagebox.showwarning("Gutschrift",
-                                   f"Faktura-Beleg konnte nicht angelegt werden:\n{exc}\n"
-                                   "Es wird nur eine interne Gutschrift-Nummer vergeben.", parent=self)
+                                   _T('Faktura-Beleg konnte nicht angelegt werden:\n{p0}\nEs wird nur eine interne Gutschrift-Nummer vergeben.', p0=exc), parent=self)
         if not beleg_nr:
             beleg_nr = f"GU-RET-{d['id']}"
         self._ret_set(d["id"], status="Gutschrift", entscheidung="Gutschrift erteilt",
@@ -2758,8 +2806,7 @@ class GDPPanel(tk.Frame):
                                          grund or "", f"{w:.2f}" if w else ""),
                       tags=("even" if i % 2 else "odd",))
         self._rb_summary.config(
-            text=f"Im Retourenbestand: {len(rows)} Charge(n) · {ges_ret} Stueck · "
-                 f"EK-Wert ~ {wert:.2f} EUR   |   Zeile waehlen und freigeben oder abschreiben")
+            text=_T('Im Retourenbestand: {p0} Charge(n) · {p1} Stueck · EK-Wert ~ {p2:.2f} EUR   |   Zeile waehlen und freigeben oder abschreiben', p0=len(rows), p1=ges_ret, p2=wert))
 
     def _rb_selected(self):
         sel = self._rb_tree.selection()
@@ -2794,7 +2841,7 @@ class GDPPanel(tk.Frame):
                       f"{q} St Charge {d['charge']} ({d['artikelname']}) -> Normalbestand")
             self._refresh_retourenbestand()
             messagebox.showinfo("Freigegeben",
-                                f"{q} St der Charge {d['charge']} sind wieder verkaufbar.", parent=self)
+                                _T('{p0} St der Charge {p1} sind wieder verkaufbar.', p0=q, p1=d['charge']), parent=self)
 
         FormDialog(self, f"Freigeben: {d['artikelname']} (Ch {d['charge']})", [
             ("menge", "Menge freigeben", "int", str(maxq)),
@@ -2826,8 +2873,7 @@ class GDPPanel(tk.Frame):
                       f"{q} St Charge {d['charge']} ({d['artikelname']}), EK ~ {wert} EUR: {v['grund']}")
             self._refresh_retourenbestand()
             messagebox.showinfo("Abgeschrieben",
-                                f"{q} St der Charge {d['charge']} abgeschrieben "
-                                f"(EK-Wert ~ {wert} EUR). Im Protokoll dokumentiert.", parent=self)
+                                _T('{p0} St der Charge {p1} abgeschrieben (EK-Wert ~ {p2} EUR). Im Protokoll dokumentiert.', p0=q, p1=d['charge'], p2=wert), parent=self)
 
         FormDialog(self, f"Abschreiben: {d['artikelname']} (Ch {d['charge']})", [
             ("menge", "Menge abschreiben", "int", str(maxq)),
@@ -2851,7 +2897,7 @@ class GDPPanel(tk.Frame):
             w.writerow(["Datum", "PZN", "Artikel", "Charge", "Verfall", "Menge", "Grund",
                         "Wert EK", "Bearbeiter"])
             w.writerows(rows)
-        messagebox.showinfo("Export", f"{len(rows)} Abschreibung(en) gespeichert.", parent=self)
+        messagebox.showinfo("Export", _T('{p0} Abschreibung(en) gespeichert.', p0=len(rows)), parent=self)
 
     # ===================================================== KUNDENQUALIFIZIERUNG
     def _build_qualifizierung(self, parent):
@@ -3083,7 +3129,7 @@ class GDPPanel(tk.Frame):
             for r in rows:
                 w.writerow([(r[0] or "")[:19], r[1], r[2], r[3], r[4], r[5], r[6], r[7],
                             r[8], r[9], r[10] if r[10] is not None else "", r[11]])
-        messagebox.showinfo("Export", f"{len(rows)} Bewegung(en) gespeichert:\n{path}", parent=self)
+        messagebox.showinfo("Export", _T('{p0} Bewegung(en) gespeichert:\n{p1}', p0=len(rows), p1=path), parent=self)
 
     # ===================================================== BESTANDSDIFFERENZEN
     BD_GRUENDE = ["Inventur", "Bruch / Beschaedigung", "Schwund / Diebstahl",
@@ -3148,7 +3194,7 @@ class GDPPanel(tk.Frame):
                              r[5] or "", r[6], diff_txt, r[8], r[9] or "", r[10] or ""),
                      tags=("plus" if diff > 0 else ("minus" if diff < 0 else ""),))
         self._bd_summary.config(
-            text=f"{len(rows)} Korrektur(en) · Summe Mehrbestand +{plus} · Summe Fehlbestand {minus}")
+            text=_T('{p0} Korrektur(en) · Summe Mehrbestand +{p1} · Summe Fehlbestand {p2}', p0=len(rows), p1=plus, p2=minus))
 
     def _bd_new(self):
         """Erfasst eine manuelle Bestandsdifferenz im Bestand des aktuellen Modus.
@@ -3159,14 +3205,14 @@ class GDPPanel(tk.Frame):
             bereich, tabelle = "Verkauf", "tbl_lagerbestand"
         with self._conn() as con:
             if not _table_exists(con, tabelle):
-                messagebox.showinfo("Bestandsdifferenz", f"Kein {bereich}-Bestand vorhanden.", parent=self)
+                messagebox.showinfo("Bestandsdifferenz", _T('Kein {p0}-Bestand vorhanden.', p0=bereich), parent=self)
                 return
             lines = con.execute(
                 f"SELECT id, pzn, artikelname, charge, verfall, menge FROM {tabelle} "
                 "ORDER BY artikelname").fetchall()
         if not lines:
             messagebox.showinfo("Bestandsdifferenz",
-                                f"Im {bereich}-Bestand sind keine Artikel vorhanden.", parent=self)
+                                _T('Im {p0}-Bestand sind keine Artikel vorhanden.', p0=bereich), parent=self)
             return
         labels = [f"{name} | Ch {ch or '-'} | {pzn}" for (_id, pzn, name, ch, vf, menge) in lines]
         amap = {labels[i]: lines[i] for i in range(len(lines))}
@@ -3177,7 +3223,7 @@ class GDPPanel(tk.Frame):
         win.resizable(False, False)
         win.transient(self.winfo_toplevel())
         tk.Label(win, bg=ACCENT, fg="#FFFFFF", font=(theme.FONT, 13, "bold"), anchor="w",
-                 text=f"  Bestandsdifferenz erfassen ({bereich})").pack(fill="x", ipady=9)
+                 text=_T('  Bestandsdifferenz erfassen ({p0})', p0=bereich)).pack(fill="x", ipady=9)
         body = tk.Frame(win, bg=SHELL_BG)
         body.pack(fill="both", expand=True, padx=18, pady=14)
 
@@ -3246,7 +3292,7 @@ class GDPPanel(tk.Frame):
                 return
             diff = ist - soll
             ergebnis.config(
-                text=f"Ergebnis: {soll} → {ist}   ({'+' if diff > 0 else ''}{diff} Stueck)",
+                text=_T('Ergebnis: {p0} → {p1}   ({p2}{p3} Stueck)', p0=soll, p1=ist, p2='+' if diff > 0 else '', p3=diff),
                 fg=(OK_GREEN if diff > 0 else DANGER if diff < 0 else MUTED))
 
         def on_art(*_a):
@@ -3315,8 +3361,7 @@ class GDPPanel(tk.Frame):
                 self._refresh_bewegungen()
             win.destroy()
             messagebox.showinfo("Bestandsdifferenz",
-                                f"Korrektur gebucht: {name} Ch {charge}\n"
-                                f"{vorher} → {ist} ({'+' if diff > 0 else ''}{diff} St).", parent=self)
+                                _T('Korrektur gebucht: {p0} Ch {p1}\n{p2} → {p3} ({p4}{p5} St).', p0=name, p1=charge, p2=vorher, p3=ist, p4='+' if diff > 0 else '', p5=diff), parent=self)
 
         foot = tk.Frame(win, bg=SHELL_BG)
         foot.pack(fill="x", padx=18, pady=(0, 16))
@@ -3356,7 +3401,7 @@ class GDPPanel(tk.Frame):
             w.writerow(["Datum", "Bereich", "PZN", "Artikel", "Charge", "Verfall", "Vorher",
                         "Differenz", "Nachher", "Grund", "Bemerkung", "Bearbeiter"])
             w.writerows(rows)
-        messagebox.showinfo("Export", f"{len(rows)} Korrektur(en) gespeichert.", parent=self)
+        messagebox.showinfo("Export", _T('{p0} Korrektur(en) gespeichert.', p0=len(rows)), parent=self)
 
     # ===================================================== EINSTELLUNGEN
     MODUS_INFO = {
@@ -3441,8 +3486,7 @@ class GDPPanel(tk.Frame):
         self._set_setting("betriebsmodus", modus)
         if hasattr(self, "_set_hint"):
             self._set_hint.config(
-                text=f"Aktiver Modus: {self.MODUS_INFO[modus][0].strip()}. "
-                     "Die Bereiche wurden umgestellt.")
+                text=_T('Aktiver Modus: {p0}. Die Bereiche wurden umgestellt.', p0=self.MODUS_INFO[modus][0].strip()))
         self._apply_nav_visibility()
         self._we_sync_art_selector()
         self._refresh_wareneingang()
@@ -3560,7 +3604,7 @@ class GDPPanel(tk.Frame):
         zr = self._log_zeitraum.get()
         start, end = self._zeitraum_grenzen()
         spanne = f" · {start} bis {end}" if start or end else ""
-        self._log_count.config(text=f"{len(rows)} Eintrag/Einträge · Zeitraum: {zr}{spanne}")
+        self._log_count.config(text=_T('{p0} Eintrag/Einträge · Zeitraum: {p1}{p2}', p0=len(rows), p1=zr, p2=spanne))
 
     def _log_export(self):
         clauses, params = self._log_where()
@@ -3581,7 +3625,7 @@ class GDPPanel(tk.Frame):
             w = csv.writer(f, delimiter=";")
             w.writerow(["Zeitpunkt", "Bearbeiter", "Modul", "Aktion", "Details"])
             w.writerows(rows)
-        messagebox.showinfo("Export", f"{len(rows)} Protokoll-Zeile(n) gespeichert.", parent=self)
+        messagebox.showinfo("Export", _T('{p0} Protokoll-Zeile(n) gespeichert.', p0=len(rows)), parent=self)
 
 
 # ════════════════════════════════════════════════════════════════════════════
