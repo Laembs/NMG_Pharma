@@ -61,6 +61,11 @@ def ensure_schema(con: sqlite3.Connection) -> None:
     # Zusammenführung mit der Desktop-Kasse: "User (online)").
     _add_col(con, "tbl_bestellungen", "erfasst_von", "erfasst_von TEXT")
     _add_col(con, "tbl_bestellungen", "quelle", "quelle TEXT DEFAULT 'online'")
+    # In die PC-Kasse übernommen (= dort als Verkauf abgeschlossen) -> aus der
+    # Online-To-do-Liste nehmen, aber in der Web-Historie behalten.
+    _add_col(con, "tbl_bestellungen", "uebernommen", "uebernommen INTEGER DEFAULT 0")
+    _add_col(con, "tbl_bestellungen", "uebernommen_am", "uebernommen_am TEXT")
+    _add_col(con, "tbl_bestellungen", "uebernommen_von", "uebernommen_von TEXT")
     con.commit()
 
 
@@ -187,12 +192,28 @@ def schnellverkauf_speichern(con: sqlite3.Connection, kunde_name: str, art: str,
 
 
 # ── Mobiler Verkaufs-Flow v2 (Warenkorb + Bestands-Split + Apothekensuche) ────
+def _reservierungen(con: sqlite3.Connection) -> dict:
+    """Je PZN die Menge, die durch offene (noch nicht in die PC-Kasse übernommene)
+    Online-Bestellungen reserviert ist. Vorbestellungen reservieren nichts (haben
+    ohnehin keinen Bestand). So blockiert jeder offene Handyverkauf seine Ware."""
+    rows = con.execute(
+        """SELECT p.pzn, COALESCE(SUM(p.menge), 0) AS res
+             FROM tbl_bestellpositionen p
+             JOIN tbl_bestellungen b ON b.id = p.bestellung_id
+            WHERE COALESCE(b.quelle, 'online') = 'online'
+              AND COALESCE(b.uebernommen, 0) = 0
+              AND p.bestellart = 'Bestellung'
+              AND p.pzn IS NOT NULL AND p.pzn <> ''
+            GROUP BY p.pzn""").fetchall()
+    return {r["pzn"]: int(r["res"]) for r in rows}
+
+
 def artikel_mit_bestand(con: sqlite3.Connection) -> list[dict]:
-    """Alle bekannten Artikel (Artikelstamm + alles, was im Lager liegt) je PZN,
-    mit verfügbarem Gesamtbestand. Artikel ohne Bestand erscheinen mit 0 – so sind
-    sie auswählbar und gehen beim Speichern automatisch in die Vorbestellung.
+    """Alle bekannten Artikel (Artikelstamm + Lager) je PZN mit **verfügbarem**
+    Bestand = Lagerbestand − offene Online-Reservierungen. Artikel ohne Bestand
+    erscheinen mit 0 (auswählbar -> Vorbestellung). Verfügbar wird nie negativ.
     """
-    return [dict(r) for r in con.execute(
+    roh = con.execute(
         """SELECT pzn, MAX(bezeichnung) AS bezeichnung,
                   COALESCE(SUM(bestand), 0) AS bestand
              FROM (
@@ -201,7 +222,30 @@ def artikel_mit_bestand(con: sqlite3.Connection) -> list[dict]:
                  SELECT pzn, bezeichnung, menge AS bestand FROM tbl_lagerbestand
              )
             WHERE pzn IS NOT NULL AND pzn <> ''
-            GROUP BY pzn ORDER BY bezeichnung""").fetchall()]
+            GROUP BY pzn ORDER BY bezeichnung""").fetchall()
+    res = _reservierungen(con)
+    return [{"pzn": r["pzn"], "bezeichnung": r["bezeichnung"],
+             "bestand": max(0, int(r["bestand"]) - res.get(r["pzn"], 0))}
+            for r in roh]
+
+
+def lager_ersetzen(con: sqlite3.Connection, artikel, bestand) -> tuple[int, int]:
+    """Ersetzt Artikelstamm + Lagerbestand komplett mit den Daten der PC-Kasse
+    (PC ist die Bestands-Quelle). Gibt (#artikel, #bestandszeilen) zurück."""
+    con.execute("DELETE FROM tbl_artikel")
+    con.executemany(
+        "INSERT OR REPLACE INTO tbl_artikel(pzn, bezeichnung) VALUES(?,?)",
+        [(a.get("pzn"), a.get("bezeichnung")) for a in artikel if a.get("pzn")])
+    con.execute("DELETE FROM tbl_lagerbestand")
+    con.executemany(
+        """INSERT INTO tbl_lagerbestand(pzn, bezeichnung, charge, verfall, menge)
+           VALUES(?,?,?,?,?)""",
+        [(b.get("pzn"), b.get("bezeichnung"), b.get("charge"), b.get("verfall"),
+          int(b.get("menge") or 0)) for b in bestand if b.get("pzn")])
+    con.commit()
+    n_a = con.execute("SELECT COUNT(*) FROM tbl_artikel").fetchone()[0]
+    n_b = con.execute("SELECT COUNT(*) FROM tbl_lagerbestand").fetchone()[0]
+    return n_a, n_b
 
 
 def kunden_alle(con: sqlite3.Connection) -> list[dict]:
