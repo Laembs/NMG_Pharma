@@ -15,6 +15,7 @@ Datenmodell siehe migrations.py.
 from __future__ import annotations
 
 import getpass
+from .i18n import T as _T
 import os
 import sqlite3
 import subprocess
@@ -393,9 +394,17 @@ class KassePanel(tk.Frame):
         self.dm_kunde = None          # Defektmeldung: gewaehlte Apotheke
         self.dm_cur = None            # Defektmeldung: aktuell gewaehlter Artikel
         self.dm_positions = []        # Defektmeldung: Artikelliste
+        self._online_verkaeufe = []        # Cache: Online-Verkäufe
+        self._online_vorbestellungen = []  # Cache: Online-Vorbestellungen
+        self._online_uebernahme_id = None  # läuft. Übernahme -> nach Speichern markieren
+        self._online_cache_laden()         # zuletzt geladene Online-Bestellungen sofort zeigen
         self._build()
         # Automatischer Tagesabschluss: verpasste Vortage nachholen + Timer fuer heute.
         self._auto_tagesabschluss_setup()
+        # Online-Verkäufe (Handy/Web) automatisch alle 5 Minuten nachladen.
+        self._online_auto_setup()
+        # Bestand alle 2 Minuten zum Server pushen (PC ist die Bestands-Quelle).
+        self._online_push_setup()
 
     # =============================================================== Datenbank
     def _conn(self):
@@ -539,6 +548,23 @@ class KassePanel(tk.Frame):
                 "SELECT COALESCE(SUM(menge),0) FROM tbl_lagerbestand WHERE pzn=?", (pzn,)).fetchone()
             return r[0] if r else 0
 
+    def _unterwegs_total(self, pzn):
+        """Klammer-Bestand: Menge aus Warenausgaengen, die geladen/vorgemerkt
+        sind (GDP-Status 'geladen'), aber noch NICHT bei MSK bestaetigt wurden.
+        Nur Anzeige – diese Menge ist NICHT verkaufbar, sie signalisiert nur
+        eintreffenden Nachschub."""
+        with self._conn() as con:
+            if not _table_exists(con, "tbl_gdp_warenausgang"):
+                return 0
+            r = con.execute(
+                """SELECT COALESCE(SUM(p.menge),0)
+                     FROM tbl_gdp_warenausgang_pos p
+                     JOIN tbl_gdp_warenausgang w ON w.id = p.wa_id
+                    WHERE p.pzn = ? AND w.status = 'geladen'
+                      AND w.ziel = 'Verkaufsbestand'""",
+                (pzn,)).fetchone()
+            return int(r[0]) if r and r[0] else 0
+
     def _save_verkauf(self, header, positions):
         with self._conn() as con:
             cur = con.execute(
@@ -667,7 +693,7 @@ class KassePanel(tk.Frame):
         tk.Button(foot, text="Schließen", command=self._on_close, relief="flat",
                   bg="#0E3454", fg=SIDEBAR_TEXT, activebackground="#15466E",
                   activeforeground="#FFFFFF", padx=10, pady=5, cursor="hand2").pack(fill="x", padx=10)
-        self.sidebar.add_footer_note(f"Datenbank:\n{Path(self.db_path).name}")
+        self.sidebar.add_footer_note(_T('Datenbank:\n{p0}', p0=Path(self.db_path).name))
 
         # ---------------- Hauptbereich ----------------
         main = tk.Frame(self, bg=SHELL_BG)
@@ -763,7 +789,7 @@ class KassePanel(tk.Frame):
             else:
                 subprocess.Popen([sys.executable, str(BASE_DIR / "start.py")])
         except Exception as e:
-            messagebox.showerror("NMGone", f"NMGone konnte nicht geöffnet werden:\n{e}",
+            messagebox.showerror("NMGone", _T('NMGone konnte nicht geöffnet werden:\n{p0}', p0=e),
                                  parent=self.winfo_toplevel())
 
     # =============================================================== Übersicht
@@ -870,13 +896,12 @@ class KassePanel(tk.Frame):
         try:
             k = kasse_reports.dashboard_kennzahlen(self.db_path)
         except Exception as exc:
-            self._db_greeting.config(text=f"Kennzahlen konnten nicht geladen werden: {exc}")
+            self._db_greeting.config(text=_T('Kennzahlen konnten nicht geladen werden: {p0}', p0=exc))
             return
         std = datetime.now().hour
         gruss = "Guten Morgen" if std < 11 else "Guten Tag" if std < 18 else "Guten Abend"
         self._db_greeting.config(
-            text=f"{gruss} – Überblick für {datetime.now():%d.%m.%Y}, "
-                 f"{k['pakete_heute']} Packungen heute verkauft.")
+            text=_T('{p0} – Überblick für {p1:%d.%m.%Y}, {p2} Packungen heute verkauft.', p0=gruss, p1=datetime.now(), p2=k['pakete_heute']))
         warn = k.get("warn_tage", 90)
         self._db_cards["umsatz_heute"].config(text=_eur(k["umsatz_heute"]))
         self._db_cards["verkaeufe_heute"].config(text=str(k["verkaeufe_heute"]))
@@ -1105,7 +1130,7 @@ class KassePanel(tk.Frame):
         win.configure(bg=BG)
         win.transient(top)
         win.geometry("680x460")
-        tk.Label(win, text=f"Gekaufte Artikel · {self.vk_kunde.get('kundenname', '')}",
+        tk.Label(win, text=_T('Gekaufte Artikel · {p0}', p0=self.vk_kunde.get('kundenname', '')),
                  font=(theme.FONT, 13, "bold"), fg=ACCENT, bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
 
         # Zeitraum-Auswahl: 3 / 6 / 12 Monate oder freie Eingabe.
@@ -1179,8 +1204,7 @@ class KassePanel(tk.Frame):
         if n:
             if messagebox.askyesno(
                 "Offene Vorbestellungen",
-                f"{self.vk_kunde['kundenname']} hat {n} offene Vorbestellung(en).\n\n"
-                "Jetzt im Reiter „Vorbestellungen“ ansehen und ggf. als Verkauf übernehmen?",
+                _T('{p0} hat {p1} offene Vorbestellung(en).\n\nJetzt im Reiter „Vorbestellungen“ ansehen und ggf. als Verkauf übernehmen?', p0=self.vk_kunde['kundenname'], p1=n),
                 parent=self.winfo_toplevel()):
                 self._vb_filter_var.set(self.vk_kunde["kundenname"] or knr)
                 self._show_view("vorbestellungen")
@@ -1221,7 +1245,7 @@ class KassePanel(tk.Frame):
         with self._conn() as con:
             ok = con.execute("SELECT 1 FROM tbl_bestellungen WHERE id=?", (bid,)).fetchone()
         if not ok:
-            messagebox.showinfo("Auftrag anzeigen", f"Kein Auftrag #{bid} gefunden.",
+            messagebox.showinfo("Auftrag anzeigen", _T('Kein Auftrag #{p0} gefunden.', p0=bid),
                                 parent=self.winfo_toplevel())
             return
         self._verkauf_detail_window(bid)
@@ -1236,8 +1260,7 @@ class KassePanel(tk.Frame):
         det["rabatt_quelle"] = quelle
         self.vk_cur = det
         self.vk_detail_label.config(
-            text=f"{det['artikelname']}  ·  DF {det['df'] or '—'}  ·  PCK {det['pck'] or '—'}  "
-                 f"·  APU {det['apu'] if det['apu'] is not None else '—'}")
+            text=_T('{p0}  ·  DF {p1}  ·  PCK {p2}  ·  APU {p3}', p0=det['artikelname'], p1=det['df'] or '—', p2=det['pck'] or '—', p3=det['apu'] if det['apu'] is not None else '—'))
         self.vk_rabatt_var.set(f"{prozent:.0f}")
         # Chargen/Bestand
         chargen = self._lager_chargen(pzn)
@@ -1320,13 +1343,18 @@ class KassePanel(tk.Frame):
             verf = max(int(verfuegbar or 0), 0)
             if verf < menge:
                 rest = menge - verf
+                # Klammer-Bestand (unterwegs, noch nicht bei MSK bestaetigt):
+                # NICHT verkaufbar, aber als Hinweis einblenden – der Rest ist
+                # dann eine Vorbestellung, die durch eintreffende Ware gedeckt ist.
+                unterwegs = self._unterwegs_total(self.vk_cur["pzn"])
+                if unterwegs > 0:
+                    gedeckt = min(unterwegs, rest)
+                    uw_hinweis = _T('\n\nℹ {p0} St. unterwegs (in Klammern, noch nicht bei MSK bestätigt) – davon decken {p1} St. die Vorbestellung.', p0=unterwegs, p1=gedeckt)
+                else:
+                    uw_hinweis = ""
                 antwort = messagebox.askyesnocancel(
                     "Bestand reicht nicht",
-                    f"Bestand reicht nicht (verfügbar {verf}, benötigt {menge}).\n\n"
-                    f"JA:  {verf} sofort liefern und die restlichen {rest} als "
-                    "Vorbestellung aufnehmen.\n"
-                    f"NEIN:  nur den verfügbaren Bestand ({verf}) abverkaufen.\n"
-                    "ABBRECHEN:  nichts hinzufügen.", parent=top)
+                    _T('Bestand reicht nicht (verfügbar {p0}, benötigt {p1}).\n\nJA:  {p2} sofort liefern und die restlichen {p3} als Vorbestellung aufnehmen.\nNEIN:  nur den verfügbaren Bestand ({p4}) abverkaufen.\nABBRECHEN:  nichts hinzufügen.', p0=verf, p1=menge, p2=verf, p3=rest, p4=verf) + uw_hinweis, parent=top)
                 if antwort is None:
                     return
                 if antwort:  # JA -> Split: Bestand als Bestellung + Rest als Vorbestellung
@@ -1397,7 +1425,7 @@ class KassePanel(tk.Frame):
         # Nur echte Bestellungen zaehlen; Vorbestellungen/abgesagte nicht.
         gesamt = sum(_pos_netto(p) for p in self.vk_positions
                      if p.get("bestellart", "Bestellung") == "Bestellung")
-        self._vk_total_label.config(text=f"Gesamt (netto): {_eur(gesamt)}")
+        self._vk_total_label.config(text=_T('Gesamt (netto): {p0}', p0=_eur(gesamt)))
 
     def _vk_edit_position(self, _e=None):
         sel = self.vk_pos_tree.selection()
@@ -1500,10 +1528,9 @@ class KassePanel(tk.Frame):
 
         tk.Label(win, text=p["artikelname"] or p["pzn"], font=(theme.FONT, 13, "bold"),
                  fg=ACCENT, bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
-        tk.Label(win, text=f"PZN {p['pzn']}  ·  DF {p['df'] or '—'}  ·  PCK {p['pck'] or '—'}  "
-                          f"·  APU {_eur(p['apu'])}", font=(theme.FONT, 9), fg="#555",
+        tk.Label(win, text=_T('PZN {p0}  ·  DF {p1}  ·  PCK {p2}  ·  APU {p3}', p0=p['pzn'], p1=p['df'] or '—', p2=p['pck'] or '—', p3=_eur(p['apu'])), font=(theme.FONT, 9), fg="#555",
                  bg=BG).pack(padx=18, anchor="w")
-        tk.Label(win, text=f"Aktuell gewählt: Charge {p['charge'] or '—'}  ·  Verfall {p['verfall'] or '—'}",
+        tk.Label(win, text=_T('Aktuell gewählt: Charge {p0}  ·  Verfall {p1}', p0=p['charge'] or '—', p1=p['verfall'] or '—'),
                  font=(theme.FONT, 9, "italic"), fg="#888", bg=BG).pack(padx=18, pady=(2, 8), anchor="w")
 
         tk.Label(win, text="Verfügbare Chargen dieses Artikels (Doppelklick = übernehmen):",
@@ -1593,6 +1620,10 @@ class KassePanel(tk.Frame):
             "lieferzeit": next(iter(zeiten)) if len(zeiten) == 1 else "",
             "liefertermin": next(iter(termine)) if len(termine) == 1 else "",
         }
+        # Bearbeitung: zugrunde liegenden Original-Auftrag VOR dem Speichern
+        # zurückbuchen + entfernen (der korrigierte Auftrag wird neu angelegt).
+        for old in {p["_edit_src"] for p in self.vk_positions if p.get("_edit_src")}:
+            self._verkauf_original_ersetzen(old)
         bid = self._save_verkauf(header, self.vk_positions)
         anzahl = len(self.vk_positions)
         bestellungen = sum(1 for p in self.vk_positions if p.get("bestellart") == "Bestellung")
@@ -1614,6 +1645,13 @@ class KassePanel(tk.Frame):
         self._log("Verkauf gespeichert", bid, self.vk_kunde["kundenname"],
                   f"{bestellungen} Bestellung(en), {vorbestellungen} Vorbestellung(en)"
                   + (f", {len(herkunft)} aus Vorbestellung übernommen" if herkunft else ""))
+        # Online-Übernahme: die zugrunde liegenden Online-Aufträge am Server als
+        # übernommen markieren (fallen dann aus den Online-Listen). An die
+        # Positionen gebunden -> nur was wirklich gespeichert wurde.
+        for aid in {p["_online_src"] for p in self.vk_positions if p.get("_online_src")}:
+            self._online_mark_uebernommen(aid)
+        # Bestand nach dem Verkauf sofort zum Server pushen (frische Reservierung).
+        self._online_push_lager()
         # Reset
         self.vk_positions = []
         self._vk_render_positions()
@@ -1630,8 +1668,7 @@ class KassePanel(tk.Frame):
             self._auftrag_dialog(bid, anzahl, vorbestellungen)
         else:
             messagebox.showinfo("Vorbestellung",
-                                f"{vorbestellungen} Vorbestellung(en) gespeichert "
-                                "(keine Auftragsbestätigung).", parent=top)
+                                _T('{p0} Vorbestellung(en) gespeichert (keine Auftragsbestätigung).', p0=vorbestellungen), parent=top)
 
     # ==================================================== Auftragsbestaetigung
     def _auftrag_dialog(self, bestell_id, anzahl, vorbestellungen=0):
@@ -1641,7 +1678,7 @@ class KassePanel(tk.Frame):
         win.configure(bg=BG)
         win.transient(top)
         win.resizable(False, False)
-        tk.Label(win, text=f"✓ Verkauf #{bestell_id} gespeichert",
+        tk.Label(win, text=_T('✓ Verkauf #{p0} gespeichert', p0=bestell_id),
                  font=(theme.FONT, 12, "bold"), fg="#11823b", bg=BG).pack(padx=20, pady=(16, 2))
         info = f"{anzahl} Position(en) · Lagerbestand abgebucht."
         if vorbestellungen:
@@ -1670,7 +1707,7 @@ class KassePanel(tk.Frame):
             path = auftrag.render(self.db_path, bestell_id)
             os.startfile(str(path))  # type: ignore[attr-defined]
         except Exception as e:
-            messagebox.showerror("Auftragsbestätigung", f"Konnte nicht erstellt werden:\n{e}", parent=parent)
+            messagebox.showerror("Auftragsbestätigung", _T('Konnte nicht erstellt werden:\n{p0}', p0=e), parent=parent)
 
     def _lieferschein_drucken(self, bestell_id, parent):
         # Vor dem Erzeugen abfragen, ob der Auftrag in MSK erfasst wurde.
@@ -1681,10 +1718,7 @@ class KassePanel(tk.Frame):
         if not msk:
             antwort = messagebox.askyesnocancel(
                 "MSK-Erfassung",
-                f"Wurde Auftrag #{bestell_id} in MSK erfasst?\n\n"
-                "Ja:  als „in MSK erfasst“ markieren und Lieferschein erzeugen.\n"
-                "Nein:  Lieferschein trotzdem erzeugen (ohne MSK-Markierung).\n"
-                "Abbrechen:  nichts tun.", parent=parent)
+                _T('Wurde Auftrag #{p0} in MSK erfasst?\n\nJa:  als „in MSK erfasst“ markieren und Lieferschein erzeugen.\nNein:  Lieferschein trotzdem erzeugen (ohne MSK-Markierung).\nAbbrechen:  nichts tun.', p0=bestell_id), parent=parent)
             if antwort is None:
                 return
             if antwort:
@@ -1695,7 +1729,7 @@ class KassePanel(tk.Frame):
             self._log("Lieferschein erzeugt", bestell_id, details=str(path.name))
             os.startfile(str(path))  # type: ignore[attr-defined]
         except Exception as e:
-            messagebox.showerror("Lieferschein", f"Konnte nicht erstellt werden:\n{e}", parent=parent)
+            messagebox.showerror("Lieferschein", _T('Konnte nicht erstellt werden:\n{p0}', p0=e), parent=parent)
 
     def _auftrag_verlauf_window(self, bid):
         """Audit-Verlauf eines Auftrags: wer hat was wann gemacht (aus tbl_kasse_log)."""
@@ -1707,7 +1741,7 @@ class KassePanel(tk.Frame):
         win.transient(top)
         win.geometry("740x430")
         apotheke = kopf[2] if kopf else ""
-        tk.Label(win, text=f"Verlauf · Auftrag #{bid} · {apotheke}",
+        tk.Label(win, text=_T('Verlauf · Auftrag #{p0} · {p1}', p0=bid, p1=apotheke),
                  font=(theme.FONT, 13, "bold"), fg=ACCENT, bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
         tk.Label(win, text="Wer hat was wann mit diesem Auftrag gemacht.",
                  font=(theme.FONT, 9), fg="#555", bg=BG).pack(padx=18, anchor="w", pady=(0, 8))
@@ -1746,7 +1780,7 @@ class KassePanel(tk.Frame):
         try:
             path = auftrag.render(self.db_path, bestell_id)
         except Exception as e:
-            messagebox.showerror("Auftragsbestätigung", f"Konnte nicht erstellt werden:\n{e}", parent=parent)
+            messagebox.showerror("Auftragsbestätigung", _T('Konnte nicht erstellt werden:\n{p0}', p0=e), parent=parent)
             return
         to = auftrag.kunde_email(self.db_path, bestell_id)
         if not to:
@@ -1756,13 +1790,13 @@ class KassePanel(tk.Frame):
             html = path.read_text(encoding="utf-8")
             auftrag.send_via_outlook(to.strip(), f"Auftragsbestätigung #{bestell_id}", html, path)
         except Exception as e:
-            messagebox.showerror("E-Mail", f"Outlook konnte nicht geöffnet werden:\n{e}", parent=parent)
+            messagebox.showerror("E-Mail", _T('Outlook konnte nicht geöffnet werden:\n{p0}', p0=e), parent=parent)
 
     def _auftrag_vorlage_oeffnen(self):
         try:
             os.startfile(str(auftrag.template_path()))  # type: ignore[attr-defined]
         except Exception as e:
-            messagebox.showerror("Vorlage", f"Vorlage konnte nicht geöffnet werden:\n{e}",
+            messagebox.showerror("Vorlage", _T('Vorlage konnte nicht geöffnet werden:\n{p0}', p0=e),
                                  parent=self.winfo_toplevel())
 
     # ========================================================== Vorbestellungen
@@ -1774,6 +1808,9 @@ class KassePanel(tk.Frame):
         tk.Button(bar, text="➡ Mehrere in Verkauf übernehmen", command=self._vb_bulk_dialog,
                   bg="#11823b", fg="white", font=(theme.FONT, 9, "bold"), padx=10, pady=2).pack(
                       side="left", padx=(16, 0))
+        tk.Button(bar, text="🌐 Online laden", command=self._online_verkaeufe_laden,
+                  bg="#0B4A86", fg="white", font=(theme.FONT, 9, "bold"), padx=10, pady=2).pack(
+                      side="left", padx=(8, 0))
         tk.Button(bar, text="🔄 Aktualisieren", command=self._refresh_vorbestellungen,
                   font=(theme.FONT, 9), padx=8, pady=2).pack(side="right")
 
@@ -1817,10 +1854,12 @@ class KassePanel(tk.Frame):
         sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
         sb.pack(side="right", fill="y")
         tree.configure(yscrollcommand=sb.set)
+        tree.tag_configure("online", background="#eef4fb")
         _make_treeview_sortable(tree)
         tree.bind("<Double-1>", self._vorbestellung_dialog)
         self.vb_tree = tree
         self._vb_rowmap = {}
+        self._vb_online_map = {}
 
     def _refresh_vorbestellungen(self):
         if not hasattr(self, "vb_tree"):
@@ -1855,16 +1894,40 @@ class KassePanel(tk.Frame):
             iid = self.vb_tree.insert("", "end", values=r[1:])
             self._vb_rowmap[iid] = r[0]
             gezeigt += 1
+        # Online-Vorbestellungen (vom Server) zusätzlich einblenden – read-only,
+        # blau hinterlegt, „(online)". Kein Eintrag in _vb_rowmap -> Doppelklick
+        # öffnet keinen lokalen Bearbeiten-Dialog.
+        online_anz = 0
+        if status_f != "Abgesagt":
+            for v in getattr(self, "_online_vorbestellungen", []):
+                kunde = v.get("kunde_name") or ""
+                pzn = v.get("pzn") or ""
+                artikel = v.get("bezeichnung") or ""
+                if filt and filt not in " ".join(str(x).lower() for x in (kunde, pzn, artikel)):
+                    continue
+                iid = self.vb_tree.insert(
+                    "", "end", tags=("online",),
+                    values=(v.get("datum", ""), f"{kunde} (online)", "", pzn, artikel,
+                            v.get("menge", 0), "", v.get("liefertermin") or ""))
+                self._vb_online_map[iid] = v.get("auftrag")
+                online_anz += 1
+                gezeigt += 1
         suffix = f" (gefiltert aus {len(rows)})" if filt else ""
+        zusatz = f" · 🌐 {online_anz} online" if online_anz else ""
         label = {"Abgesagt": "abgesagte", "Alle": "Vorbestellung(en) gesamt"}.get(status_f, "offene")
         if status_f == "Alle":
-            self.vb_info.config(text=f"{gezeigt} {label}{suffix}")
+            self.vb_info.config(text=f"{gezeigt} {label}{suffix}{zusatz}")
         else:
-            self.vb_info.config(text=f"{gezeigt} {label} Vorbestellung(en){suffix}")
+            self.vb_info.config(text=_T('{p0} {p1} Vorbestellung(en){p2}', p0=gezeigt, p1=label, p2=suffix) + zusatz)
 
     def _vorbestellung_dialog(self, _e=None):
         sel = self.vb_tree.selection()
         if not sel:
+            return
+        if sel[0] in getattr(self, "_vb_online_map", {}):
+            aid = self._vb_online_map[sel[0]]
+            if aid:
+                self._online_detail_window(aid)
             return
         pid = self._vb_rowmap.get(sel[0])
         if not pid:
@@ -1887,9 +1950,9 @@ class KassePanel(tk.Frame):
         win.resizable(False, False)
         tk.Label(win, text=artikel or pzn, font=(theme.FONT, 13, "bold"), fg=ACCENT,
                  bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
-        tk.Label(win, text=f"PZN {pzn}  ·  DF {df or '—'}  ·  PCK {pck or '—'}  ·  APU {_eur(apu)}",
+        tk.Label(win, text=_T('PZN {p0}  ·  DF {p1}  ·  PCK {p2}  ·  APU {p3}', p0=pzn, p1=df or '—', p2=pck or '—', p3=_eur(apu)),
                  font=(theme.FONT, 9), fg="#555", bg=BG).pack(padx=18, anchor="w")
-        tk.Label(win, text=f"Kunde: {apotheke or '—'}", font=(theme.FONT, 9), fg="#555",
+        tk.Label(win, text=_T('Kunde: {p0}', p0=apotheke or '—'), font=(theme.FONT, 9), fg="#555",
                  bg=BG).pack(padx=18, pady=(0, 8), anchor="w")
 
         erow = tk.Frame(win, bg=BG)
@@ -1958,8 +2021,7 @@ class KassePanel(tk.Frame):
         def stornieren():
             if not messagebox.askyesno(
                     "Vorbestellung stornieren",
-                    f"Vorbestellung „{artikel or pzn}“ für {apotheke or 'diesen Kunden'} "
-                    "wirklich absagen?", parent=win):
+                    _T('Vorbestellung „{p0}“ für {p1} wirklich absagen?', p0=artikel or pzn, p1=apotheke or 'diesen Kunden'), parent=win):
                 return
             with self._conn() as con:
                 con.execute("UPDATE tbl_bestellpositionen SET bestellart='abgesagt' WHERE id=?", (pid,))
@@ -1997,10 +2059,7 @@ class KassePanel(tk.Frame):
            (self.vk_positions and not self.vk_kunde):
             messagebox.showwarning(
                 "Unterschiedlicher Kunde im Verkauf",
-                f"Im Verkauf liegt bereits ein anderer Kunde "
-                f"({(self.vk_kunde or {}).get('kundenname', 'unbekannt')}).\n\n"
-                "Bitte den laufenden Auftrag erst löschen oder abschließen und dann "
-                "die Vorbestellung holen.", parent=self.winfo_toplevel())
+                _T('Im Verkauf liegt bereits ein anderer Kunde ({p0}).\n\nBitte den laufenden Auftrag erst löschen oder abschließen und dann die Vorbestellung holen.', p0=(self.vk_kunde or {}).get('kundenname', 'unbekannt')), parent=self.winfo_toplevel())
             return False
         # Kunde setzen.
         det = self._kunde_details(knr)
@@ -2106,8 +2165,7 @@ class KassePanel(tk.Frame):
                 return
             neu = simpledialog.askinteger(
                 "Übernehmen-Menge",
-                f"{d['artikel'] or d['pzn']}\nVorbestellt {d['offen']} · Bestand {d['bestand']}\n\n"
-                "Wie viel übernehmen? (0 = überspringen)",
+                _T('{p0}\nVorbestellt {p1} · Bestand {p2}\n\nWie viel übernehmen? (0 = überspringen)', p0=d['artikel'] or d['pzn'], p1=d['offen'], p2=d['bestand']),
                 parent=win, initialvalue=d["take"], minvalue=0, maxvalue=d["offen"])
             if neu is None:
                 return
@@ -2131,8 +2189,7 @@ class KassePanel(tk.Frame):
                 kunden = ", ".join(sorted({g[3] or g[2] for g in gewaehlt}))
                 messagebox.showwarning(
                     "Mehrere Kunden",
-                    "Es können nur Vorbestellungen EINES Kunden gleichzeitig übernommen werden.\n\n"
-                    f"Aktuell gewählt: {kunden}\n\nBitte über den Filter auf einen Kunden eingrenzen.",
+                    _T('Es können nur Vorbestellungen EINES Kunden gleichzeitig übernommen werden.\n\nAktuell gewählt: {p0}\n\nBitte über den Filter auf einen Kunden eingrenzen.', p0=kunden),
                     parent=win)
                 return
             if self._vb_load_many([(g[0], g[1]) for g in gewaehlt]):
@@ -2182,9 +2239,7 @@ class KassePanel(tk.Frame):
            (self.vk_positions and not self.vk_kunde):
             messagebox.showwarning(
                 "Unterschiedlicher Kunde im Verkauf",
-                f"Im Verkauf liegt bereits ein anderer Kunde "
-                f"({(self.vk_kunde or {}).get('kundenname', 'unbekannt')}).\n\n"
-                "Bitte den laufenden Auftrag erst löschen oder abschließen.", parent=top)
+                _T('Im Verkauf liegt bereits ein anderer Kunde ({p0}).\n\nBitte den laufenden Auftrag erst löschen oder abschließen.', p0=(self.vk_kunde or {}).get('kundenname', 'unbekannt')), parent=top)
             return False
         apotheke = geladen[0][2][8]
         det = self._kunde_details(knr)
@@ -2207,8 +2262,7 @@ class KassePanel(tk.Frame):
         self._vk_render_positions()
         self._show_view("verkauf")
         messagebox.showinfo("Vorbestellungen",
-                            f"{len(geladen)} Vorbestellung(en) in den Verkauf übernommen. "
-                            "Charge/Bestand je Position wählen, dann „Verkauf speichern“.", parent=top)
+                            _T('{p0} Vorbestellung(en) in den Verkauf übernommen. Charge/Bestand je Position wählen, dann „Verkauf speichern“.', p0=len(geladen)), parent=top)
         return True
 
     # =============================================================== Verkaeufe
@@ -2231,7 +2285,8 @@ class KassePanel(tk.Frame):
         tk.Button(bar, text="📥 Verkäufe importieren", command=self._import_verkaeufe_datei,
                   font=(theme.FONT, 8), padx=6, pady=1).pack(side="left", padx=(12, 0))
         tk.Button(bar, text="🌐 Online laden", command=self._online_verkaeufe_laden,
-                  font=(theme.FONT, 8), padx=6, pady=1).pack(side="left", padx=(6, 0))
+                  bg="#0B4A86", fg="white", font=(theme.FONT, 9, "bold"),
+                  padx=10, pady=2).pack(side="left", padx=(8, 0))
         tk.Button(bar, text="🔄 Aktualisieren", command=self._refresh_verkaeufe,
                   font=(theme.FONT, 9), padx=8, pady=2).pack(side="right")
         self.vh_info = tk.Label(bar, text="", bg=BG, fg=ACCENT, font=(theme.FONT, 9, "bold"))
@@ -2297,6 +2352,127 @@ class KassePanel(tk.Frame):
         tree.bind("<Double-1>", self._verkauf_detail_dialog)
         self.vh_tree = tree
         self._vh_rowmap = {}
+        self._vh_online_map = {}    # Tree-iid -> Online-Auftrag-Id (für Doppelklick)
+        self._online_verkaeufe = getattr(self, "_online_verkaeufe", [])
+
+    def _online_auto_setup(self):
+        """Startet das automatische Nachladen der Online-Bestellungen (alle 90 s),
+        damit sich Multiarbeitsplätze gegenseitig aktuell halten."""
+        self._online_auto_ms = 90 * 1000
+        self._online_auto_tick()
+
+    def _online_cache_path(self):
+        import os
+        return os.path.join(os.path.dirname(self.db_path), "online_cache.json")
+
+    def _online_cache_laden(self):
+        """Zuletzt geladene Online-Bestellungen aus dem lokalen Cache holen – sofort
+        sichtbar nach Neustart, auch ohne Netz."""
+        import json
+        try:
+            with open(self._online_cache_path(), encoding="utf-8") as fh:
+                data = json.load(fh)
+            self._online_verkaeufe = data.get("verkaeufe") or []
+            self._online_vorbestellungen = data.get("vorbestellungen") or []
+        except Exception:
+            pass
+
+    def _online_cache_speichern(self):
+        """Online-Bestellungen lokal sichern (atomar). Liegt neben der DB – teilen
+        sich Arbeitsplätze den DB-Ordner, teilen sie sich auch diesen Stand."""
+        import json, os, tempfile
+        path = self._online_cache_path()
+        try:
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump({"verkaeufe": self._online_verkaeufe,
+                           "vorbestellungen": self._online_vorbestellungen},
+                          fh, ensure_ascii=False)
+            os.replace(tmp, path)
+        except Exception:
+            pass
+
+    def _online_auto_tick(self):
+        """Periodischer Hintergrund-Abruf; plant sich selbst neu ein."""
+        self._online_fetch_all_async(show_errors=False)
+        try:
+            self.after(self._online_auto_ms, self._online_auto_tick)
+        except Exception:
+            pass   # Fenster geschlossen -> Timer endet still
+
+    def _online_verkaeufe_laden(self):
+        """Button „🌐 Online laden": Verkäufe UND Vorbestellungen sofort nachladen."""
+        for lbl in ("vh_info", "vb_info"):
+            if hasattr(self, lbl):
+                getattr(self, lbl).config(text="🌐 lädt …")
+                getattr(self, lbl).update_idletasks()
+        self._online_fetch_all_async(show_errors=True)
+
+    def _online_fetch_all_async(self, show_errors):
+        """Holt Online-Verkäufe + -Vorbestellungen im Hintergrund-Thread; das
+        Ergebnis wird im Tk-Hauptthread per after(0, …) übernommen."""
+        import threading
+
+        def worker():
+            verk, f1 = online_verkaeufe.fetch()
+            vorb, f2 = online_verkaeufe.fetch_vorbestellungen()
+            try:
+                self.after(0, lambda: self._online_apply_all(verk, f1, vorb, f2, show_errors))
+            except Exception:
+                pass   # Fenster bereits zu
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _online_apply_all(self, verk, f1, vorb, f2, show_errors):
+        """Übernimmt beide Abruf-Ergebnisse (läuft im Tk-Hauptthread)."""
+        if not f1:
+            self._online_verkaeufe = verk
+        if not f2:
+            self._online_vorbestellungen = vorb
+        if not (f1 and f2):           # mind. eine Liste erfolgreich -> Cache aktualisieren
+            self._online_cache_speichern()
+        fehler = f1 or f2
+        if fehler and show_errors:
+            messagebox.showwarning(
+                "Online-Daten", _T('Konnte die Online-Daten nicht (vollständig) laden:\n{p0}', p0=fehler),
+                parent=self.winfo_toplevel())
+        if hasattr(self, "vh_tree"):
+            self._refresh_verkaeufe()
+        if hasattr(self, "vb_tree"):
+            self._refresh_vorbestellungen()
+
+    def _online_push_setup(self):
+        """Startet das regelmäßige Pushen des Bestands zum Server (alle 2 Min)."""
+        self._online_push_ms = 2 * 60 * 1000
+        self._online_push_tick()
+
+    def _online_push_tick(self):
+        self._online_push_lager()
+        try:
+            self.after(self._online_push_ms, self._online_push_tick)
+        except Exception:
+            pass   # Fenster geschlossen -> Timer endet still
+
+    def _online_push_lager(self):
+        """Aktuellen Bestand der PC-Kasse im Hintergrund zum Server pushen, damit
+        das Handy „verfügbar = Bestand − offene Online-Bestellungen" anzeigt."""
+        try:
+            with self._conn() as con:
+                bestand = [{"pzn": r[0], "bezeichnung": r[1] or "", "charge": r[2] or "",
+                            "verfall": r[3] or "", "menge": r[4] or 0}
+                           for r in con.execute(
+                    "SELECT pzn, artikelname, charge, verfall, menge FROM tbl_lagerbestand "
+                    "WHERE pzn IS NOT NULL AND pzn<>''").fetchall()]
+        except Exception:
+            return
+        seen = {}
+        for b in bestand:
+            seen.setdefault(b["pzn"], b["bezeichnung"])
+        artikel = [{"pzn": p, "bezeichnung": n} for p, n in seen.items()]
+        import threading
+        threading.Thread(
+            target=lambda: online_verkaeufe.push_lager(artikel, bestand),
+            daemon=True).start()
 
     def _zeitraum_grenzen(self, modus):
         """Liefert (von_iso, bis_iso) fuer den gewaehlten Zeitraum; (None,None)=Alle."""
@@ -2327,6 +2503,7 @@ class KassePanel(tk.Frame):
             return
         self.vh_tree.delete(*self.vh_tree.get_children())
         self._vh_rowmap = {}
+        self._vh_online_map = {}
         filt = self._vh_filter_var.get().strip().lower()
         status_f = self._vh_status_var.get() if hasattr(self, "_vh_status_var") else "Alle"
         zeit_f = self._vh_zeit_var.get() if hasattr(self, "_vh_zeit_var") else "Alle"
@@ -2376,8 +2553,35 @@ class KassePanel(tk.Frame):
             if offen:
                 msk_offen_anz += 1
             gezeigt += 1
-        self.vh_info.config(text=f"{gezeigt} Verkäufe · ⚠ {msk_offen_anz} MSK offen · "
-                                 f"{storniert_anz} storniert · Summe {_eur(summe_ges)}")
+        # Online erfasste Verkäufe (vom Server) zusätzlich einblenden – als
+        # Nur-Lese-Zeilen mit „(online)". Kein Eintrag in _vh_rowmap -> Doppelklick
+        # bleibt für sie wirkungslos (keine lokale Detailansicht).
+        online_anz = 0
+        for v in getattr(self, "_online_verkaeufe", []):
+            vid = str(v.get("id"))
+            datum = v.get("datum") or ""
+            kunde = v.get("kunde_name") or ""
+            erf = (v.get("erfasst_von") or "").strip()
+            bearb = f"{erf} (online)" if erf else "(online)"
+            if filt and filt not in kunde.lower() and filt != vid and filt.lstrip("#") != vid:
+                continue
+            if status_f == "Storniert":      # Online-Verkäufe sind nie storniert
+                continue
+            if msk_f != "Alle":              # MSK gilt nur für lokale Verkäufe
+                continue
+            if von and datum < von:
+                continue
+            if bis and datum > bis:
+                continue
+            iid = self.vh_tree.insert("", "end", tags=("online",),
+                                      values=(f"#{vid}", datum, kunde, bearb, "–",
+                                              v.get("status") or "offen",
+                                              v.get("positionen", 0), "—"))
+            self._vh_online_map[iid] = int(vid)
+            online_anz += 1
+            gezeigt += 1
+        zusatz = f" · 🌐 {online_anz} online" if online_anz else ""
+        self.vh_info.config(text=_T('{p0} Verkäufe{p1} · ⚠ {p2} MSK offen · {p3} storniert · Summe {p4}', p0=gezeigt, p1=zusatz, p2=msk_offen_anz, p3=storniert_anz, p4=_eur(summe_ges)))
 
     def _auftrag_id_eingabe(self, text):
         """Auftrag-Nr aus einer Eingabe lesen ('#12' / '12'); None wenn keine Zahl."""
@@ -2394,7 +2598,7 @@ class KassePanel(tk.Frame):
         with self._conn() as con:
             ok = con.execute("SELECT 1 FROM tbl_bestellungen WHERE id=?", (bid,)).fetchone()
         if not ok:
-            messagebox.showinfo("Auftrag öffnen", f"Kein Auftrag #{bid} gefunden.",
+            messagebox.showinfo("Auftrag öffnen", _T('Kein Auftrag #{p0} gefunden.', p0=bid),
                                 parent=self.winfo_toplevel())
             return
         self._verkauf_detail_window(bid)
@@ -2466,17 +2670,216 @@ class KassePanel(tk.Frame):
         if fehler:
             txt = "\n".join(f"#{b}: {e}" for b, e in fehler)
             messagebox.showerror("Lieferschein",
-                                 f"{len(erzeugt)} erzeugt, {len(fehler)} fehlgeschlagen:\n{txt}",
+                                 _T('{p0} erzeugt, {p1} fehlgeschlagen:\n{p2}', p0=len(erzeugt), p1=len(fehler), p2=txt),
                                  parent=top)
 
     def _verkauf_detail_dialog(self, _e=None):
         sel = self.vh_tree.selection()
         if not sel:
             return
+        if sel[0] in getattr(self, "_vh_online_map", {}):
+            self._online_detail_window(self._vh_online_map[sel[0]])
+            return
         bid = self._vh_rowmap.get(sel[0])
         if not bid:
             return
         self._verkauf_detail_window(bid)
+
+    def _online_info_text(self, kopf):
+        lt = ("    Liefertermin: " + kopf["liefertermin"]) if kopf.get("liefertermin") else ""
+        return (f"Auftrag #{kopf.get('id')}    Datum: {kopf.get('datum', '')}{lt}\n"
+                f"Kunde: {kopf.get('kunde_name', '')}\n"
+                f"Erfasst von: {kopf.get('erfasst_von', '')} (online)    "
+                f"Status: {kopf.get('status', '')}")
+
+    def _online_detail_window(self, auftrag_id):
+        """Öffnet das Detailfenster SOFORT (Kopf aus dem Cache + „lädt …") und füllt
+        die Positionen nach, sobald der Server geantwortet hat – kein Warten aufs
+        Fenster mehr."""
+        top = self.winfo_toplevel()
+        kopf0 = {"id": auftrag_id}
+        for v in (self._online_verkaeufe + self._online_vorbestellungen):
+            if str(v.get("id") or v.get("auftrag") or "") == str(auftrag_id):
+                kopf0 = {"id": auftrag_id, "datum": v.get("datum", ""),
+                         "kunde_name": v.get("kunde_name", ""), "status": v.get("status", ""),
+                         "erfasst_von": v.get("erfasst_von", ""),
+                         "liefertermin": v.get("liefertermin", "")}
+                break
+
+        win = tk.Toplevel(top)
+        win.title(f"Online-Auftrag #{auftrag_id}")
+        win.configure(bg=BG)
+        win.geometry("620x540")
+        win.minsize(480, 360)
+        info_var = tk.StringVar(value=self._online_info_text(kopf0))
+        tk.Label(win, textvariable=info_var, bg=BG, justify="left", anchor="w",
+                 font=(theme.FONT, 10)).pack(fill="x", padx=12, pady=(12, 8))
+        # Buttons + Zusammenfassung unten verankern (immer sichtbar).
+        state = {"daten": None}
+        btns = tk.Frame(win, bg=BG)
+        btns.pack(side="bottom", fill="x", padx=12, pady=(6, 12))
+        ueber_btn = tk.Button(
+            btns, text="➡ In Kasse übernehmen", state="disabled",
+            command=lambda: state["daten"] and self._online_uebernehmen(auftrag_id, state["daten"], win),
+            bg="#11823b", fg="white", font=(theme.FONT, 11, "bold"), padx=14, pady=6)
+        ueber_btn.pack(side="left")
+        tk.Button(btns, text="Schließen", command=win.destroy,
+                  font=(theme.FONT, 10), padx=12, pady=6).pack(side="right")
+        summary_var = tk.StringVar(value="lädt …")
+        tk.Label(win, textvariable=summary_var, bg=BG, fg="#555", anchor="w",
+                 font=(theme.FONT, 9)).pack(side="bottom", fill="x", padx=12, pady=(2, 0))
+        # Positionsliste füllt den restlichen Platz.
+        tf = tk.Frame(win, bg=BG)
+        tf.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+        cols = ("art", "pzn", "bez", "menge")
+        heads = {"art": "Art", "pzn": "PZN", "bez": "Bezeichnung", "menge": "Menge"}
+        tree = ttk.Treeview(tf, columns=cols, show="headings", height=8, style="Kasse.Treeview")
+        for c in cols:
+            tree.heading(c, text=heads[c])
+            tree.column(c, width=(140 if c == "art" else (250 if c == "bez" else 90)), anchor="w")
+        tree.tag_configure("vor", background="#fdf3e3")
+        tree.tag_configure("best", background="#e9f5ec")
+        tree.insert("", "end", values=("lädt …", "", "", ""))
+        sb = tk.Scrollbar(tf, orient="vertical", command=tree.yview)
+        sb.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side="left", fill="both", expand=True)
+
+        def fuellen(daten, fehler):
+            try:
+                if not win.winfo_exists():
+                    return
+            except Exception:
+                return
+            tree.delete(*tree.get_children())
+            if fehler or not daten:
+                summary_var.set(_T('Konnte nicht laden: {p0}', p0=fehler or 'unbekannt'))
+                return
+            state["daten"] = daten
+            kopf = daten.get("kopf") or kopf0
+            pos = daten.get("positionen", [])
+            info_var.set(self._online_info_text(kopf))
+            for p in pos:
+                art = str(p.get("bestellart", "Bestellung"))
+                tag = "vor" if art.lower().startswith("vor") else "best"
+                tree.insert("", "end", tags=(tag,),
+                            values=(art, p.get("pzn", ""), p.get("bezeichnung", ""), p.get("menge", 0)))
+            nv = sum(1 for p in pos if str(p.get("bestellart", "")).lower().startswith("vor"))
+            nb = len(pos) - nv
+            summary_var.set(_T('{p0} Bestellung (lieferbar, grün)  ·  {p1} Vorbestellung (orange)',
+                               p0=nb, p1=nv))
+            ueber_btn.config(state="normal")
+
+        import threading
+
+        def worker():
+            daten, fehler = online_verkaeufe.fetch_detail(auftrag_id)
+            try:
+                self.after(0, lambda: fuellen(daten, fehler))
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _online_uebernehmen(self, auftrag_id, daten, win=None):
+        """Lädt einen Online-Auftrag vorausgefüllt in den Verkauf-Reiter; beim
+        Speichern wird er am Server als übernommen markiert (siehe _vk_save)."""
+        top = self.winfo_toplevel()
+        # Konflikt: im Verkauf liegt schon ein laufender Auftrag.
+        if self.vk_positions:
+            messagebox.showwarning(
+                "Verkauf nicht leer",
+                "Im Verkauf liegt bereits ein Auftrag. Bitte erst abschließen oder "
+                "löschen, dann den Online-Auftrag übernehmen.", parent=top)
+            return
+        kopf = daten.get("kopf", {})
+        positionen = daten.get("positionen", [])
+        if not positionen:
+            messagebox.showinfo("Online-Auftrag", "Dieser Auftrag hat keine Positionen.", parent=top)
+            return
+        # Kunde: über den Namen einen lokalen Kunden suchen, sonst „lose" übernehmen.
+        name = kopf.get("kunde_name") or ""
+        knr, det = self._kunde_by_name(name)
+        self.vk_kunde = {
+            "kundennummer": knr, "kundenname": det.get("kundenname") or name or "—",
+            "plz": det.get("plz", ""), "ort": det.get("ort", ""), "strasse": det.get("strasse", ""),
+            "inhaber": det.get("inhaber", ""), "telefon": det.get("telefon", ""),
+            "email": det.get("email", ""),
+        }
+        self._render_kunde_card(self.vk_kunde)
+        # Positionen: lokal per PZN anreichern (APU/DF/PCK); Aufteilung aus dem
+        # Online-Auftrag übernehmen (Bestellung/Vorbestellung je Position).
+        fehlend = []
+        for pos in positionen:
+            pzn = str(pos.get("pzn") or "").strip()
+            det_a = self._artikel_details(pzn) if pzn else None
+            if not det_a:
+                fehlend.append(pos.get("bezeichnung") or pzn or "?")
+            self.vk_positions.append({
+                "pzn": pzn,
+                "artikelname": (det_a or {}).get("artikelname") or pos.get("bezeichnung") or pzn,
+                "df": (det_a or {}).get("df", ""), "pck": (det_a or {}).get("pck", ""),
+                "apu": (det_a or {}).get("apu", 0) or 0,
+                "menge": pos.get("menge", 0), "rabatt": 0, "rabatt_quelle": "online",
+                "charge": "", "verfall": "",
+                "bestellart": pos.get("bestellart", "Bestellung"),
+                "lieferzeit": "", "liefertermin": kopf.get("liefertermin", "") or "",
+                "_online_src": auftrag_id,
+            })
+        self._vk_render_positions()
+        self._show_view("verkauf")
+        if win is not None:
+            try:
+                win.destroy()
+            except Exception:
+                pass
+        hinweis = ("Online-Auftrag in den Verkauf übernommen. Kunde/Charge/Bestand prüfen, "
+                   "ggf. Mengen anpassen, dann „Verkauf speichern“.")
+        if not knr:
+            hinweis += f"\n\nHinweis: Kein lokaler Kunde zu „{name}“ gefunden – bitte Kunden prüfen/wählen."
+        if fehlend:
+            hinweis += "\n\nNicht im lokalen Stamm (APU=0, bitte prüfen): " + ", ".join(fehlend[:8])
+        messagebox.showinfo("Online-Auftrag übernommen", hinweis, parent=top)
+
+    def _kunde_by_name(self, name):
+        """Sucht einen lokalen Kunden über den (Apotheken-)Namen. Gibt
+        (kundennummer, details) oder (None, {})."""
+        name = (name or "").strip()
+        if not name:
+            return None, {}
+        with self._conn() as con:
+            if not _table_exists(con, "tbl_kunden_center"):
+                return None, {}
+            row = con.execute(
+                "SELECT kundennummer FROM tbl_kunden_center "
+                "WHERE LOWER(kundenname)=LOWER(?) LIMIT 1", (name,)).fetchone()
+        if not row:
+            return None, {}
+        knr = row[0]
+        return knr, self._kunde_details(knr)
+
+    def _online_mark_uebernommen(self, auftrag_id):
+        """Markiert den Online-Auftrag am Server als übernommen (Hintergrund) und
+        aktualisiert danach die Online-Listen."""
+        import threading
+
+        def worker():
+            ok, fehler = online_verkaeufe.mark_uebernommen(auftrag_id, von=getpass.getuser())
+            try:
+                self.after(0, lambda: self._online_fetch_all_async(show_errors=False))
+            except Exception:
+                pass
+            if not ok:
+                try:
+                    self.after(0, lambda: messagebox.showwarning(
+                        "Online-Auftrag",
+                        f"Verkauf gespeichert, aber der Online-Auftrag #{auftrag_id} konnte nicht "
+                        f"als übernommen markiert werden:\n{fehler}\n\nEr erscheint ggf. erneut "
+                        "in der Online-Liste.", parent=self.winfo_toplevel()))
+                except Exception:
+                    pass
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _verkauf_detail_window(self, bid):
         """Read-only Detailansicht eines Verkaufs (Stornieren/MSK/Auftragsbestaetigung).
@@ -2503,9 +2906,9 @@ class KassePanel(tk.Frame):
         win.title(f"Verkauf #{bid}")
         win.configure(bg=BG)
         win.transient(top)
-        tk.Label(win, text=f"Verkauf #{bid} · {apotheke}", font=(theme.FONT, 13, "bold"),
+        tk.Label(win, text=_T('Verkauf #{p0} · {p1}', p0=bid, p1=apotheke), font=(theme.FONT, 13, "bold"),
                  fg=ACCENT, bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
-        tk.Label(win, text=f"Datum {datum} · Status: {status} · Erfasst von: {bearbeiter or '–'}",
+        tk.Label(win, text=_T('Datum {p0} · Status: {p1} · Erfasst von: {p2}', p0=datum, p1=status, p2=bearbeiter or '–'),
                  font=(theme.FONT, 9), fg="#555", bg=BG).pack(padx=18, anchor="w")
         msk_txt = (f"MSK: ✓ erfasst von {msk_von or '?'} am {(msk_am or '')[:16].replace('T', ' ')}"
                    if msk else "MSK: ⚠ noch nicht erfasst")
@@ -2531,14 +2934,13 @@ class KassePanel(tk.Frame):
             tree.insert("", "end", values=(pzn, art, menge, f"{rab:.0f}", ch, vf, ba))
             if ba == "Bestellung" and apu is not None:
                 gesamt += apu * menge * (1 - rab / 100.0)
-        tk.Label(win, text=f"Gesamt (netto): {_eur(gesamt)}", font=(theme.FONT, 11, "bold"),
+        tk.Label(win, text=_T('Gesamt (netto): {p0}', p0=_eur(gesamt)), font=(theme.FONT, 11, "bold"),
                  fg=ACCENT, bg=BG).pack(padx=18, anchor="e")
 
         def stornieren():
             if status == "storniert":
                 return
-            if not messagebox.askyesno("Stornieren", f"Verkauf #{bid} wirklich stornieren?\n"
-                                       "Der Lagerbestand wird zurückgebucht.", parent=win):
+            if not messagebox.askyesno("Stornieren", _T('Verkauf #{p0} wirklich stornieren?\nDer Lagerbestand wird zurückgebucht.', p0=bid), parent=win):
                 return
             jetzt = datetime.now().isoformat(timespec="seconds")
             with self._conn() as con:
@@ -2560,7 +2962,7 @@ class KassePanel(tk.Frame):
             self._refresh_verkaeufe()
             self._refresh_artikel()
             win.destroy()
-            messagebox.showinfo("Storniert", f"Verkauf #{bid} storniert, Bestand zurückgebucht.",
+            messagebox.showinfo("Storniert", _T('Verkauf #{p0} storniert, Bestand zurückgebucht.', p0=bid),
                                 parent=top)
 
         def msk_toggle():
@@ -2570,6 +2972,11 @@ class KassePanel(tk.Frame):
         btns = tk.Frame(win, bg=BG)
         btns.pack(fill="x", padx=18, pady=(4, 14))
         if status != "storniert":
+            if not msk:
+                tk.Button(btns, text="✏ Bearbeiten",
+                          command=lambda: self._verkauf_bearbeiten(bid, win),
+                          bg="#b06a00", fg="white", font=(theme.FONT, 10, "bold"),
+                          padx=12, pady=4).pack(side="left", padx=(0, 8))
             tk.Button(btns, text="Stornieren", command=stornieren, bg="#a32d2d", fg="white",
                       font=(theme.FONT, 10, "bold"), padx=12, pady=4).pack(side="left")
             if msk:
@@ -2593,6 +3000,94 @@ class KassePanel(tk.Frame):
         self._restyle_buttons(win)
         win.lift()
         win.focus_force()
+
+    def _verkauf_bearbeiten(self, bid, win=None):
+        """Lädt einen noch nicht MSK-erfassten Verkauf zum Bearbeiten in den
+        Verkauf-Reiter. Das Original bleibt bestehen, bis der korrigierte Auftrag
+        gespeichert wird (dann wird es ersetzt, Bestand korrekt verrechnet)."""
+        top = self.winfo_toplevel()
+        if self.vk_positions:
+            messagebox.showwarning(
+                "Verkauf nicht leer",
+                "Im Verkauf liegt bereits ein Auftrag. Bitte erst abschließen oder "
+                "löschen, dann den Verkauf zum Bearbeiten laden.", parent=top)
+            return
+        with self._conn() as con:
+            h = con.execute(
+                "SELECT kundennummer, COALESCE(apotheke,''), COALESCE(msk_erfasst,0), "
+                "COALESCE(status,'offen') FROM tbl_bestellungen WHERE id=?", (bid,)).fetchone()
+            if not h:
+                return
+            knr, apotheke, msk, status = h
+            if msk:
+                messagebox.showinfo(
+                    "Bearbeiten", "Dieser Verkauf ist bereits in MSK erfasst und kann nicht "
+                    "mehr bearbeitet werden.", parent=top)
+                return
+            if status == "storniert":
+                return
+            pos = con.execute(
+                "SELECT pzn, artikelname, COALESCE(df,''), COALESCE(pck,''), apu, menge, "
+                "COALESCE(rabatt_prozent,0), COALESCE(rabatt_quelle,'manuell'), "
+                "COALESCE(charge,''), COALESCE(verfall,''), COALESCE(bestellart,'Bestellung'), "
+                "COALESCE(lieferzeit,''), COALESCE(liefertermin,'') "
+                "FROM tbl_bestellpositionen WHERE bestell_id=? ORDER BY id", (bid,)).fetchall()
+        if not messagebox.askyesno(
+                "Bearbeiten",
+                f"Verkauf #{bid} zum Bearbeiten in den Verkauf laden?\n\n"
+                "Das Original bleibt erhalten, bis du den korrigierten Auftrag speicherst.",
+                parent=top):
+            return
+        det = self._kunde_details(knr)
+        self.vk_kunde = {
+            "kundennummer": knr, "kundenname": det.get("kundenname") or apotheke or "—",
+            "plz": det.get("plz", ""), "ort": det.get("ort", ""), "strasse": det.get("strasse", ""),
+            "inhaber": det.get("inhaber", ""), "telefon": det.get("telefon", ""),
+            "email": det.get("email", ""),
+        }
+        self._render_kunde_card(self.vk_kunde)
+        for (pzn, art, df, pck, apu, menge, rab, rq, ch, vf, ba, lz, lt) in pos:
+            self.vk_positions.append({
+                "pzn": pzn, "artikelname": art, "df": df, "pck": pck, "apu": apu or 0,
+                "menge": menge, "rabatt": rab or 0, "rabatt_quelle": rq or "manuell",
+                "charge": ch, "verfall": vf, "bestellart": ba or "Bestellung",
+                "lieferzeit": lz, "liefertermin": lt, "_edit_src": bid,
+            })
+        self._vk_render_positions()
+        self._show_view("verkauf")
+        if win is not None:
+            try:
+                win.destroy()
+            except Exception:
+                pass
+        messagebox.showinfo(
+            "Bearbeiten",
+            f"Verkauf #{bid} in den Verkauf geladen. Anpassen (Mengen, Charge, Artikel), "
+            "dann „Verkauf speichern“ – der korrigierte Auftrag ersetzt den alten.", parent=top)
+
+    def _verkauf_original_ersetzen(self, bid):
+        """Bucht den Bestand des Original-Auftrags zurück und entfernt ihn – wird
+        beim Speichern eines bearbeiteten Verkaufs aufgerufen (siehe _vk_save)."""
+        jetzt = datetime.now().isoformat(timespec="seconds")
+        with self._conn() as con:
+            rows = con.execute(
+                "SELECT pzn, artikelname, menge, COALESCE(charge,''), COALESCE(verfall,''), "
+                "COALESCE(bestellart,'Bestellung'), apu FROM tbl_bestellpositionen "
+                "WHERE bestell_id=?", (bid,)).fetchall()
+            for pzn, art, menge, ch, vf, ba, apu in rows:
+                if ba == "Bestellung" and (ch or vf):
+                    upd = con.execute(
+                        "UPDATE tbl_lagerbestand SET menge=menge+?, aktualisiert_am=? "
+                        "WHERE pzn=? AND COALESCE(charge,'')=? AND COALESCE(verfall,'')=?",
+                        (menge, jetzt, pzn, ch, vf))
+                    if upd.rowcount == 0:
+                        con.execute(
+                            "INSERT INTO tbl_lagerbestand(pzn,artikelname,charge,verfall,menge,ek,aktualisiert_am) "
+                            "VALUES(?,?,?,?,?,?,?)", (pzn, art, ch, vf, menge, apu, jetzt))
+            con.execute("DELETE FROM tbl_bestellpositionen WHERE bestell_id=?", (bid,))
+            con.execute("DELETE FROM tbl_bestellungen WHERE id=?", (bid,))
+            con.commit()
+        self._log("Verkauf bearbeitet", bid, details="Original ersetzt, Bestand zurückgebucht")
 
     # ================================================================ Artikel
     def _build_artikel(self, parent):
@@ -2645,38 +3140,45 @@ class KassePanel(tk.Frame):
         like = f"%{self._art_filter_var.get().strip()}%"
         nur_bestand = self._art_nur_bestand.get()
         hat_stamm = self._table_exists_now("tbl_artikelstamm")
+        hat_wa = self._table_exists_now("tbl_gdp_warenausgang")
         with self._conn() as con:
             bestand_sub = "(SELECT COALESCE(SUM(menge),0) FROM tbl_lagerbestand l WHERE l.pzn=n.pzn)"
             lagerwert_sub = ("(SELECT COALESCE(SUM(COALESCE(ek,0)*menge),0) "
                              "FROM tbl_lagerbestand l WHERE l.pzn=n.pzn)")
+            # Klammer-Bestand (unterwegs, geladen aber noch nicht bei MSK bestaetigt).
+            unterwegs_sub = (
+                "(SELECT COALESCE(SUM(p.menge),0) FROM tbl_gdp_warenausgang_pos p "
+                "JOIN tbl_gdp_warenausgang w ON w.id=p.wa_id "
+                "WHERE p.pzn=n.pzn AND w.status='geladen' AND w.ziel='Verkaufsbestand')"
+            ) if hat_wa else "0"
             if hat_stamm:
                 sql = (f"SELECT n.pzn, n.artikelname, COALESCE(a.df,''), COALESCE(a.pck,''), n.apu, "
-                       f"{bestand_sub}, {lagerwert_sub} "
+                       f"{bestand_sub}, {lagerwert_sub}, {unterwegs_sub} "
                        "FROM tbl_nmg_stamm n LEFT JOIN tbl_artikelstamm a ON a.pzn=n.pzn "
                        "WHERE (n.pzn LIKE ? OR n.artikelname LIKE ?) ORDER BY n.artikelname")
             else:
-                sql = (f"SELECT n.pzn, n.artikelname, '', '', n.apu, {bestand_sub}, {lagerwert_sub} "
-                       "FROM tbl_nmg_stamm n "
+                sql = (f"SELECT n.pzn, n.artikelname, '', '', n.apu, {bestand_sub}, {lagerwert_sub}, "
+                       f"{unterwegs_sub} FROM tbl_nmg_stamm n "
                        "WHERE (n.pzn LIKE ? OR n.artikelname LIKE ?) ORDER BY n.artikelname")
             rows = con.execute(sql, (like, like)).fetchall()
         gezeigt = 0
         summe_bestand = 0
         summe_wert = 0.0
         summe_lagerwert = 0.0
-        for pzn, art, df, pck, apu, bestand, lagerwert in rows:
-            if nur_bestand and (bestand or 0) <= 0:
+        for pzn, art, df, pck, apu, bestand, lagerwert, unterwegs in rows:
+            if nur_bestand and (bestand or 0) <= 0 and (unterwegs or 0) <= 0:
                 continue
-            self.art_tree.insert("", "end", values=(pzn, art, df, pck, _eur(apu), bestand))
+            # Eintreffender Nachschub in Klammern: "12 (+30)" – nur Anzeige.
+            bestand_disp = f"{bestand} (+{unterwegs})" if (unterwegs or 0) > 0 else bestand
+            self.art_tree.insert("", "end", values=(pzn, art, df, pck, _eur(apu), bestand_disp))
             gezeigt += 1
             summe_bestand += bestand or 0
             summe_wert += (apu or 0) * (bestand or 0)
             summe_lagerwert += lagerwert or 0
-        self.art_info.config(text=f"{gezeigt} Artikel")
+        self.art_info.config(text=_T('{p0} Artikel', p0=gezeigt))
         umfang = "Auswahl" if self._art_filter_var.get().strip() else "gesamt"
         self.art_summe.config(
-            text=f"Bestand {umfang}: {summe_bestand} Packungen   ·   "
-                 f"Verkaufswert (APU × Bestand): {_eur(summe_wert)}   ·   "
-                 f"Lagerwert (EK × Bestand): {_eur(summe_lagerwert)}")
+            text=_T('Bestand {p0}: {p1} Packungen   ·   Verkaufswert (APU × Bestand): {p2}   ·   Lagerwert (EK × Bestand): {p3}', p0=umfang, p1=summe_bestand, p2=_eur(summe_wert), p3=_eur(summe_lagerwert)))
 
     def _artikel_chargen_view(self, _e=None):
         sel = self.art_tree.selection()
@@ -2691,7 +3193,7 @@ class KassePanel(tk.Frame):
         win.transient(top)
         tk.Label(win, text=art or pzn, font=(theme.FONT, 13, "bold"), fg=ACCENT,
                  bg=BG).pack(padx=18, pady=(14, 2), anchor="w")
-        tk.Label(win, text=f"PZN {pzn}", font=(theme.FONT, 9), fg="#555", bg=BG).pack(padx=18, anchor="w")
+        tk.Label(win, text=_T('PZN {p0}', p0=pzn), font=(theme.FONT, 9), fg="#555", bg=BG).pack(padx=18, anchor="w")
         tk.Label(win, text="Doppelklick auf eine Charge: Bestand korrigieren.",
                  font=(theme.FONT, 9), fg="#666", bg=BG).pack(padx=18, anchor="w", pady=(2, 0))
         tf = tk.Frame(win, bg=BG)
@@ -2858,7 +3360,7 @@ class KassePanel(tk.Frame):
         bestand = self._bestand_total(pzn)
         hinweis = "kein Bestand" if bestand <= 0 else f"⚠ noch {bestand} auf Lager"
         self.dm_detail_label.config(
-            text=f"{det['artikelname']}  ·  PZN {pzn}  ·  {hinweis}",
+            text=_T('{p0}  ·  PZN {p1}  ·  {p2}', p0=det['artikelname'], p1=pzn, p2=hinweis),
             fg="#a35a00" if bestand > 0 else ACCENT)
 
     def _dm_add_position(self, *_):
@@ -2916,14 +3418,14 @@ class KassePanel(tk.Frame):
                                         kunde=self.dm_kunde, positionen=self.dm_positions,
                                         grund=grund)
         except Exception as e:
-            messagebox.showerror("Defektmeldung", f"Konnte nicht erstellt werden:\n{e}", parent=top)
+            messagebox.showerror("Defektmeldung", _T('Konnte nicht erstellt werden:\n{p0}', p0=e), parent=top)
             return
         self._log("Defektmeldung erzeugt", kunde=self.dm_kunde.get("kundenname", ""),
                   details=f"{len(self.dm_positions)} Artikel · {grund}")
         try:
             os.startfile(str(path))  # type: ignore[attr-defined]
         except Exception:
-            messagebox.showinfo("Defektmeldung", f"Gespeichert:\n{path}", parent=top)
+            messagebox.showinfo("Defektmeldung", _T('Gespeichert:\n{p0}', p0=path), parent=top)
         # Nach dem Erzeugen die Liste leeren (Apotheke bleibt gewaehlt).
         self.dm_positions = []
         self._dm_render_positions()
@@ -3010,7 +3512,7 @@ class KassePanel(tk.Frame):
         try:
             einstellungen.set_many(self.db_path, werte)
         except Exception as e:
-            messagebox.showerror("Einstellungen", f"Konnte nicht gespeichert werden:\n{e}", parent=top)
+            messagebox.showerror("Einstellungen", _T('Konnte nicht gespeichert werden:\n{p0}', p0=e), parent=top)
             return
         self._log("Einstellungen geändert", details="Firmendaten/Texte/Tagesabschluss-Uhrzeit")
         # Auto-Tagesabschluss mit (ggf. neuer) Uhrzeit neu planen.
@@ -3323,13 +3825,13 @@ class KassePanel(tk.Frame):
                                  "(pip install fpdf2).", parent=top)
             return
         except Exception as e:
-            messagebox.showerror("PDF", f"Report konnte nicht erstellt werden:\n{e}", parent=top)
+            messagebox.showerror("PDF", _T('Report konnte nicht erstellt werden:\n{p0}', p0=e), parent=top)
             return
         self._log("Report erzeugt", details=str(Path(path).name))
         try:
             os.startfile(str(path))  # type: ignore[attr-defined]
         except Exception:
-            messagebox.showinfo("PDF", f"Report gespeichert:\n{path}", parent=top)
+            messagebox.showinfo("PDF", _T('Report gespeichert:\n{p0}', p0=path), parent=top)
 
     def _aw_umsatz_tagesabschluss_aus_zeile(self, _e=None):
         """Doppelklick auf eine Tages-Zeile -> Tagesabschluss-PDF fuer diesen Tag."""
@@ -3354,8 +3856,7 @@ class KassePanel(tk.Frame):
         if zeige_leer and data["anzahl"] == 0:
             if not messagebox.askyesno(
                     "Tagesabschluss",
-                    f"Für {tag} sind keine Verkäufe erfasst.\nTrotzdem einen (leeren) "
-                    "Tagesabschluss erzeugen?", parent=self.winfo_toplevel()):
+                    _T('Für {p0} sind keine Verkäufe erfasst.\nTrotzdem einen (leeren) Tagesabschluss erzeugen?', p0=tag), parent=self.winfo_toplevel()):
                 return None
         if oeffnen:
             self._run_report(lambda: kasse_reports.tagesabschluss_pdf(self.db_path, tag))
@@ -3494,7 +3995,7 @@ class KassePanel(tk.Frame):
             self.log_tree.insert("", "end", values=(zt, bearb, aktion, auftrag, kunde, details))
             gezeigt += 1
         suffix = f" · Aktion: {aktion_f}" if aktion_f != "Alle" else ""
-        self.log_info.config(text=f"{gezeigt} Einträge{suffix}")
+        self.log_info.config(text=_T('{p0} Einträge{p1}', p0=gezeigt, p1=suffix))
 
     def _protokoll_pdf_export(self):
         """Exportiert die aktuell angezeigten (gefilterten) Protokoll-Zeilen als PDF -
@@ -3523,8 +4024,7 @@ class KassePanel(tk.Frame):
         top = self.winfo_toplevel()
         neu = simpledialog.askinteger(
             "Bestand korrigieren",
-            f"Neuer Bestand für\nPZN {pzn} · Charge {charge or '—'} · Verf {verfall or '—'}\n"
-            f"(0 entfernt die Zeile):",
+            _T('Neuer Bestand für\nPZN {p0} · Charge {p1} · Verf {p2}\n(0 entfernt die Zeile):', p0=pzn, p1=charge or '—', p2=verfall or '—'),
             parent=top, initialvalue=int(menge), minvalue=0)
         if neu is None or neu == int(menge):
             return False
@@ -3579,10 +4079,7 @@ class KassePanel(tk.Frame):
             return
         messagebox.showinfo(
             "Kunden-Import",
-            f"Quelle: {r['quelle']} · {r['gelesen']} Zeilen gelesen.\n"
-            f"Erkannte Spalten: {', '.join(r['spalten'])}\n\n"
-            f"Neu: {r['neu']} · Aktualisiert: {r['aktualisiert']} · "
-            f"Übersprungen: {r['uebersprungen']}", parent=top)
+            _T('Quelle: {p0} · {p1} Zeilen gelesen.\nErkannte Spalten: {p2}\n\nNeu: {p3} · Aktualisiert: {p4} · Übersprungen: {p5}', p0=r['quelle'], p1=r['gelesen'], p2=', '.join(r['spalten']), p3=r['neu'], p4=r['aktualisiert'], p5=r['uebersprungen']), parent=top)
 
     def _import_historie(self, als_vorbestellung):
         top = self.winfo_toplevel()
@@ -3604,11 +4101,8 @@ class KassePanel(tk.Frame):
         unklar = (f"\n⚠ {r['datum_unklar']} Datum/Daten nicht erkannt – auf heute gesetzt."
                   if r.get("datum_unklar") else "")
         messagebox.showinfo(
-            f"{was}-Import",
-            f"Quelle: {r['quelle']} · {r['gelesen']} Zeilen gelesen.\n"
-            f"Erkannte Zusatzspalten: {', '.join(r['spalten']) or '–'}\n\n"
-            f"Angelegt: {r['bestellungen']} {was} mit {r['positionen']} Position(en) · "
-            f"Übersprungen: {r['uebersprungen']}{unklar}", parent=top)
+            _T('{p0}-Import', p0=was),
+            _T('Quelle: {p0} · {p1} Zeilen gelesen.\nErkannte Zusatzspalten: {p2}\n\nAngelegt: {p3} {p4} mit {p5} Position(en) · Übersprungen: {p6}{p7}', p0=r['quelle'], p1=r['gelesen'], p2=', '.join(r['spalten']) or '–', p3=r['bestellungen'], p4=was, p5=r['positionen'], p6=r['uebersprungen'], p7=unklar), parent=top)
 
     def _import_verkaeufe_datei(self):
         self._import_historie(False)
