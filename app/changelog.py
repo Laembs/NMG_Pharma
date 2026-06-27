@@ -5,6 +5,13 @@ Format pro Eintrag: (display_name, datum_iso, lines).
 """
 
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    ("V2.2 SP1", "2026-06-27", [
+        "Online-Kasse <-> PC-Kasse verbunden (Bruecke): am Handy/online erfasste Verkaeufe UND Vorbestellungen erscheinen jetzt in der PC-Kasse unter 'Verkaeufe' und 'Vorbestellungen' (blau, mit Zusatz '(online)') und aktualisieren sich automatisch.",
+        "Online-Auftrag per Doppelklick oeffnen (Aufteilung Bestellung/Vorbestellung sichtbar) und mit einem Klick in den Verkauf uebernehmen - vorausgefuellt mit Kunde + Artikeln, dann wie ein normaler Verkauf abschliessen; danach wird er online als 'uebernommen' markiert und verschwindet aus der Liste.",
+        "Echter Bestands-Abgleich mit Reservierung: der PC sendet seinen Bestand an die Online-Kasse (alle 2 Min + nach jedem Verkauf); das Handy zeigt 'verfuegbar = Bestand minus offene Online-Bestellungen' -> kein Ueberverkauf, automatische Aufteilung in Bestellung und Vorbestellung.",
+        "Lokalen Verkauf per Doppelklick bearbeiten, solange er noch nicht in der MSK-/Kuehlsachen-Kontrolle erfasst wurde (Bestand wird korrekt zurueckgebucht und neu verrechnet).",
+        "Online-Bestellungen werden lokal zwischengespeichert (nach Programmstart sofort sichtbar, auch ohne Internet); Multiarbeitsplatz-faehig ueber den gemeinsamen Online-Server.",
+    ]),
     ("V2.2.0", "2026-06-26", [
         "Neuer Meilenstein V2.2.0 - fasst den kompletten V2.1-Zyklus (SP1-SP3: Wareneingang & Retouren, Meldungen, Einkauf, Parameter, Demo-Modus) zusammen und bringt eine neue Welle eigenstaendiger Apps.",
         "Neue App 'Buchhaltung': Vorerfassung der Geschaeftsvorfaelle mit DATEV-Export ans Steuerbuero, Empfang elektronischer Rechnungen (eRechnung) als Pflicht-Workflow.",
